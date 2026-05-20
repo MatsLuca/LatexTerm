@@ -6,7 +6,13 @@ final class MathOverlayView: NSView {
     private let web: WKWebView
     private let baseRowHeight: CGFloat
 
-    init(latex: String, displayMode: Bool, fontPx: CGFloat, baseRowHeight: CGFloat, foreground: NSColor, background: NSColor) {
+    init(latex: String,
+         displayMode: Bool,
+         fontPx: CGFloat,
+         baseRowHeight: CGFloat,
+         foreground: NSColor,
+         background: NSColor,
+         scale: CGFloat) {
         let cfg = WKWebViewConfiguration()
         self.web = WKWebView(frame: .zero, configuration: cfg)
         self.baseRowHeight = baseRowHeight
@@ -22,7 +28,7 @@ final class MathOverlayView: NSView {
         web.setValue(false, forKey: "drawsBackground")
         addSubview(web)
 
-        load(latex: latex, displayMode: displayMode, fontPx: fontPx, fg: foreground)
+        load(latex: latex, displayMode: displayMode, fontPx: fontPx, fg: foreground, scale: scale)
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -36,11 +42,15 @@ final class MathOverlayView: NSView {
         web.frame = bounds
     }
 
-    private func load(latex: String, displayMode: Bool, fontPx: CGFloat, fg: NSColor) {
+    private func load(latex: String, displayMode: Bool, fontPx: CGFloat, fg: NSColor, scale: CGFloat) {
         let escaped = latex
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
             .replacingOccurrences(of: "\n", with: " ")
+
+        // Skalierung: benutzerdefinierter Faktor × automatisches overflow-fit
+        let scaleCSS = scale != 1.0 ? "scale(\(String(format: "%.2f", scale))) " : ""
+
         let html = """
         <!DOCTYPE html><html><head>
         <link rel="stylesheet" href="katex.min.css">
@@ -48,7 +58,7 @@ final class MathOverlayView: NSView {
         <style>
         html,body{margin:0;padding:0;background:transparent;color:\(css(fg));overflow:hidden;height:100%;}
         body{position:relative;font-size:\(fontPx)px;line-height:1;}
-        #m{position:absolute;left:2px;top:50%;transform:translateY(-50%);transform-origin:left center;white-space:nowrap;}
+        #m{position:absolute;left:2px;top:50%;transform:translateY(-50%) \(scaleCSS);transform-origin:left center;white-space:nowrap;}
         .katex{white-space:nowrap;}
         .fallback{font-family:ui-monospace,Menlo,monospace;opacity:.65;font-style:italic;}
         </style></head><body>
@@ -56,6 +66,7 @@ final class MathOverlayView: NSView {
         <script>
         (function(){
           var el=document.getElementById('m');
+          var userScale=\(String(format: "%.4f", scale));
           try{el.innerHTML=katex.renderToString("\(escaped)",{displayMode:\(displayMode ? "true" : "false"),throwOnError:true});}
           catch(e){el.innerHTML='<span class="fallback">\(escaped)</span>';}
           var fit=function(){
@@ -65,8 +76,9 @@ final class MathOverlayView: NSView {
             var rh=el.offsetHeight;
             var rw=el.offsetWidth;
             if(rh<=0||rw<=0)return;
-            var s=Math.min(1, maxH/rh, maxW/rw);
-            if(s<1){el.style.transform='translateY(-50%) scale('+s+')';}
+            var fitScale=Math.min(1, maxH/rh, maxW/rw);
+            var finalScale=userScale*fitScale;
+            el.style.transform='translateY(-50%) scale('+finalScale+')';
           };
           if(document.fonts&&document.fonts.ready){document.fonts.ready.then(fit);}
           else{requestAnimationFrame(fit);}

@@ -55,8 +55,15 @@ open .build/Build/Products/Debug/LatexTerm.app
 | `⌘+` / `⌘=` | Increase font size by 1pt |
 | `⌘-` | Decrease font size by 1pt |
 | `⌘0` | Reset font size to 13pt (default) |
+| `⌘L` | Toggle formula overlays on/off |
+| `⌘⇧+` / `⌘⇧-` | Increase/decrease line spacing by 2px |
+| `⌘⇧0` | Reset line spacing to default (8px) |
+| `⌥⌘+` / `⌥⌘-` | Increase/decrease formula render scale by 0.1× |
+| `⌥⌘0` | Reset formula scale to 1.0× |
 
 Font size is persisted in `UserDefaults` under `LatexTerm.fontSize` (range 6–48pt) and restored on next launch.
+
+All formula settings (**color**, **enabled**, **line spacing**, **scale**) are also persisted and restored via `FormulaSettings` in `UserDefaults`.
 
 ## Testing formulas
 
@@ -75,8 +82,9 @@ EOF
 ```
 LatexTerm.xcodeproj/         App project (SwiftUI lifecycle)
 LatexTerm/
-  LatexTermApp.swift         @main App definition
+  LatexTermApp.swift         @main App definition + "Formeln" CommandMenu
   TerminalContainer.swift    NSViewRepresentable wrapping the terminal
+  FormulaSettings.swift      Settings singleton (UserDefaults + NotificationCenter)
   Latex/
     LatexTerminalView.swift  LocalProcessTerminalView subclass: overlay host,
                               font-size shortcuts, range-change forwarding
@@ -96,8 +104,7 @@ SwiftTermLocal/              Vendored SwiftTerm fork (patched cellHeight)
 - **Single-line formulas only.** Formulas that wrap across rows are not detected.
 - **No display-mode `$$..$$` typesetting.** All formulas render in inline mode; display mode delimiters are accepted as boundaries but ignored as a layout hint to keep overlays a fixed height.
 - **One `WKWebView` per formula.** Cheap in our typical workload but unbounded screens with many formulas would benefit from pooling.
-- **No theme sync after launch.** Foreground / background colors are captured at overlay creation. Changing terminal colors at runtime won't update existing overlays until the formula is re-rendered.
-- **No tabs, no profiles, no settings UI.** Single window, single zsh process.
+- **No theme sync after launch.** Background color is captured at overlay creation. Changing terminal background at runtime won’t update existing overlays until the formula is re-rendered. Formula foreground color is now user-controlled via the "Formeln" menu.
 
 ## License
 

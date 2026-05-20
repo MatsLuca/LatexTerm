@@ -1,20 +1,34 @@
 import SwiftUI
 import AppKit
 import SwiftTerm
+import Combine
 
 struct TerminalContainer: NSViewRepresentable {
+
     func makeNSView(context: Context) -> LatexTerminalView {
+        let settings = FormulaSettings.shared
         let term = LatexTerminalView(frame: .zero)
         term.processDelegate = context.coordinator
         term.nativeForegroundColor = NSColor(white: 0.86, alpha: 1)
         term.nativeBackgroundColor = NSColor(red: 0.157, green: 0.173, blue: 0.204, alpha: 1)
         term.caretColor = .systemGreen
         term.getTerminal().setCursorStyle(.steadyBlock)
-        term.extraLineSpacing = 8
+        term.extraLineSpacing = settings.extraLineSpacing  // aus UserDefaults
 
         let controller = OverlayController(terminal: term)
         context.coordinator.controller = controller
+        context.coordinator.terminal = term
+
         term.onRangeChanged = { [weak controller] in controller?.scheduleRescan() }
+
+        // Auf Zeilenabstand-Änderungen reagieren
+        context.coordinator.settingsObserver = NotificationCenter.default.addObserver(
+            forName: FormulaSettings.didChange,
+            object: nil,
+            queue: .main
+        ) { [weak term] _ in
+            term?.extraLineSpacing = FormulaSettings.shared.extraLineSpacing
+        }
 
         let shell = Self.userShell()
         let shellIdiom = "-" + (shell as NSString).lastPathComponent
@@ -29,6 +43,15 @@ struct TerminalContainer: NSViewRepresentable {
 
     final class Coordinator: NSObject, LocalProcessTerminalViewDelegate {
         var controller: OverlayController?
+        weak var terminal: LatexTerminalView?
+        var settingsObserver: NSObjectProtocol?
+
+        deinit {
+            if let obs = settingsObserver {
+                NotificationCenter.default.removeObserver(obs)
+            }
+        }
+
         func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {
             controller?.scheduleRescan()
         }

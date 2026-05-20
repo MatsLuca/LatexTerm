@@ -25,6 +25,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `⌘-` — decrease 1pt
   - `⌘0` — reset to 13pt
   - Range clamped to 6–48pt. Overlays are invalidated and re-rendered when the font size changes.
+- **"Formeln" menu** in the macOS menu bar (`CommandMenu`) with live-updating titles:
+  - Toggle **Formeln anzeigen** (`⌘L`) — removes all overlays immediately when disabled, re-renders on re-enable.
+  - **Formelfarbe…** — opens the native `NSColorPanel` color picker; selected color is applied to all KaTeX overlays live.
+  - **Zeilenabstand** controls (`⌘⇧+` / `⌘⇧-` / `⌘⇧0`) — adjusts `extraLineSpacing` on the terminal view in 2 px steps (0–40 px range).
+  - **Formelgröße** controls (`⌥⌘+` / `⌥⌘-` / `⌥⌘0`) — scales KaTeX renders by a user factor (0.5×–2.0×, step 0.1×), composed with the existing overflow-fit scale so overlays never exceed their bounding box.
+- `FormulaSettings` singleton (`ObservableObject`) persisting all four settings in `UserDefaults`; broadcasts `FormulaSettings.didChange` via `NotificationCenter` so `OverlayController` and `TerminalContainer` react without polling.
+- `invalidateAll()` helper on `OverlayController` — efficiently tears down all overlay views and resets `lastFontPx`, used on settings change and font size change.
 
 ### Notes
 - App Sandbox is disabled (`ENABLE_APP_SANDBOX = NO`) — required for PTY/process spawn.
