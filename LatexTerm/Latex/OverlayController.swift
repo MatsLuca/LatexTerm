@@ -62,6 +62,47 @@ final class OverlayController {
         }
     }
 
+    // MARK: - Scroll
+
+    // Scrollen ist kein "Vorgang", sondern eine schnelle Folge statischer Zustände.
+    // Würden wir die Overlays bei jedem Zwischenschritt neu setzen, flackert die
+    // out-of-process WebView (Neupositionieren + Divs an den Rändern an/aus).
+    // Stattdessen: beim ersten Scroll-Event den Layer ausblenden und einen Idle-Timer
+    // armen. Solange Events fließen (inkl. Trackpad-Momentum) bleibt er aus. Erst wenn
+    // ~90 ms keins mehr kommt = "wieder statisch", wird neu positioniert und – nach dem
+    // ersten Bounds-Report, also wenn die WebView die neuen Positionen gezeichnet hat –
+    // wieder eingeblendet (kein Aufpoppen an falscher Stelle).
+    private var isScrolling = false
+    private var scrollIdleWork: DispatchWorkItem?
+    private var revealOnNextBounds = false
+    private static let scrollIdle: TimeInterval = 0.15
+
+    func scheduleReposition() {
+        if !isScrolling {
+            isScrolling = true
+            revealOnNextBounds = false   // evtl. ausstehendes Reveal abbrechen
+            preview.hide()
+            layer.isHidden = true
+        }
+        scrollIdleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.scrollSettled() }
+        scrollIdleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.scrollIdle, execute: work)
+    }
+
+    private func scrollSettled() {
+        isScrolling = false
+        revealOnNextBounds = true
+        rescan()   // positioniert die Divs neu, Layer noch versteckt
+        // Fallback: ohne sichtbare Formel feuert onBounds nicht – dann trotzdem
+        // einblenden (leerer Layer, unkritisch).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
+            guard let self, self.revealOnNextBounds else { return }
+            self.revealOnNextBounds = false
+            self.layer.isHidden = false
+        }
+    }
+
     // MARK: - Privat
 
     // Span 1.0: jede Formel wird in ihre eigene Zeile skaliert und ragt nie in
@@ -82,6 +123,11 @@ final class OverlayController {
     private func applyTightBounds(_ tight: [String: CGRect]) {
         for (key, rect) in tight where hitboxes[key] != nil {
             hitboxes[key]!.rect = rect.insetBy(dx: -Self.hoverPad, dy: -Self.hoverPad)
+        }
+        // Nach dem Settle-Rescan: jetzt sind die neuen Positionen gezeichnet → einblenden.
+        if revealOnNextBounds {
+            revealOnNextBounds = false
+            layer.isHidden = false
         }
     }
 

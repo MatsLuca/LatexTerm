@@ -20,6 +20,7 @@ struct TerminalContainer: NSViewRepresentable {
         context.coordinator.terminal = term
 
         term.onRangeChanged = { [weak controller] in controller?.scheduleRescan() }
+        term.onScrolled = { [weak controller] in controller?.scheduleReposition() }
 
         // Auf Zeilenabstand-Änderungen reagieren
         context.coordinator.settingsObserver = NotificationCenter.default.addObserver(

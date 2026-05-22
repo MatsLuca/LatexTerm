@@ -49,6 +49,8 @@ final class LatexTerminalView: LocalProcessTerminalView {
 
     let overlay = OverlayHost()
     var onRangeChanged: (() -> Void)?
+    /// Reiner Scroll: Inhalt unverändert, nur neu positionieren → Sofort-Pfad ohne Debounce.
+    var onScrolled: (() -> Void)?
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -68,7 +70,7 @@ final class LatexTerminalView: LocalProcessTerminalView {
 
     override func scrolled(source: TerminalView, position: Double) {
         super.scrolled(source: source, position: position)
-        onRangeChanged?()
+        onScrolled?()
     }
 
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
