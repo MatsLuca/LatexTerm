@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Premium UI & Farbschema-Optimierung**:
+  - Der Standard-Terminal-Hintergrund wurde auf ein tieferes, moderneres Dunkelgrau (`#171414`) und die Standard-Text-/Formelfarbe auf ein passendes warmes Weiß (`#E6E1E1`) angepasst.
+  - Die Cursor-Farbe (Caret) wurde für bessere Ästhetik und Kontrast von Systemgrün zu einem lebendigen Orange-Rot (`#E85E3E`) geändert.
+  - Das Terminal-Fenster besitzt nun einen konsistenten ZStack-Hintergrund mit 12px horizontalem Padding und erzwingt das `.dark` Farbschema.
+  - Die Bildlaufleiste (Scroller) wurde vollständig ausgeblendet und ihre Breite auf `0` reduziert, um ein rahmenloses, minimalistisches und unterbrechungsfreies Erscheinungsbild zu gewährleisten.
+
 ### Added
 - Initial macOS app: SwiftUI `WindowGroup` hosting a `LocalProcessTerminalView` via `NSViewRepresentable`, launching the user's login shell from `/etc/passwd`.
 - SwiftTerm integration as Swift Package dependency (initially remote, later vendored).

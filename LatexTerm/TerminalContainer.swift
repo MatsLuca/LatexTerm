@@ -9,9 +9,9 @@ struct TerminalContainer: NSViewRepresentable {
         let settings = FormulaSettings.shared
         let term = LatexTerminalView(frame: .zero)
         term.processDelegate = context.coordinator
-        term.nativeForegroundColor = NSColor(white: 0.86, alpha: 1)
-        term.nativeBackgroundColor = NSColor(red: 0.157, green: 0.173, blue: 0.204, alpha: 1)
-        term.caretColor = .systemGreen
+        term.nativeForegroundColor = NSColor(red: 230/255.0, green: 225/255.0, blue: 225/255.0, alpha: 1.0)
+        term.nativeBackgroundColor = NSColor(red: 23/255.0, green: 20/255.0, blue: 20/255.0, alpha: 1.0)
+        term.caretColor = NSColor(red: 232/255.0, green: 94/255.0, blue: 62/255.0, alpha: 1.0)
         term.getTerminal().setCursorStyle(.steadyBlock)
         term.extraLineSpacing = settings.extraLineSpacing  // aus UserDefaults
 

@@ -25,7 +25,7 @@ final class FormulaSettings: ObservableObject {
 
     // MARK: - Defaults
 
-    static let defaultFormulaColor   = NSColor(white: 0.86, alpha: 1)
+    static let defaultFormulaColor   = NSColor(red: 230/255.0, green: 225/255.0, blue: 225/255.0, alpha: 1.0)
     static let defaultLineSpacing: CGFloat = 8
     static let defaultFormulaScale: CGFloat = 1.0
     static let minLineSpacing: CGFloat = 0
@@ -69,11 +69,11 @@ final class FormulaSettings: ObservableObject {
 
         // Formelfarbe laden
         let r = d.object(forKey: Keys.formulaColorRed) != nil
-            ? CGFloat(d.double(forKey: Keys.formulaColorRed)) : CGFloat(0.86)
+            ? CGFloat(d.double(forKey: Keys.formulaColorRed)) : CGFloat(230/255.0)
         let g = d.object(forKey: Keys.formulaColorGreen) != nil
-            ? CGFloat(d.double(forKey: Keys.formulaColorGreen)) : CGFloat(0.86)
+            ? CGFloat(d.double(forKey: Keys.formulaColorGreen)) : CGFloat(225/255.0)
         let b = d.object(forKey: Keys.formulaColorBlue) != nil
-            ? CGFloat(d.double(forKey: Keys.formulaColorBlue)) : CGFloat(0.86)
+            ? CGFloat(d.double(forKey: Keys.formulaColorBlue)) : CGFloat(225/255.0)
         let a = d.object(forKey: Keys.formulaColorAlpha) != nil
             ? CGFloat(d.double(forKey: Keys.formulaColorAlpha)) : CGFloat(1.0)
         formulaColor = NSColor(calibratedRed: r, green: g, blue: b, alpha: a)

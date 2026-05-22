@@ -532,6 +532,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         if scroller == nil {
             scroller = NSScroller(frame: .zero)
             scroller.translatesAutoresizingMaskIntoConstraints = false
+            scroller.isHidden = true
             addSubview(scroller)
 
             // Use Auto Layout to position the scroller. This ensures correct layout
@@ -546,6 +547,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         scroller.scrollerStyle = scrollerStyle
         scroller.knobProportion = 0.1
         scroller.isEnabled = false
+        scroller.isHidden = true
         if let progressBarView {
             addSubview(progressBarView, positioned: .above, relativeTo: scroller)
         }
@@ -574,7 +576,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
         
     private var scrollerWidth: CGFloat {
-        NSScroller.scrollerWidth(for: .regular, scrollerStyle: scrollerStyle)
+        0
     }
 
     /**
@@ -639,6 +641,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         scroller.isEnabled = canScroll
         scroller.doubleValue = scrollPosition
         scroller.knobProportion = scrollThumbsize
+        scroller.isHidden = true
     }
     
     var userScrolling = false

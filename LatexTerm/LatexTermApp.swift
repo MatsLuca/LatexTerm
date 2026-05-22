@@ -8,8 +8,13 @@ struct LatexTermApp: App {
 
     var body: some Scene {
         WindowGroup("LatexTerm") {
-            TerminalContainer()
-                .frame(minWidth: 640, minHeight: 400)
+            ZStack {
+                Color(red: 23/255.0, green: 20/255.0, blue: 20/255.0)
+                TerminalContainer()
+                    .padding(.horizontal, 12)
+            }
+            .frame(minWidth: 640, minHeight: 400)
+            .preferredColorScheme(.dark)
         }
         .commands {
             CommandMenu("Formeln") {
