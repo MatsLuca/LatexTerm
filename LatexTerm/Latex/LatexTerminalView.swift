@@ -4,6 +4,33 @@ import SwiftTerm
 final class OverlayHost: NSView {
     override var isFlipped: Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// Hover-Tracking für den Formel-Vorschau-Modus. Liefert nur mouseMoved/Exited;
+    /// Klicks/Selektion bleiben über hitTest==nil beim Terminal.
+    var onMouseMoved: ((NSPoint) -> Void)?
+    var onMouseExited: (() -> Void)?
+    private var trackingRef: NSTrackingArea?
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let t = trackingRef { removeTrackingArea(t) }
+        let t = NSTrackingArea(
+            rect: bounds,
+            options: [.activeInKeyWindow, .mouseMoved, .mouseEnteredAndExited, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(t)
+        trackingRef = t
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        onMouseMoved?(convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        onMouseExited?()
+    }
 }
 
 final class LatexTerminalView: LocalProcessTerminalView {

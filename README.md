@@ -15,15 +15,16 @@ PTY (zsh) → SwiftTerm VT parser → Buffer grid
                                     ↓
                           LaTeXDetector finds delimited formulas
                                     ↓
-                          One MathOverlayView (WKWebView + KaTeX)
-                          per detected formula, positioned via
+                          One FormulaLayer (single WKWebView + KaTeX)
+                          renders every formula as a positioned <div>,
                           grid coords → pixel coords
 ```
 
 - **Terminal**: vendored fork of [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT) at `SwiftTermLocal/`. Fork adds a public `extraLineSpacing` property on `TerminalView` so we can introduce vertical gaps between rows without modifying glyph rendering.
 - **Detection**: per-row buffer text scan after every SwiftTerm `rangeChanged` update. Single-line delimited segments only (no wrap support yet).
-- **Rendering**: each formula gets its own `WKWebView` loading KaTeX offline (CSS + JS + woff2 fonts bundled). Backed by a tight 1-cell background view so the raw `$..$` text is covered, and a 2-cell tall foreground that lets fraction bars / sums extend symmetrically above and below the source row. Formulas that still overflow scale themselves down via CSS `transform: scale()`.
-- **Overlay lifecycle**: keyed by `(viewportRow, startCol, body)`. On rescan, new keys get a fresh overlay, missing keys remove their overlay. Font-size changes invalidate all overlays so KaTeX re-renders at the new size.
+- **Rendering**: a single `FormulaLayer` (one `WKWebView`) hosts *all* formulas — KaTeX is loaded offline once (CSS + JS + woff2 fonts bundled) and each formula is an absolutely-positioned `<div>`. Per formula: a tight 1-cell background box covers the raw `$..$` text, and the formula scales (`transform: scale()`) to fit entirely within that single row so it never bleeds into neighbouring lines.
+- **Hover preview**: large formulas shrink to fit their row, so a hover "view mode" (`FormulaPreview`) blows the formula back up at full size when the pointer rests over it. Hitboxes start as the source-text box and are tightened to the real rendered bounds reported back from the WebView; hover tracking is mouse-move only, so clicks and text selection still pass through to the terminal.
+- **Overlay lifecycle**: keyed by `(absoluteBufferRow, startCol, body)` where `absoluteBufferRow = viewportRow + buffer.yDisp`. On rescan the desired state is sent to the layer as JSON and reconciled in JS (`sync()`): new keys create a `<div>`, missing keys are removed, surviving keys are only repositioned (no KaTeX re-render). Binding the key to the absolute scrollback row means scrolling repositions overlays instead of destroying and rebuilding them. Font-size and settings changes trigger `clearAll()` so KaTeX re-renders at the new size/colors.
 
 ## Requirements
 
@@ -88,9 +89,9 @@ LatexTerm/
   Latex/
     LatexTerminalView.swift  LocalProcessTerminalView subclass: overlay host,
                               font-size shortcuts, range-change forwarding
-    OverlayController.swift  Per-rescan diff of detected formulas → overlay views
+    OverlayController.swift  Per-rescan diff of detected formulas → JSON sync
     LaTeXDetector.swift      Delimiter-based formula extraction
-    MathOverlayView.swift    Single WKWebView + KaTeX overlay
+    MathOverlayView.swift    FormulaLayer: one shared WKWebView hosting all formulas
   katex/                     Bundled KaTeX assets (CSS, JS, woff2)
   Assets.xcassets/
   Info.plist
@@ -103,8 +104,7 @@ SwiftTermLocal/              Vendored SwiftTerm fork (patched cellHeight)
 
 - **Single-line formulas only.** Formulas that wrap across rows are not detected.
 - **No display-mode `$$..$$` typesetting.** All formulas render in inline mode; display mode delimiters are accepted as boundaries but ignored as a layout hint to keep overlays a fixed height.
-- **One `WKWebView` per formula.** Cheap in our typical workload but unbounded screens with many formulas would benefit from pooling.
-- **No theme sync after launch.** Background color is captured at overlay creation. Changing terminal background at runtime won’t update existing overlays until the formula is re-rendered. Formula foreground color is now user-controlled via the "Formeln" menu.
+- **No theme sync after launch.** Background color is captured per rescan into the layer config. Changing the terminal background at runtime updates formula backgrounds on the next rescan, but is not pushed live. Formula foreground color is user-controlled via the "Formeln" menu.
 
 ## License
 

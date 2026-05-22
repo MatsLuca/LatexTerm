@@ -8,6 +8,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Rendering-Architektur: ein WKWebView statt einer pro Formel.** `MathOverlayView` (ein WebView je Formel) wurde durch `FormulaLayer` ersetzt – ein einzelnes, einmalig KaTeX ladendes WebView, das jede Formel als absolut positioniertes `<div>` hält. Der gewünschte Zustand wird pro Scan als JSON übergeben und in JS abgeglichen (`sync()`): neue Keys erzeugen ein `<div>`, fehlende werden entfernt, überlebende nur neu positioniert (kein KaTeX-Re-Render).
+- **Overlay-Keys an die absolute Scrollback-Zeile gebunden** (`viewportRow + buffer.yDisp`). Scrollen positioniert Overlays jetzt neu, statt sie zu zerstören und neu aufzubauen.
+- **Formel-Span auf 1 Zelle reduziert.** Jede Formel wird in ihre eigene Zeile skaliert und ragt nie in Nachbarzeilen; große Formeln werden klein und sind über die Hover-Vorschau in voller Größe lesbar.
 - **Premium UI & Farbschema-Optimierung**:
   - Der Standard-Terminal-Hintergrund wurde auf ein tieferes, moderneres Dunkelgrau (`#171414`) und die Standard-Text-/Formelfarbe auf ein passendes warmes Weiß (`#E6E1E1`) angepasst.
   - Die Cursor-Farbe (Caret) wurde für bessere Ästhetik und Kontrast von Systemgrün zu einem lebendigen Orange-Rot (`#E85E3E`) geändert.
@@ -15,6 +18,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Die Bildlaufleiste (Scroller) wurde vollständig ausgeblendet und ihre Breite auf `0` reduziert, um ein rahmenloses, minimalistisches und unterbrechungsfreies Erscheinungsbild zu gewährleisten.
 
 ### Added
+- **Hover-Vorschau ("Ansichts-Modus", `FormulaPreview`).** Da große Formeln in ihre Zeile geschrumpft werden, blendet das Überfahren mit der Maus die Formel in voller Größe über ihrer Position ein. Hitboxen starten als Quelltext-Box und werden auf die echten gerenderten Bounds (zurückgemeldet vom WebView via `onBounds`) eng nachgezogen. Hover-Tracking ist reines mouse-move – Klicks und Textselektion bleiben beim Terminal.
+- **NULL-Zeichen-Behandlung beim Scan.** Leere Grid-Zellen liefern als `code 0` ein `\u{0}`, das KaTeX im Strict-Mode ablehnt; diese werden 1:1 in Leerzeichen gewandelt, um Spaltenpositionen zu erhalten.
 - Initial macOS app: SwiftUI `WindowGroup` hosting a `LocalProcessTerminalView` via `NSViewRepresentable`, launching the user's login shell from `/etc/passwd`.
 - SwiftTerm integration as Swift Package dependency (initially remote, later vendored).
 - Live LaTeX overlay pipeline:
