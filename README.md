@@ -23,7 +23,8 @@ PTY (zsh) → SwiftTerm VT parser → Buffer grid
 - **Terminal**: vendored fork of [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT) at `SwiftTermLocal/`. Fork adds a public `extraLineSpacing` property on `TerminalView` so we can introduce vertical gaps between rows without modifying glyph rendering.
 - **Detection**: per-row buffer text scan after every SwiftTerm `rangeChanged` update. Single-line delimited segments only (no wrap support yet).
 - **Rendering**: a single `FormulaLayer` (one `WKWebView`) hosts *all* formulas — KaTeX is loaded offline once (CSS + JS + woff2 fonts bundled) and each formula is an absolutely-positioned `<div>`. Per formula: a tight 1-cell background box covers the raw `$..$` text, and the formula scales (`transform: scale()`) to fit entirely within that single row so it never bleeds into neighbouring lines.
-- **Hover preview**: large formulas shrink to fit their row, so a hover "view mode" (`FormulaPreview`) blows the formula back up at full size when the pointer rests over it. Hitboxes start as the source-text box and are tightened to the real rendered bounds reported back from the WebView; hover tracking is mouse-move only, so clicks and text selection still pass through to the terminal.
+- **Hover preview**: large formulas shrink to fit their row, so a hover "view mode" (`FormulaPreview`) blows the formula back up at full size when the pointer rests over it. Hitboxes start as the source-text box and are tightened to the real rendered bounds reported back from the WebView; hover tracking is mouse-move only, so plain selection/scroll still pass through to the terminal.
+- **Click to pin + copy**: clicking a formula pins the preview and reveals two buttons — **LaTeX** copies the raw expression, **Lesbar** copies a readable Unicode-math form (e.g. `(-b ± √(b²-4ac))/(2a)`, via `LaTeXReadable`). Clicking away, `Esc`, scrolling, or new output dismisses it. Two local `NSEvent` monitors drive pinning/dismissal; `OverlayHost.hitTest` lets clicks land *inside* the pinned panel (the buttons) while staying click-through everywhere else.
 - **Overlay lifecycle**: keyed by `(absoluteBufferRow, startCol, body)` where `absoluteBufferRow = viewportRow + buffer.yDisp`. On rescan the desired state is sent to the layer as JSON and reconciled in JS (`sync()`): new keys create a `<div>`, missing keys are removed, surviving keys are only repositioned (no KaTeX re-render). Binding the key to the absolute scrollback row means scrolling repositions overlays instead of destroying and rebuilding them. Font-size and settings changes trigger `clearAll()` so KaTeX re-renders at the new size/colors.
 
 ## Requirements
@@ -91,7 +92,8 @@ LatexTerm/
                               font-size shortcuts, range-change forwarding
     OverlayController.swift  Per-rescan diff of detected formulas → JSON sync
     LaTeXDetector.swift      Delimiter-based formula extraction
-    MathOverlayView.swift    FormulaLayer: one shared WKWebView hosting all formulas
+    LaTeXReadable.swift      LaTeX → readable Unicode-math converter (copy "Lesbar")
+    MathOverlayView.swift    FormulaLayer: shared WKWebView + FormulaPreview (pin/copy)
   katex/                     Bundled KaTeX assets (CSS, JS, woff2)
   Assets.xcassets/
   Info.plist

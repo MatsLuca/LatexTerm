@@ -156,12 +156,27 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
     private weak var hostView: NSView?
     private var shownLatex: String?
 
+    /// Im gepinnten Zustand nimmt das Panel Klicks an (Buttons) und bleibt sichtbar,
+    /// bis es aktiv geschlossen wird. Im Hover-Zustand ist es rein visuell.
+    private(set) var pinned = false
+    private let buttonBar = NSView()
+    private var latexButton: NSButton!
+    private var readableButton: NSButton!
+    private var lastContentW: CGFloat = 0
+    private var lastContentH: CGFloat = 0
+
     private static let innerPad: CGFloat = 14   // Rand zwischen Box und Formel
     private static let gap: CGFloat = 10        // Abstand Box ↔ Quell-Formel
     private static let edge: CGFloat = 8        // Mindestabstand zum Host-Rand
+    private static let barH: CGFloat = 38       // Höhe der Button-Leiste (gepinnt)
 
     override var isFlipped: Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }   // rein visuell
+
+    // Hover: komplett durchlässig. Gepinnt: Buttons sollen Klicks bekommen.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        guard pinned, !isHidden else { return nil }
+        return super.hitTest(point)
+    }
 
     init() {
         let cfg = WKWebViewConfiguration()
@@ -183,11 +198,27 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         web.setValue(false, forKey: "drawsBackground")
         web.navigationDelegate = self
         addSubview(web)
+
+        latexButton = Self.makeButton("LaTeX", target: self, action: #selector(copyLatex))
+        readableButton = Self.makeButton("Lesbar", target: self, action: #selector(copyReadable))
+        buttonBar.addSubview(latexButton)
+        buttonBar.addSubview(readableButton)
+        buttonBar.isHidden = true
+        addSubview(buttonBar)
+
         isHidden = true
         web.loadHTMLString(Self.html, baseURL: Bundle.main.resourceURL)
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    private static func makeButton(_ title: String, target: AnyObject, action: Selector) -> NSButton {
+        let b = NSButton(title: title, target: target, action: action)
+        b.bezelStyle = .rounded
+        b.controlSize = .small
+        b.font = .systemFont(ofSize: 11)
+        return b
+    }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
         loaded = true
@@ -213,7 +244,47 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         if loaded { web.evaluateJavaScript(js) } else { pendingJS = js }
     }
 
-    func hide() { isHidden = true; shownLatex = nil }
+    func hide() {
+        isHidden = true
+        shownLatex = nil
+        pinned = false
+        buttonBar.isHidden = true
+    }
+
+    /// Fixiert die aktuell gezeigte Formel und blendet die Button-Leiste ein.
+    func pin() {
+        guard !isHidden else { return }
+        pinned = true
+        buttonBar.isHidden = false
+        if let host = hostView, lastContentW > 0 || lastContentH > 0 {
+            layoutPreview(contentW: lastContentW, contentH: lastContentH, in: host)
+        }
+    }
+
+    @objc private func copyLatex() {
+        guard let s = shownLatex else { return }
+        copyToPasteboard(s)
+        flash(latexButton, original: "LaTeX")
+    }
+
+    @objc private func copyReadable() {
+        guard let s = shownLatex else { return }
+        copyToPasteboard(LaTeXReadable.readable(s))
+        flash(readableButton, original: "Lesbar")
+    }
+
+    private func copyToPasteboard(_ text: String) {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.setString(text, forType: .string)
+    }
+
+    private func flash(_ button: NSButton, original: String) {
+        button.title = "Kopiert ✓"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak button] in
+            button?.title = original
+        }
+    }
 
     // JS meldet die gerenderte Inhaltsgröße zurück → wir dimensionieren/positionieren.
     func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
@@ -226,13 +297,18 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
     }
 
     private func layoutPreview(contentW: CGFloat, contentH: CGFloat, in host: NSView) {
+        lastContentW = contentW
+        lastContentH = contentH
+
         let pad = Self.innerPad
+        let bar = pinned ? Self.barH : 0
         let maxW = host.bounds.width  - 2 * Self.edge
         let maxH = host.bounds.height - 2 * Self.edge
 
         var boxW = min(contentW + 2 * pad, maxW)
-        var boxH = min(contentH + 2 * pad, maxH)
-        boxW = max(boxW, 40); boxH = max(boxH, 30)
+        var boxH = min(contentH + 2 * pad + bar, maxH)
+        boxW = max(boxW, pinned ? 190 : 40)   // gepinnt: Platz für beide Buttons
+        boxH = max(boxH, 30 + bar)
 
         // x: über der Formel zentriert, in Host-Bounds geklemmt
         var x = anchor.midX - boxW / 2
@@ -244,7 +320,21 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         y = max(Self.edge, min(y, host.bounds.height - Self.edge - boxH))
 
         frame = CGRect(x: x, y: y, width: boxW, height: boxH)
-        web.frame = bounds.insetBy(dx: pad, dy: pad)
+        web.frame = CGRect(x: pad, y: pad, width: boxW - 2 * pad, height: boxH - 2 * pad - bar)
+
+        if pinned {
+            buttonBar.isHidden = false
+            buttonBar.frame = CGRect(x: 0, y: boxH - Self.barH, width: boxW, height: Self.barH)
+            let bw: CGFloat = 84, bh: CGFloat = 24, gap: CGFloat = 8
+            let total = bw * 2 + gap
+            let bx = (boxW - total) / 2
+            let by = (Self.barH - bh) / 2
+            latexButton.frame = CGRect(x: bx, y: by, width: bw, height: bh)
+            readableButton.frame = CGRect(x: bx + bw + gap, y: by, width: bw, height: bh)
+        } else {
+            buttonBar.isHidden = true
+        }
+
         isHidden = false
         // nach vorn holen
         if let sv = superview { removeFromSuperview(); sv.addSubview(self) }

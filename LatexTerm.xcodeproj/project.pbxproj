@@ -114,7 +114,7 @@
 			mainGroup = AA0000000000000000000002;
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
-				AA00000000000000000000A0 /* XCRemoteSwiftPackageReference "SwiftTerm" */,
+				AA00000000000000000000A0 /* XCLocalSwiftPackageReference "SwiftTermLocal" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = AA0000000000000000000003 /* Products */;

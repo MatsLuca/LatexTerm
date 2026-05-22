@@ -6,6 +6,8 @@ final class OverlayController {
     private let layer = FormulaLayer()
     private var pending = false
     private var observer: NSObjectProtocol?
+    private var clickMonitor: Any?
+    private var keyMonitor: Any?
 
     init(terminal: LatexTerminalView) {
         self.terminal = terminal
@@ -16,7 +18,20 @@ final class OverlayController {
 
         // Hover-Vorschau ("Ansichts-Modus"): große Formel beim Überfahren
         host.onMouseMoved = { [weak self] p in self?.handleHover(p) }
-        host.onMouseExited = { [weak self] in self?.preview.hide() }
+        host.onMouseExited = { [weak self] in
+            guard let self, !self.preview.pinned else { return }
+            self.preview.hide()
+        }
+
+        // Klick auf eine Formel pinnt die Vorschau (mit Copy-Buttons); Klick daneben
+        // bzw. Esc schließt sie wieder. Klicks außerhalb von Formeln gehen normal ans
+        // Terminal (Selektion/Scroll) – wir schlucken nur Treffer auf einer Formel.
+        clickMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown]) { [weak self] event in
+            self?.handleMouseDown(event) ?? event
+        }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
+            self?.handleKeyDown(event) ?? event
+        }
 
         // Echte gerenderte Bounds aus der WebView → enge Hitboxen
         layer.onBounds = { [weak self] tight in self?.applyTightBounds(tight) }
@@ -34,6 +49,8 @@ final class OverlayController {
 
     deinit {
         if let observer { NotificationCenter.default.removeObserver(observer) }
+        if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
     }
 
     func scheduleRescan() {
@@ -68,8 +85,41 @@ final class OverlayController {
         }
     }
 
+    /// Klick: liegt er in einer Formel-Hitbox → pinnen und schlucken (kein Terminal-
+    /// Select). Klick im gepinnten Panel → durchlassen (Buttons). Sonst → ggf. schließen.
+    private func handleMouseDown(_ event: NSEvent) -> NSEvent? {
+        guard let terminal, FormulaSettings.shared.formulasEnabled,
+              let win = terminal.window, event.window === win else { return event }
+        let p = terminal.overlay.convert(event.locationInWindow, from: nil)
+
+        if preview.pinned, preview.frame.contains(p) { return event }   // Button-Klick
+
+        for hb in hitboxes.values where hb.rect.contains(p) {
+            preview.show(
+                latex: hb.latex,
+                over: hb.rect,
+                in: terminal.overlay,
+                fontPx: terminal.font.pointSize,
+                foreground: FormulaSettings.shared.formulaColor,
+                background: terminal.nativeBackgroundColor
+            )
+            preview.pin()
+            return nil   // Treffer → schlucken, damit keine Terminal-Selektion startet
+        }
+
+        if preview.pinned { preview.hide() }
+        return event
+    }
+
+    /// Esc schließt ein gepinntes Panel (und schluckt die Taste nur dann).
+    private func handleKeyDown(_ event: NSEvent) -> NSEvent? {
+        if preview.pinned, event.keyCode == 53 { preview.hide(); return nil }
+        return event
+    }
+
     private func handleHover(_ p: NSPoint) {
         guard let terminal, FormulaSettings.shared.formulasEnabled else { preview.hide(); return }
+        if preview.pinned { return }   // gepinnt: Hover ändert nichts
         for hb in hitboxes.values where hb.rect.contains(p) {
             preview.show(
                 latex: hb.latex,

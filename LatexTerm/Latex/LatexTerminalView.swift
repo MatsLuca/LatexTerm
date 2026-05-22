@@ -3,7 +3,15 @@ import SwiftTerm
 
 final class OverlayHost: NSView {
     override var isFlipped: Bool { true }
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// Standardmäßig komplett klick-durchlässig (Terminal bekommt Selektion/Scroll).
+    /// Ausnahme: Treffer INNERHALB eines interaktiven Subviews – z.B. die Buttons des
+    /// gepinnten Formel-Panels – werden durchgelassen, damit sie Klicks bekommen.
+    /// Klicks auf leere Fläche liefern `self` aus `super.hitTest` und bleiben durchlässig.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        let hit = super.hitTest(point)
+        return (hit !== self) ? hit : nil
+    }
 
     /// Hover-Tracking für den Formel-Vorschau-Modus. Liefert nur mouseMoved/Exited;
     /// Klicks/Selektion bleiben über hitTest==nil beim Terminal.
