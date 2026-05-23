@@ -87,7 +87,8 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
       var rh=e.m.offsetHeight, rw=e.m.offsetWidth;
       if(rh<=0||rw<=0)return;
       var s=Math.min(1, maxH/rh, maxW/rw)*cfg.userScale;
-      e.m.style.transform='translateY(-50%) scale('+s+')';
+      // Display-Blöcke werden in beiden Achsen zentriert, Inline links/vertikal-mittig.
+      e.m.style.transform=(e.display?'translate(-50%,-50%)':'translateY(-50%)')+' scale('+s+')';
     }
 
     function setConfig(c){
@@ -106,17 +107,20 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
           var bg=document.createElement('div'); bg.className='bg';
           var m=document.createElement('div'); m.className='m';
           wrap.appendChild(bg); wrap.appendChild(m); root.appendChild(wrap);
-          e={wrap:wrap,bg:bg,m:m,latex:null}; els[it.key]=e;
+          e={wrap:wrap,bg:bg,m:m,latex:null,display:false}; els[it.key]=e;
         }
         e.wrap.style.left=it.x+'px'; e.wrap.style.top=it.y+'px';
         e.wrap.style.width=it.w+'px'; e.wrap.style.height=it.h+'px';
-        var bgY=(it.h-cfg.cellH)/2;
-        e.bg.style.top=bgY+'px'; e.bg.style.height=cfg.cellH+'px';
+        // Hintergrund maskiert den Quelltext: bei Display der ganze Block, sonst eine Zeile mittig.
+        if(it.display){ e.bg.style.top='0px'; e.bg.style.height=it.h+'px'; }
+        else { var bgY=(it.h-cfg.cellH)/2; e.bg.style.top=bgY+'px'; e.bg.style.height=cfg.cellH+'px'; }
         styleEl(e);
-        if(e.latex!==it.latex){
-          e.latex=it.latex;
+        if(e.latex!==it.latex || e.display!==!!it.display){
+          e.latex=it.latex; e.display=!!it.display;
+          if(e.display){ e.m.style.left='50%'; e.m.style.top='50%'; e.m.style.transformOrigin='center center'; }
+          else { e.m.style.left='2px'; e.m.style.top='50%'; e.m.style.transformOrigin='left center'; }
           try{ e.m.className='m';
-               e.m.innerHTML=katex.renderToString(it.latex,{displayMode:!!it.display,throwOnError:true}); }
+               e.m.innerHTML=katex.renderToString(it.latex,{displayMode:e.display,throwOnError:true}); }
           catch(err){ e.m.className='m fallback'; e.m.textContent=it.latex; }
           if(document.fonts&&document.fonts.ready){document.fonts.ready.then(function(){fit(e);});}
           fit(e);

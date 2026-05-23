@@ -7,6 +7,17 @@ struct LaTeXHit: Equatable {
     let displayMode: Bool
 }
 
+/// Ein über mehrere Grid-Zeilen reichender Display-Block (`$$..$$`, `\[..\]`),
+/// dessen Öffnungs- und Schluss-Delimiter auf verschiedenen Zeilen liegen.
+/// `body` ist der zeilenweise getrimmte, mit Leerzeichen verbundene Inhalt.
+struct LaTeXBlock: Equatable {
+    let body: String
+    let startRow: Int
+    let startCol: Int
+    let endRow: Int
+    let endCol: Int   // Spalte direkt nach dem Schluss-Delimiter (auf endRow)
+}
+
 enum LaTeXDetector {
     static func find(in line: String) -> [LaTeXHit] {
         let chars = Array(line)
@@ -33,6 +44,53 @@ enum LaTeXDetector {
             }
         }
         return hits
+    }
+
+    /// Maximale Höhe eines Blocks. Begrenzt den Suchradius für den Schluss-Delimiter,
+    /// damit ein verwaister `$$`-/`\[`-Delimiter keinen riesigen Block aufspannt.
+    private static let maxBlockRows = 12
+
+    /// Findet mehrzeilige Display-Blöcke (`$$..$$`, `\[..\]`) in **kanonischer Form**:
+    /// Öffnungs- und Schluss-Delimiter stehen *jeweils allein auf ihrer Zeile*
+    /// (`$$` bzw. `\[` … `\]`). Das ist die übliche Schreibweise und vermeidet
+    /// Falschtreffer durch Prosa-`$$` (z.B. „Einzeiliges $$ …") oder die Shell-PID `$$`.
+    /// Einzeilige Vorkommen (`$$x$$`) deckt `find(in:)` ab. `lines` = sichtbare
+    /// Grid-Zeilen, Index = Viewport-Row.
+    static func findBlocks(in lines: [String]) -> [LaTeXBlock] {
+        var blocks: [LaTeXBlock] = []
+        var r = 0
+        while r < lines.count {
+            let openTrim = lines[r].trimmingCharacters(in: .whitespaces)
+            let closer: String
+            switch openTrim {
+            case "$$":  closer = "$$"
+            case "\\[": closer = "\\]"
+            default:    r += 1; continue
+            }
+            // Passende Schlusszeile suchen (ebenfalls allein auf ihrer Zeile).
+            var er = r + 1
+            var found = false
+            while er < lines.count, er - r <= maxBlockRows {
+                if lines[er].trimmingCharacters(in: .whitespaces) == closer { found = true; break }
+                er += 1
+            }
+            guard found else { r += 1; continue }
+
+            let body = lines[(r + 1)..<er]
+                .map { $0.trimmingCharacters(in: .whitespaces) }
+                .filter { !$0.isEmpty }
+                .joined(separator: " ")
+            if !body.isEmpty {
+                let startCol = lines[r].prefix { $0 == " " }.count   // Delimiter steht meist bei 0
+                blocks.append(LaTeXBlock(
+                    body: body,
+                    startRow: r, startCol: startCol,
+                    endRow: er, endCol: lines[er].count   // ganze Schlusszeile maskieren
+                ))
+            }
+            r = er + 1
+        }
+        return blocks
     }
 
     private struct Open {

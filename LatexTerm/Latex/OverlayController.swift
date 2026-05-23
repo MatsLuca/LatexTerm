@@ -105,8 +105,9 @@ final class OverlayController {
 
     // MARK: - Privat
 
-    // Span 1.0: jede Formel wird in ihre eigene Zeile skaliert und ragt nie in
-    // Nachbarzeilen. Große Formeln werden klein – per Hover gibt's den Großmodus.
+    // Span 1.0: jede *Inline*-Formel wird in ihre eigene Zeile skaliert und ragt nie in
+    // Nachbarzeilen. Große Inline-Formeln werden klein – per Hover gibt's den Großmodus.
+    // (Mehrzeilige $$-Blöcke spannen dagegen ihren ganzen Quell-Zeilenbereich, s. blockBox.)
     private static let verticalSpan: CGFloat = 1.0
     private var lastFontPx: CGFloat = 0
     private var lastConfigJSON: String?
@@ -223,16 +224,41 @@ final class OverlayController {
         // damit Scrollen Overlays nur neu positioniert statt sie neu zu erzeugen.
         let yDisp = term.buffer.yDisp
 
+        // Sichtbares Grid einlesen. Leere Grid-Zellen liefern als code 0 ein NULL-Zeichen
+        // (\u{0}), das KaTeX im Strict-Mode mit "Unexpected character" ablehnt. 1:1 in ein
+        // Leerzeichen wandeln – erhält die Spalten-Positionen für startCol/endCol.
+        var grid: [[Character]] = []
+        grid.reserveCapacity(rows)
+        for vr in 0..<rows {
+            let text = term.getLine(row: vr)?
+                .translateToString(trimRight: false)
+                .replacingOccurrences(of: "\u{0}", with: " ") ?? ""
+            grid.append(Array(text))
+        }
+
         var items: [[String: Any]] = []
         hitboxes.removeAll()
+
+        // 1) Mehrzeilige Display-Blöcke ($$..$$, \[..\]): echtes displayMode, das Overlay
+        //    spannt den ganzen Quell-Zeilenbereich – der Platz ist im Text schon reserviert.
+        for b in LaTeXDetector.findBlocks(in: grid.map { String($0) }) {
+            let box = blockBox(b, grid: grid, cell: cell)
+            let key = "B|\(b.startRow + yDisp)|\(b.startCol)|\(b.body)"
+            items.append([
+                "key": key,
+                "x": box.minX, "y": box.minY, "w": box.width, "h": box.height,
+                "latex": b.body,
+                "display": true
+            ])
+            hitboxes[key] = (rect: box, latex: b.body)
+            // Quellzellen des Blocks maskieren, damit die Inline-Erkennung sie nicht doppelt trifft.
+            maskBlock(b, in: &grid)
+        }
+
+        // 2) Inline-Formeln pro Zeile auf dem maskierten Grid. displayMode wird durchgereicht:
+        //    einzeiliges $$/\[ rendert displaystyle (in seine Zeile skaliert), $/\( inline.
         for vr in 0..<rows {
-            guard let line = term.getLine(row: vr) else { continue }
-            // Leere Grid-Zellen liefern als code 0 ein NULL-Zeichen (\u{0}), das KaTeX
-            // im Strict-Mode mit "Unexpected character" ablehnt. 1:1 in ein Leerzeichen
-            // wandeln – erhält die Spalten-Positionen für startCol/endCol.
-            let text = line.translateToString(trimRight: false)
-                .replacingOccurrences(of: "\u{0}", with: " ")
-            for hit in LaTeXDetector.find(in: text) {
+            for hit in LaTeXDetector.find(in: String(grid[vr])) {
                 let key = "\(vr + yDisp)|\(hit.startCol)|\(hit.body)"
                 let frame = CGRect(
                     x: CGFloat(hit.startCol) * cell.width,
@@ -244,7 +270,7 @@ final class OverlayController {
                     "key": key,
                     "x": frame.minX, "y": frame.minY, "w": frame.width, "h": frame.height,
                     "latex": hit.body,
-                    "display": false
+                    "display": hit.displayMode
                 ])
                 // grobe Hitbox; wird per onBounds eng nachgezogen
                 hitboxes[key] = (rect: frame, latex: hit.body)
@@ -269,6 +295,43 @@ final class OverlayController {
         layer.run(js)
 
         lastEmpty = items.isEmpty
+    }
+
+    // MARK: - Block-Geometrie
+
+    /// Enge Pixel-Box um die Quellzellen eines Blocks: min/max belegte Spalte über alle
+    /// Block-Zeilen, volle Zeilenhöhe von Start- bis Schlusszeile (gibt der Display-Formel
+    /// echten vertikalen Platz, sodass sie nicht in Nachbarzeilen skaliert werden muss).
+    private func blockBox(_ b: LaTeXBlock, grid: [[Character]], cell: CGSize) -> CGRect {
+        var minCol = Int.max, maxCol = 0
+        for r in b.startRow...b.endRow {
+            let chars = grid[r]
+            let from = (r == b.startRow) ? b.startCol : 0
+            let to = (r == b.endRow) ? min(b.endCol, chars.count) : chars.count
+            var c = from
+            while c < to {
+                if chars[c] != " " { minCol = min(minCol, c); maxCol = max(maxCol, c) }
+                c += 1
+            }
+        }
+        if minCol == Int.max { minCol = b.startCol; maxCol = b.startCol }
+        return CGRect(
+            x: CGFloat(minCol) * cell.width,
+            y: CGFloat(b.startRow) * cell.height,
+            width: CGFloat(maxCol - minCol + 1) * cell.width,
+            height: CGFloat(b.endRow - b.startRow + 1) * cell.height
+        )
+    }
+
+    /// Überschreibt die vom Block belegten Zellen mit Leerzeichen (Spalten bleiben erhalten),
+    /// damit die nachgelagerte Inline-Erkennung dort nichts mehr findet.
+    private func maskBlock(_ b: LaTeXBlock, in grid: inout [[Character]]) {
+        for r in b.startRow...b.endRow {
+            let from = (r == b.startRow) ? b.startCol : 0
+            let to = (r == b.endRow) ? min(b.endCol, grid[r].count) : grid[r].count
+            var c = from
+            while c < to { grid[r][c] = " "; c += 1 }
+        }
     }
 
     // MARK: - JSON / Farb-Helfer
