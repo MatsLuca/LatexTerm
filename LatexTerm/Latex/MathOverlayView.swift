@@ -166,8 +166,12 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
     private let buttonBar = NSView()
     private var latexButton: NSButton!
     private var readableButton: NSButton!
+    private var imageButton: NSButton!
     private var lastContentW: CGFloat = 0
     private var lastContentH: CGFloat = 0
+
+    /// Zuletzt gezeigte Hintergrundfarbe (für das Chip-Bild).
+    private var exportBackground: NSColor = .black
 
     private static let innerPad: CGFloat = 14   // Rand zwischen Box und Formel
     private static let gap: CGFloat = 10        // Abstand Box ↔ Quell-Formel
@@ -205,8 +209,10 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
 
         latexButton = Self.makeButton("LaTeX", target: self, action: #selector(copyLatex))
         readableButton = Self.makeButton("Lesbar", target: self, action: #selector(copyReadable))
+        imageButton = Self.makeButton("Bild", target: self, action: #selector(copyImage))
         buttonBar.addSubview(latexButton)
         buttonBar.addSubview(readableButton)
+        buttonBar.addSubview(imageButton)
         buttonBar.isHidden = true
         addSubview(buttonBar)
 
@@ -238,6 +244,7 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         hostView = host
         anchor = rect
         shownLatex = latex
+        exportBackground = background
 
         layer?.backgroundColor = background.cgColor
         layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
@@ -277,6 +284,30 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         flash(readableButton, original: "Lesbar")
     }
 
+    @objc private func copyImage() {
+        guard shownLatex != nil, lastContentW > 0, lastContentH > 0 else { return }
+        imageButton.title = "…"
+        let bg = exportBackground
+
+        // Die sichtbare Vorschau-WebView ist garantiert gepaintet → von ihr snapshotten,
+        // exakt auf die Inhaltsgröße (#m liegt links oben), dann den Chip komponieren.
+        let cfg = WKSnapshotConfiguration()
+        cfg.rect = CGRect(x: 0, y: 0, width: lastContentW, height: lastContentH)
+        web.takeSnapshot(with: cfg) { [weak self] snapshot, _ in
+            guard let self else { return }
+            if let snapshot,
+               let chip = FormulaImageRenderer.makeChip(from: snapshot, background: bg),
+               FormulaImageRenderer.copyToPasteboard(chip) {
+                self.flash(self.imageButton, original: "Bild")
+            } else {
+                self.imageButton.title = "Fehler"
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    self?.imageButton.title = "Bild"
+                }
+            }
+        }
+    }
+
     private func copyToPasteboard(_ text: String) {
         let pb = NSPasteboard.general
         pb.clearContents()
@@ -311,7 +342,7 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
 
         var boxW = min(contentW + 2 * pad, maxW)
         var boxH = min(contentH + 2 * pad + bar, maxH)
-        boxW = max(boxW, pinned ? 190 : 40)   // gepinnt: Platz für beide Buttons
+        boxW = max(boxW, pinned ? 252 : 40)   // gepinnt: Platz für drei Buttons
         boxH = max(boxH, 30 + bar)
 
         // x: über der Formel zentriert, in Host-Bounds geklemmt
@@ -329,12 +360,13 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         if pinned {
             buttonBar.isHidden = false
             buttonBar.frame = CGRect(x: 0, y: boxH - Self.barH, width: boxW, height: Self.barH)
-            let bw: CGFloat = 84, bh: CGFloat = 24, gap: CGFloat = 8
-            let total = bw * 2 + gap
+            let bw: CGFloat = 72, bh: CGFloat = 24, gap: CGFloat = 8
+            let total = bw * 3 + gap * 2
             let bx = (boxW - total) / 2
             let by = (Self.barH - bh) / 2
             latexButton.frame = CGRect(x: bx, y: by, width: bw, height: bh)
             readableButton.frame = CGRect(x: bx + bw + gap, y: by, width: bw, height: bh)
+            imageButton.frame = CGRect(x: bx + 2 * (bw + gap), y: by, width: bw, height: bh)
         } else {
             buttonBar.isHidden = true
         }
