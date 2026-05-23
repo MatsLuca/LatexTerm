@@ -21,3 +21,7 @@ Packages/
 *.swo
 .vscode/
 .idea/
+
+# AI assistant guidance (local only)
+CLAUDE.md
+GEMINI.md
