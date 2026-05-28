@@ -53,6 +53,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `FormulaSettings` singleton (`ObservableObject`) persisting all four settings in `UserDefaults`; broadcasts `FormulaSettings.didChange` via `NotificationCenter` so `OverlayController` and `TerminalContainer` react without polling.
 - `invalidateAll()` helper on `OverlayController` — efficiently tears down all overlay views and resets `lastFontPx`, used on settings change and font size change.
 
+### Fixed
+- **Diktier-Apps (SuperWhisper & Co.) lassen ihr Overlay jetzt nach dem Insert zu.** `LatexTerminalView` meldet sich gegenüber der macOS-Accessibility-API jetzt als `AXTextArea` (Role, Label, Value, Selected-Range, Visible-Range). SwiftTerms `TerminalView` ist ein nacktes `NSView` ohne AX-Überschreibungen — Diktier-Apps sahen kein gültiges Textziel, behandelten das Einfügen als fehlgeschlagen (auch wenn der Cmd+V-Pfad parallel den Text korrekt in die PTY schob) und ließen ihr Overlay deshalb stehen. Zusätzlich akzeptieren `setAccessibilityValue(_:)` und `setAccessibilitySelectedText(_:)` jetzt direkte AX-Inserts und schreiben den Text via `send(txt:)` in die PTY (mit Read-Back über `lastAXInsertedValue`, damit Clients den erfolgreichen Insert verifizieren können); `isAccessibilitySelectorAllowed` whitelisted die Setter, sonst meldete AX sie als read-only.
+
 ### Notes
 - App Sandbox is disabled (`ENABLE_APP_SANDBOX = NO`) — required for PTY/process spawn.
 - Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`) needs to be installed; SwiftTerm ships Metal shaders even though the CPU renderer is used.

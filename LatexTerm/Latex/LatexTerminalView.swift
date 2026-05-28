@@ -63,6 +63,10 @@ final class LatexTerminalView: LocalProcessTerminalView {
     /// Cmd+1…9: auf so viele Kacheln auffüllen (nur erweitern, nie schließen).
     var onEnsurePaneCount: ((Int) -> Void)?
 
+    /// Zuletzt via AX gesetzter Text (für read-back durch Dictation-Apps wie SuperWhisper).
+    /// Siehe Accessibility-Block weiter unten.
+    private var lastAXInsertedValue: String = ""
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         notifyUpdateChanges = true
@@ -159,5 +163,46 @@ final class LatexTerminalView: LocalProcessTerminalView {
         guard size != font.pointSize else { return }
         font = NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
         onRangeChanged?()
+    }
+
+    // MARK: - Accessibility (Dictation-Support, z.B. SuperWhisper)
+    //
+    // SwiftTerm's `TerminalView` exponiert keine Text-Rolle, deshalb sehen
+    // Diktier-Apps via AX kein gültiges Textziel und behandeln das Einfügen als
+    // fehlgeschlagen → ihr Overlay bleibt nach dem Paste stehen. Wir melden uns
+    // als `AXTextArea`. Wenn die App den Text via AX-Value setzt, schreiben wir
+    // ihn direkt in die PTY und merken ihn für den Read-Back, damit die App den
+    // Insert als erfolgreich verifizieren kann.
+
+    override func isAccessibilityElement() -> Bool { true }
+    override func accessibilityRole() -> NSAccessibility.Role? { .textArea }
+    override func accessibilityRoleDescription() -> String? { "terminal" }
+    override func accessibilityLabel() -> String? { "Terminal" }
+    override func accessibilityValue() -> Any? { lastAXInsertedValue }
+    override func accessibilityNumberOfCharacters() -> Int { lastAXInsertedValue.count }
+    override func accessibilitySelectedText() -> String? { "" }
+    override func accessibilitySelectedTextRange() -> NSRange {
+        NSRange(location: lastAXInsertedValue.count, length: 0)
+    }
+    override func accessibilityVisibleCharacterRange() -> NSRange {
+        NSRange(location: 0, length: lastAXInsertedValue.count)
+    }
+
+    override func setAccessibilityValue(_ accessibilityValue: Any?) {
+        guard let str = accessibilityValue as? String, !str.isEmpty else { return }
+        lastAXInsertedValue = str
+        send(txt: str)
+    }
+
+    override func setAccessibilitySelectedText(_ accessibilitySelectedText: String?) {
+        guard let str = accessibilitySelectedText, !str.isEmpty else { return }
+        lastAXInsertedValue = str
+        send(txt: str)
+    }
+
+    override func isAccessibilitySelectorAllowed(_ selector: Selector) -> Bool {
+        if selector == #selector(setAccessibilityValue(_:)) { return true }
+        if selector == #selector(setAccessibilitySelectedText(_:)) { return true }
+        return super.isAccessibilitySelectorAllowed(selector)
     }
 }
