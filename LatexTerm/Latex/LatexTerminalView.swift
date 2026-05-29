@@ -62,6 +62,8 @@ final class LatexTerminalView: LocalProcessTerminalView {
     var onCloseRequested: (() -> Void)?
     /// Cmd+1…9: auf so viele Kacheln auffüllen (nur erweitern, nie schließen).
     var onEnsurePaneCount: ((Int) -> Void)?
+    /// Fokus-Änderung an den Kachel-Controller melden.
+    var onFocusChanged: ((Bool) -> Void)?
 
     /// Zuletzt via AX gesetzter Text (für read-back durch Dictation-Apps wie SuperWhisper).
     /// Siehe Accessibility-Block weiter unten.
@@ -163,6 +165,18 @@ final class LatexTerminalView: LocalProcessTerminalView {
         guard size != font.pointSize else { return }
         font = NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
         onRangeChanged?()
+    }
+
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok { onFocusChanged?(true) }
+        return ok
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok { onFocusChanged?(false) }
+        return ok
     }
 
     // MARK: - Accessibility (Dictation-Support, z.B. SuperWhisper)

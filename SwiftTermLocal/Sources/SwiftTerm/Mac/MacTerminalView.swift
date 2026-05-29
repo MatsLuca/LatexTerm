@@ -733,7 +733,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     //
     // NSTextInputClient protocol implementation
     //
-    public override func becomeFirstResponder() -> Bool {
+    open override func becomeFirstResponder() -> Bool {
         let response = super.becomeFirstResponder()
         if response {
             hasFocus = true
@@ -743,7 +743,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         return response
     }
     
-    public override func resignFirstResponder() -> Bool {
+    open override func resignFirstResponder() -> Bool {
         let response = super.resignFirstResponder()
         if response {
             caretView.disableAnimations()

@@ -18,6 +18,11 @@ final class FormulaSettings: ObservableObject {
         static let formulaColorGreen = "LatexTerm.formulaColor.green"
         static let formulaColorBlue  = "LatexTerm.formulaColor.blue"
         static let formulaColorAlpha = "LatexTerm.formulaColor.alpha"
+        static let accentColorRed    = "LatexTerm.accentColor.red"
+        static let accentColorGreen  = "LatexTerm.accentColor.green"
+        static let accentColorBlue   = "LatexTerm.accentColor.blue"
+        static let accentColorAlpha  = "LatexTerm.accentColor.alpha"
+        static let isAdaptiveAccent  = "LatexTerm.isAdaptiveAccent"
         static let formulasEnabled   = "LatexTerm.formulasEnabled"
         static let extraLineSpacing  = "LatexTerm.extraLineSpacing"
         static let formulaScale      = "LatexTerm.formulaScale"
@@ -26,6 +31,7 @@ final class FormulaSettings: ObservableObject {
     // MARK: - Defaults
 
     static let defaultFormulaColor   = NSColor(red: 230/255.0, green: 225/255.0, blue: 225/255.0, alpha: 1.0)
+    static let defaultAccentColor    = NSColor(red: 232/255.0, green: 94/255.0, blue: 62/255.0, alpha: 1.0)
     static let defaultLineSpacing: CGFloat = 8
     static let defaultFormulaScale: CGFloat = 1.0
     static let minLineSpacing: CGFloat = 0
@@ -39,6 +45,17 @@ final class FormulaSettings: ObservableObject {
 
     @Published var formulaColor: NSColor {
         didSet { saveColor(formulaColor); postChange() }
+    }
+
+    @Published var accentColor: NSColor {
+        didSet { saveAccentColor(accentColor); postChange() }
+    }
+
+    @Published var isAdaptiveAccent: Bool {
+        didSet {
+            UserDefaults.standard.set(isAdaptiveAccent, forKey: Keys.isAdaptiveAccent)
+            postChange()
+        }
     }
 
     @Published var formulasEnabled: Bool {
@@ -78,6 +95,21 @@ final class FormulaSettings: ObservableObject {
             ? CGFloat(d.double(forKey: Keys.formulaColorAlpha)) : CGFloat(1.0)
         formulaColor = NSColor(calibratedRed: r, green: g, blue: b, alpha: a)
 
+        // Akzentfarbe laden
+        let ar = d.object(forKey: Keys.accentColorRed) != nil
+            ? CGFloat(d.double(forKey: Keys.accentColorRed)) : CGFloat(232/255.0)
+        let ag = d.object(forKey: Keys.accentColorGreen) != nil
+            ? CGFloat(d.double(forKey: Keys.accentColorGreen)) : CGFloat(94/255.0)
+        let ab = d.object(forKey: Keys.accentColorBlue) != nil
+            ? CGFloat(d.double(forKey: Keys.accentColorBlue)) : CGFloat(62/255.0)
+        let aa = d.object(forKey: Keys.accentColorAlpha) != nil
+            ? CGFloat(d.double(forKey: Keys.accentColorAlpha)) : CGFloat(1.0)
+        accentColor = NSColor(calibratedRed: ar, green: ag, blue: ab, alpha: aa)
+
+        // isAdaptiveAccent laden (default: false)
+        isAdaptiveAccent = d.object(forKey: Keys.isAdaptiveAccent) != nil
+            ? d.bool(forKey: Keys.isAdaptiveAccent) : false
+
         // formulasEnabled laden (default: true)
         formulasEnabled = d.object(forKey: Keys.formulasEnabled) != nil
             ? d.bool(forKey: Keys.formulasEnabled) : true
@@ -102,6 +134,15 @@ final class FormulaSettings: ObservableObject {
         d.set(Double(rgb.greenComponent), forKey: Keys.formulaColorGreen)
         d.set(Double(rgb.blueComponent),  forKey: Keys.formulaColorBlue)
         d.set(Double(rgb.alphaComponent), forKey: Keys.formulaColorAlpha)
+    }
+
+    private func saveAccentColor(_ c: NSColor) {
+        guard let rgb = c.usingColorSpace(.sRGB) else { return }
+        let d = UserDefaults.standard
+        d.set(Double(rgb.redComponent),   forKey: Keys.accentColorRed)
+        d.set(Double(rgb.greenComponent), forKey: Keys.accentColorGreen)
+        d.set(Double(rgb.blueComponent),  forKey: Keys.accentColorBlue)
+        d.set(Double(rgb.alphaComponent), forKey: Keys.accentColorAlpha)
     }
 
     private func postChange() {
@@ -136,9 +177,10 @@ final class FormulaSettings: ObservableObject {
         formulaScale = Self.defaultFormulaScale
     }
 
-    func openColorPicker() {
+    func openColorPicker(for target: FormulaColorProxy.ColorTarget) {
+        FormulaColorProxy.shared.currentTarget = target
         let panel = NSColorPanel.shared
-        panel.color = formulaColor
+        panel.color = target == .formula ? formulaColor : accentColor
         panel.isContinuous = true
         panel.showsAlpha = false
         panel.orderFront(nil)
@@ -147,6 +189,14 @@ final class FormulaSettings: ObservableObject {
         NSColorPanel.shared.setTarget(FormulaColorProxy.shared)
         NSColorPanel.shared.setAction(#selector(FormulaColorProxy.colorChanged(_:)))
     }
+
+    func openColorPicker() {
+        openColorPicker(for: .formula)
+    }
+
+    func openAccentColorPicker() {
+        openColorPicker(for: .accent)
+    }
 }
 
 // MARK: - Proxy für NSColorPanel-Callback
@@ -154,10 +204,20 @@ final class FormulaSettings: ObservableObject {
 /// NSColorPanel braucht ein Objective-C-kompatibles target/action.
 /// Dieser Proxy leitet die Farbänderung an FormulaSettings weiter.
 final class FormulaColorProxy: NSObject {
+    enum ColorTarget {
+        case formula
+        case accent
+    }
+
     static let shared = FormulaColorProxy()
+    var currentTarget: ColorTarget = .formula
 
     @objc func colorChanged(_ sender: NSColorPanel) {
-        FormulaSettings.shared.formulaColor = sender.color
+        if currentTarget == .formula {
+            FormulaSettings.shared.formulaColor = sender.color
+        } else {
+            FormulaSettings.shared.accentColor = sender.color
+        }
     }
 }
 

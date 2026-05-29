@@ -26,7 +26,8 @@ PTY (zsh) → SwiftTerm VT parser → Buffer grid
 - **Hover preview**: large formulas shrink to fit their row, so a hover "view mode" (`FormulaPreview`) blows the formula back up at full size when the pointer rests over it. Hitboxes start as the source-text box and are tightened to the real rendered bounds reported back from the WebView; hover tracking is mouse-move only, so plain selection/scroll still pass through to the terminal.
 - **Click to pin + copy**: clicking a formula pins the preview and reveals three buttons — **LaTeX** copies the raw expression, **Lesbar** copies a readable Unicode-math form (e.g. `(-b ± √(b²-4ac))/(2a)`, via `LaTeXReadable`), and **Bild** copies the formula as a PNG image — a dark rounded "chip" composed from a `takeSnapshot` of the (already-painted) preview WebView at retina resolution via `FormulaImageRenderer`. Clicking away, `Esc`, scrolling, or new output dismisses it. Two local `NSEvent` monitors drive pinning/dismissal; `OverlayHost.hitTest` lets clicks land *inside* the pinned panel (the buttons) while staying click-through everywhere else.
 - **Overlay lifecycle**: keyed by `(absoluteBufferRow, startCol, body)` where `absoluteBufferRow = viewportRow + buffer.yDisp`. On rescan the desired state is sent to the layer as JSON and reconciled in JS (`sync()`): new keys create a `<div>`, missing keys are removed, surviving keys are only repositioned (no KaTeX re-render). Binding the key to the absolute scrollback row means scrolling repositions overlays instead of destroying and rebuilding them. Font-size and settings changes trigger `clearAll()` so KaTeX re-renders at the new size/colors.
-- **Split-screen tiling**: `⌘T` adds a pane, each with its own login shell and its own `OverlayController` (independent formula overlays). `TerminalSplitView` lays panes out by direct frame math (no `NSSplitView`), choosing the grid shape from the *window's* width **and** height: it picks the row count whose resulting cell aspect ratio is closest to a target (`idealCellAspect ≈ 0.82`), so a wide window stays single-row longer (up to ~3 across) and wraps into a balanced grid as it fills (4 → 2×2, then toward 3×3). Rows are equal height and each row divides its width independently (top-heavy masonry: e.g. 5 panes → 3 over 2). An 8px strut between cells shows the slightly-lighter container background. `⌘W` closes the focused pane, `⌘1…9` grows to N panes.
+- **Split-screen tiling**: `⌘T` adds a pane, each with its own login shell and its own `OverlayController` (independent formula overlays). `TerminalSplitView` lays panes out by direct frame math (no `NSSplitView`), choosing the grid shape from the *window's* width **and** height: it picks the row count whose resulting cell aspect ratio is closest to a target (`idealCellAspect ≈ 0.82`), so a wide window stays single-row longer (up to ~3 across) and wraps into a balanced grid as it fills (4 → 2×2, then toward 3×3). Rows are equal height and each row divides its width independently (top-heavy masonry: e.g. 5 panes → 3 over 2). An 8px strut between cells is semi-transparent (`alpha: 0.35`) to let window vibrancy peek through. `⌘W` closes the focused pane, `⌘1…9` grows to N panes. Transitions when adding or removing panes are smoothly animated over 0.22s.
+- **Premium Visuals & Window Design**: The terminal window features a frameless blending design (`fullSizeContentView`, transparent titlebar, hidden title, and window-wide dragging). It embeds a native `NSVisualEffectView` behind the terminal panes (`.underWindowBackground`, `.behindWindow` blend modes) for a premium translucent macOS feel.
 - **Flicker-free scrolling**: scrolling is a rapid sequence of static states, and repositioning the out-of-process WebView on every intermediate step flickers. SwiftTerm's `scrolled` event drives a separate path (`onScrolled` → `scheduleReposition`) that hides the overlay layer on the first scroll event and arms an idle timer. While events keep flowing (including trackpad momentum) the overlays stay hidden; ~150 ms after the last event the layer is repositioned and revealed only once the WebView has painted the new positions (gated on the first `onBounds` report). The 30 ms `scheduleRescan` debounce now only serves terminal output, resize, and settings changes.
 
 ## Requirements
@@ -63,6 +64,7 @@ open .build/Build/Products/Debug/LatexTerm.app
 | `⌘-` | Decrease font size by 1pt (all panes) |
 | `⌘0` | Reset font size to 13pt (default, all panes) |
 | `⌘L` | Toggle formula overlays on/off |
+| `⌘⌥⌃A` | Toggle automatic adaptive accent color |
 | `⌘⇧+` / `⌘⇧-` | Increase/decrease line spacing by 2px |
 | `⌘⇧0` | Reset line spacing to default (8px) |
 | `⌥⌘+` / `⌥⌘-` | Increase/decrease formula render scale by 0.1× |
@@ -89,10 +91,10 @@ EOF
 ```
 LatexTerm.xcodeproj/         App project (SwiftUI lifecycle)
 LatexTerm/
-  LatexTermApp.swift         @main App definition + "Formeln" CommandMenu
+  LatexTermApp.swift         @main App definition + "Terminal" CommandMenu
   TerminalContainer.swift    NSViewRepresentable wrapping the split container
   TerminalSplit.swift        TerminalPane (shell + overlays per tile) +
-                              TerminalSplitView (auto-tiling grid layout)
+                              TerminalSplitView (animated, vibrancy-integrated auto-tiling grid layout)
   FormulaSettings.swift      Settings singleton (UserDefaults + NotificationCenter)
   Latex/
     LatexTerminalView.swift  LocalProcessTerminalView subclass: overlay host,

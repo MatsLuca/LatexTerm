@@ -17,54 +17,60 @@ struct LatexTermApp: App {
             .preferredColorScheme(.dark)
         }
         .commands {
-            CommandMenu("Formeln") {
+            CommandMenu("Terminal") {
 
-                // MARK: Toggle
-                Toggle("Formeln anzeigen", isOn: $settings.formulasEnabled)
+                // MARK: LaTeX-Optionen
+                Toggle("LaTeX-Formeln anzeigen", isOn: $settings.formulasEnabled)
                     .keyboardShortcut("l", modifiers: .command)
 
-                Divider()
-
-                // MARK: Formelfarbe
                 Button("Formelfarbe…") {
                     settings.openColorPicker()
                 }
 
+                Menu("Formelgröße") {
+                    Button("Erhöhen") {
+                        settings.increaseFormulaScale()
+                    }
+                    .keyboardShortcut("+", modifiers: [.command, .option])
+
+                    Button("Verringern") {
+                        settings.decreaseFormulaScale()
+                    }
+                    .keyboardShortcut("-", modifiers: [.command, .option])
+
+                    Button("Zurücksetzen  (aktuell: \(String(format: "%.1f", settings.formulaScale))×)") {
+                        settings.resetFormulaScale()
+                    }
+                    .keyboardShortcut("0", modifiers: [.command, .option])
+                }
+
                 Divider()
 
-                // MARK: Zeilenabstand
-                Button("Zeilenabstand erhöhen") {
-                    settings.increaseLineSpacing()
-                }
-                .keyboardShortcut("+", modifiers: [.command, .shift])
+                // MARK: Terminal-Optionen
+                Toggle("Automatische Akzentfarbe", isOn: $settings.isAdaptiveAccent)
+                    .keyboardShortcut("a", modifiers: [.command, .control])
 
-                Button("Zeilenabstand verringern") {
-                    settings.decreaseLineSpacing()
+                Button("Terminal-Akzentfarbe…") {
+                    settings.openAccentColorPicker()
                 }
-                .keyboardShortcut("-", modifiers: [.command, .shift])
+                .disabled(settings.isAdaptiveAccent)
 
-                Button("Zeilenabstand zurücksetzen  (aktuell: \(Int(settings.extraLineSpacing)) px)") {
-                    settings.resetLineSpacing()
+                Menu("Zeilenabstand") {
+                    Button("Erhöhen") {
+                        settings.increaseLineSpacing()
+                    }
+                    .keyboardShortcut("+", modifiers: [.command, .shift])
+
+                    Button("Verringern") {
+                        settings.decreaseLineSpacing()
+                    }
+                    .keyboardShortcut("-", modifiers: [.command, .shift])
+
+                    Button("Zurücksetzen  (aktuell: \(Int(settings.extraLineSpacing)) px)") {
+                        settings.resetLineSpacing()
+                    }
+                    .keyboardShortcut("0", modifiers: [.command, .shift])
                 }
-                .keyboardShortcut("0", modifiers: [.command, .shift])
-
-                Divider()
-
-                // MARK: Formelgröße
-                Button("Formelgröße erhöhen") {
-                    settings.increaseFormulaScale()
-                }
-                .keyboardShortcut("+", modifiers: [.command, .option])
-
-                Button("Formelgröße verringern") {
-                    settings.decreaseFormulaScale()
-                }
-                .keyboardShortcut("-", modifiers: [.command, .option])
-
-                Button("Formelgröße zurücksetzen  (aktuell: \(String(format: "%.1f", settings.formulaScale))×)") {
-                    settings.resetFormulaScale()
-                }
-                .keyboardShortcut("0", modifiers: [.command, .option])
             }
         }
     }

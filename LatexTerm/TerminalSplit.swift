@@ -24,17 +24,44 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         let settings = FormulaSettings.shared
         let term = LatexTerminalView(frame: .zero)
         term.nativeForegroundColor = NSColor(red: 230/255.0, green: 225/255.0, blue: 225/255.0, alpha: 1.0)
-        term.nativeBackgroundColor = NSColor(red: 23/255.0, green: 20/255.0, blue: 20/255.0, alpha: 1.0)
-        term.caretColor = NSColor(red: 232/255.0, green: 94/255.0, blue: 62/255.0, alpha: 1.0)
-        term.getTerminal().setCursorStyle(.steadyBlock)
+        // Leicht transparenter Hintergrund für edle Window-Vibrancy
+        term.nativeBackgroundColor = NSColor(red: 23/255.0, green: 20/255.0, blue: 20/255.0, alpha: 0.85)
+        term.caretColor = settings.accentColor
+        // Pulsierender Cursor
+        term.getTerminal().setCursorStyle(.blinkBlock)
         term.extraLineSpacing = settings.extraLineSpacing  // aus UserDefaults
+
+        // Kachel-Styling mit abgerundeten Ecken
+        term.wantsLayer = true
+        term.layer?.cornerRadius = 8
+        term.layer?.masksToBounds = true
+        term.layer?.borderWidth = 0
+        term.layer?.borderColor = settings.accentColor.withAlphaComponent(0.65).cgColor
+        
+        // Kachel ist standardmäßig inaktiv (abgedunkelt), bis sie fokussiert wird
+        term.alphaValue = 0.65
 
         self.view = term
         self.controller = OverlayController(terminal: term)
         super.init()
 
+        // Fokus-Visualisierung
+        term.onFocusChanged = { [weak term] focused in
+            guard let term else { return }
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.18
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                term.animator().alphaValue = focused ? 1.0 : 0.65
+                term.layer?.borderColor = FormulaSettings.shared.accentColor.withAlphaComponent(0.65).cgColor
+                term.layer?.borderWidth = focused ? 1.5 : 0
+            }
+        }
+
         term.processDelegate = self
-        term.onRangeChanged = { [weak controller] in controller?.scheduleRescan() }
+        term.onRangeChanged = { [weak self, weak controller] in
+            controller?.scheduleRescan()
+            self?.scheduleContrastAnalysis()
+        }
         term.onScrolled = { [weak controller] in controller?.scheduleReposition() }
         term.onSplitRequested = { [weak self] in
             guard let self else { return }
@@ -46,18 +73,184 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         }
         term.onEnsurePaneCount = { [weak self] n in self?.onEnsurePaneCount?(n) }
 
-        // Auf Zeilenabstand-Änderungen reagieren
+        // Auf Einstellungs-Änderungen reagieren
         settingsObserver = NotificationCenter.default.addObserver(
             forName: FormulaSettings.didChange,
             object: nil,
             queue: .main
-        ) { [weak term] _ in
-            term?.extraLineSpacing = FormulaSettings.shared.extraLineSpacing
+        ) { [weak self, weak term] _ in
+            let settings = FormulaSettings.shared
+            term?.extraLineSpacing = settings.extraLineSpacing
+            term?.caretColor = settings.accentColor
+            term?.layer?.borderColor = settings.accentColor.withAlphaComponent(0.65).cgColor
+            
+            // Wenn der Modus aktiviert wurde, sofort analysieren
+            if settings.isAdaptiveAccent {
+                self?.scheduleContrastAnalysis()
+            }
         }
     }
 
     deinit {
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
+    }
+
+    private var contrastPending = false
+
+    /// Wartet 1,8 Sekunden Cooldown ab, bevor die Kontrastanalyse durchgeführt wird.
+    func scheduleContrastAnalysis() {
+        guard FormulaSettings.shared.isAdaptiveAccent else { return }
+        if contrastPending { return }
+        
+        // Nur das fokussierte Terminal darf die globale Akzentfarbe anpassen!
+        let fr = view.window?.firstResponder
+        let focused = (fr === view) || ((fr as? NSView)?.isDescendant(of: view) ?? false)
+        guard focused else { return }
+
+        contrastPending = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in
+            guard let self else { return }
+            self.contrastPending = false
+            self.analyzeContrast()
+        }
+    }
+
+    /// Skaliert den Terminalinhalt hocheffizient auf 64x64 Pixel herunter, filtert alle
+    /// Hintergrundpixel heraus und berechnet den Farbdurchschnitt des reinen Vordergrundtexts.
+    private func analyzeContrast() {
+        guard FormulaSettings.shared.isAdaptiveAccent else { return }
+        let bounds = view.bounds
+        guard bounds.width > 20, bounds.height > 20 else { return }
+
+        // Wir blenden den Kachelrahmen aus (10% Rand ignorieren)
+        let insetRect = bounds.insetBy(dx: bounds.width * 0.1, dy: bounds.height * 0.1)
+
+        guard let bitmapRep = view.bitmapImageRepForCachingDisplay(in: insetRect) else { return }
+        view.cacheDisplay(in: insetRect, to: bitmapRep)
+
+        let targetSize = NSSize(width: 64, height: 64)
+        guard let smallRep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: Int(targetSize.width),
+            pixelsHigh: Int(targetSize.height),
+            bitsPerSample: 8,
+            samplesPerPixel: 4,
+            hasAlpha: true,
+            isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0,
+            bitsPerPixel: 0
+        ) else { return }
+
+        NSGraphicsContext.saveGraphicsState()
+        let context = NSGraphicsContext(bitmapImageRep: smallRep)
+        NSGraphicsContext.current = context
+
+        let image = NSImage(size: insetRect.size)
+        image.addRepresentation(bitmapRep)
+        image.draw(in: NSRect(origin: .zero, size: targetSize),
+                   from: NSRect(origin: .zero, size: insetRect.size),
+                   operation: .copy,
+                   fraction: 1.0)
+
+        NSGraphicsContext.restoreGraphicsState()
+
+        var totalR: CGFloat = 0
+        var totalG: CGFloat = 0
+        var totalB: CGFloat = 0
+        var sampleCount = 0
+
+        // Hintergrundfarbe des Terminals: RGB(23, 20, 20)
+        let bgR: CGFloat = 23/255.0
+        let bgG: CGFloat = 20/255.0
+        let bgB: CGFloat = 20/255.0
+
+        for y in 0..<64 {
+            for x in 0..<64 {
+                if let color = smallRep.colorAt(x: x, y: y) {
+                    let r = color.redComponent
+                    let g = color.greenComponent
+                    let b = color.blueComponent
+                    
+                    // Distanz zur Hintergrundfarbe berechnen (Anti-Hintergrund-Filter)
+                    let rDiff = r - bgR
+                    let gDiff = g - bgG
+                    let bDiff = b - bgB
+                    let dist = sqrt(rDiff*rDiff + gDiff*gDiff + bDiff*bDiff)
+                    
+                    // Pixel nur werten, wenn es signifikant vom Hintergrund abweicht
+                    if dist > 0.08 {
+                        totalR += r
+                        totalG += g
+                        totalB += b
+                        sampleCount += 1
+                    }
+                }
+            }
+        }
+
+        if sampleCount > 0 {
+            let avgR = totalR / CGFloat(sampleCount)
+            let avgG = totalG / CGFloat(sampleCount)
+            let avgB = totalB / CGFloat(sampleCount)
+            let avgColor = NSColor(red: avgR, green: avgG, blue: avgB, alpha: 1.0)
+            let bestColor = Self.findBestContrastColor(to: avgColor)
+
+            if FormulaSettings.shared.accentColor != bestColor {
+                // Animierter Übergang für extrem befriedigende Veredelung!
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.35
+                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                    FormulaSettings.shared.accentColor = bestColor
+                }
+            }
+        }
+    }
+
+    private static let palette: [NSColor] = [
+        NSColor(red: 232/255.0, green: 94/255.0, blue: 62/255.0, alpha: 1.0),   // Orange
+        NSColor(red: 0/255.0, green: 210/255.0, blue: 255/255.0, alpha: 1.0),   // Electric Cyan
+        NSColor(red: 57/255.0, green: 255/255.0, blue: 20/255.0, alpha: 1.0),   // Neon Green
+        NSColor(red: 255/255.0, green: 223/255.0, blue: 0/255.0, alpha: 1.0),   // Solar Yellow
+        NSColor(red: 189/255.0, green: 0/255.0, blue: 255/255.0, alpha: 1.0),   // Electric Purple
+        NSColor(red: 255/255.0, green: 0/255.0, blue: 127/255.0, alpha: 1.0),   // Vaporwave Pink
+        NSColor(red: 245/255.0, green: 245/255.0, blue: 247/255.0, alpha: 1.0)  // Frost White
+    ]
+
+    private static func findBestContrastColor(to baseColor: NSColor) -> NSColor {
+        let r = baseColor.redComponent
+        let g = baseColor.greenComponent
+        let b = baseColor.blueComponent
+        
+        let maxC = max(r, max(g, b))
+        let minC = min(r, min(g, b))
+        let delta = maxC - minC
+        let saturation = maxC == 0 ? 0 : delta / maxC
+        let luminance = 0.299 * r + 0.587 * g + 0.114 * b
+        
+        // Ist der Vordergrund-Text überwiegend Weiß oder Grau?
+        let isWhiteOrGrayText = luminance > 0.65 && saturation < 0.20
+        
+        var bestColor = palette[0]
+        var maxDistance: CGFloat = -1
+        
+        for color in palette {
+            // Wenn der Text weiß/grau ist, weiche auf Buntheiten aus
+            if isWhiteOrGrayText && color == palette[6] {
+                continue
+            }
+            
+            let rDiff = baseColor.redComponent - color.redComponent
+            let gDiff = baseColor.greenComponent - color.greenComponent
+            let bDiff = baseColor.blueComponent - color.blueComponent
+            let dist = sqrt(rDiff*rDiff + gDiff*gDiff + bDiff*bDiff)
+            
+            if dist > maxDistance {
+                maxDistance = dist
+                bestColor = color
+            }
+        }
+        return bestColor
     }
 
     /// Beendet die Shell (SIGTERM). Das Prozess-Ende läuft über `processTerminated`
@@ -110,13 +303,14 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 final class TerminalSplitView: NSView {
 
     private var panes: [TerminalPane] = []
+    private let vibrancyView = NSVisualEffectView()
+    private var isFirstLayout = true
 
     /// Lücke (Steg) zwischen den Kacheln in Punkten.
     private static let gap: CGFloat = 8
 
-    /// Farbe des Stegs – etwas heller als der Terminal-Hintergrund (#171414), damit die
-    /// Lücke zwischen den Kacheln sichtbar wird. Scheint nur in den `gap`-Bereichen durch.
-    private static let gapColor = NSColor(red: 48/255.0, green: 43/255.0, blue: 43/255.0, alpha: 1.0)
+    /// Farbe des Stegs – transluzenter Hintergrund, damit die Vibrancy in den Stegen elegant durchschimmert.
+    private static let gapColor = NSColor(red: 48/255.0, green: 43/255.0, blue: 43/255.0, alpha: 0.35)
 
     /// Ziel-Seitenverhältnis (Breite/Höhe) einer Kachel. < 1 = leicht hochkant → erlaubt
     /// mehr Spalten nebeneinander, bevor eine Reihe aufgemacht wird. Höher = früher umbrechen.
@@ -132,12 +326,34 @@ final class TerminalSplitView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        guard let window = window else { return }
+
+        // Window-Styling für rahmenlosen Premium-Desktop-Blend
+        window.titlebarAppearsTransparent = true
+        window.titleVisibility = .hidden
+        window.styleMask.insert(.fullSizeContentView)
+        window.isMovableByWindowBackground = true // Ermöglicht das Verschieben des Fensters am Hintergrund
+
+        // Visual Effect (Vibrancy) einrichten
+        vibrancyView.material = .underWindowBackground
+        vibrancyView.blendingMode = .behindWindow
+        vibrancyView.state = .active
+        vibrancyView.autoresizingMask = [.width, .height]
+        vibrancyView.frame = bounds
+
+        if vibrancyView.superview == nil {
+            addSubview(vibrancyView, positioned: .below, relativeTo: nil)
+        }
+    }
+
     override var isFlipped: Bool { true }   // Reihe 0 oben
 
     // Frame-Layout: SwiftUI/Autoresizing ändert nur unsere Größe – darauf neu kacheln.
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
-        relayout()
+        relayout(animated: false)
     }
 
     @discardableResult
@@ -150,7 +366,7 @@ final class TerminalSplitView: NSView {
         panes.append(pane)
         addSubview(pane.view)
         pane.start()
-        relayout()
+        relayout(animated: true)
         // Fokus erst im nächsten Runloop – der frisch hinzugefügte View ist dann bereit.
         DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(pane.view) }
         return pane
@@ -174,7 +390,7 @@ final class TerminalSplitView: NSView {
         panes.remove(at: idx)
         pane.view.removeFromSuperview()
         guard !panes.isEmpty else { window?.close(); return }
-        relayout()
+        relayout(animated: true)
         window?.makeFirstResponder(panes[min(idx, panes.count - 1)].view)
     }
 
@@ -209,7 +425,7 @@ final class TerminalSplitView: NSView {
 
     /// Setzt die Frames aller Kacheln gemäß aktuellem Grid. Kanten werden pixelgerundet,
     /// damit keine Lücken/Überlappungen durch Rundung entstehen; `gap` als dunkler Steg.
-    private func relayout() {
+    private func relayout(animated: Bool = false) {
         let n = panes.count
         guard n > 0 else { return }
         let W = bounds.width, H = bounds.height
@@ -218,25 +434,55 @@ final class TerminalSplitView: NSView {
         let rows = gridRows(for: n, width: W, height: H)
         let counts = rowCounts(n: n, rows: rows)
 
-        var idx = 0
-        for r in 0..<rows {
-            // Reihen-Kanten (gleich hoch), gerundet.
-            let yTop = (H * CGFloat(r) / CGFloat(rows)).rounded()
-            let yBot = (H * CGFloat(r + 1) / CGFloat(rows)).rounded()
-            let c = counts[r]
-            for k in 0..<c {
-                let xL = (W * CGFloat(k) / CGFloat(c)).rounded()
-                let xR = (W * CGFloat(k + 1) / CGFloat(c)).rounded()
-                // Halbe Lücke pro Innenkante → außen bündig, innen voller `gap`.
-                let left   = xL + (k == 0 ? 0 : g / 2)
-                let right  = xR - (k == c - 1 ? 0 : g / 2)
-                let top    = yTop + (r == 0 ? 0 : g / 2)
-                let bottom = yBot - (r == rows - 1 ? 0 : g / 2)
-                panes[idx].view.frame = NSRect(x: left, y: top,
-                                               width: max(0, right - left),
-                                               height: max(0, bottom - top))
-                idx += 1
+        let useAnim = animated && !isFirstLayout && window != nil
+
+        if useAnim {
+            NSAnimationContext.runAnimationGroup({ context in
+                context.duration = 0.22
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                
+                var idx = 0
+                for r in 0..<rows {
+                    let yTop = (H * CGFloat(r) / CGFloat(rows)).rounded()
+                    let yBot = (H * CGFloat(r + 1) / CGFloat(rows)).rounded()
+                    let c = counts[r]
+                    for k in 0..<c {
+                        let xL = (W * CGFloat(k) / CGFloat(c)).rounded()
+                        let xR = (W * CGFloat(k + 1) / CGFloat(c)).rounded()
+                        let left   = xL + (k == 0 ? 0 : g / 2)
+                        let right  = xR - (k == c - 1 ? 0 : g / 2)
+                        let top    = yTop + (r == 0 ? 0 : g / 2)
+                        let bottom = yBot - (r == rows - 1 ? 0 : g / 2)
+                        
+                        let targetFrame = NSRect(x: left, y: top,
+                                                 width: max(0, right - left),
+                                                 height: max(0, bottom - top))
+                        panes[idx].view.animator().frame = targetFrame
+                        idx += 1
+                    }
+                }
+            }, completionHandler: nil)
+        } else {
+            var idx = 0
+            for r in 0..<rows {
+                let yTop = (H * CGFloat(r) / CGFloat(rows)).rounded()
+                let yBot = (H * CGFloat(r + 1) / CGFloat(rows)).rounded()
+                let c = counts[r]
+                for k in 0..<c {
+                    let xL = (W * CGFloat(k) / CGFloat(c)).rounded()
+                    let xR = (W * CGFloat(k + 1) / CGFloat(c)).rounded()
+                    let left   = xL + (k == 0 ? 0 : g / 2)
+                    let right  = xR - (k == c - 1 ? 0 : g / 2)
+                    let top    = yTop + (r == 0 ? 0 : g / 2)
+                    let bottom = yBot - (r == rows - 1 ? 0 : g / 2)
+                    
+                    panes[idx].view.frame = NSRect(x: left, y: top,
+                                                   width: max(0, right - left),
+                                                   height: max(0, bottom - top))
+                    idx += 1
+                }
             }
         }
+        isFirstLayout = false
     }
 }
