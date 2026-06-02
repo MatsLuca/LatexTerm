@@ -149,7 +149,21 @@ open class LocalProcessTerminalView: TerminalView, TerminalViewDelegate, LocalPr
     open func rangeChanged(source: TerminalView, startY: Int, endY: Int) {
         //
     }
-    
+
+    /// Implementation of the TerminalViewDelegate method.
+    ///
+    /// Declared as a real (overridable) class member rather than relying solely on the
+    /// `TerminalViewDelegate` protocol-extension default: a default that lives only in the
+    /// extension is statically bound into the conformance witness here and cannot be
+    /// overridden by subclasses. Hosting it in the class body makes the witness point at
+    /// this method, so subclasses (e.g. an app's `LocalProcessTerminalView` subclass) can
+    /// override it and customise link handling (relative-path resolution, reveal-in-Finder…).
+    open func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+        if let url = URL(string: link) {
+            NSWorkspace.shared.open(url)
+        }
+    }
+
     /**
      * Launches a child process inside a pseudo-terminal.
      * - Parameter executable: The executable to launch inside the pseudo terminal, defaults to /bin/bash

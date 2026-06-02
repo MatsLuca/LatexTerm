@@ -96,6 +96,81 @@ final class LatexTerminalView: LocalProcessTerminalView {
         onRangeChanged?()
     }
 
+    // MARK: - Link-Öffnen (Cmd-Klick)
+    //
+    // Cmd-Klick auf einen Link (OSC-8-Hyperlink oder implizit erkannte URL) landet hier.
+    // SwiftTerms Default macht stumpf `URL(string:)` + `NSWorkspace.open` — bei einem
+    // RELATIVEN Pfad (wie ihn Claude Code & Co. oft als Link ausgeben, z.B.
+    // `Vorschussantrag_42_SGBI_2026-06/`) ergibt das eine relative URL, die der Finder
+    // nicht öffnen kann → Dialog "Programm kann nicht geöffnet werden, -50".
+    // Wir lösen Datei-Links daher selbst auf: file://-URLs entpacken, relative Pfade
+    // gegen das per OSC 7 gemeldete Arbeitsverzeichnis auflösen, ~ expandieren, Existenz
+    // prüfen und erst dann öffnen. Echte Web-/Sonstige-Schemes (http, https, mailto …)
+    // gehen unverändert ans System.
+    override func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
+        let raw = link.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return }
+
+        // Nicht-Datei-URLs mit Schema direkt ans System geben.
+        if let url = URL(string: raw), let scheme = url.scheme?.lowercased(),
+           !scheme.isEmpty, scheme != "file" {
+            NSWorkspace.shared.open(url)
+            return
+        }
+
+        // file://-URL oder schemenloser Pfad → selbst auflösen.
+        if let path = resolveFilePath(raw) {
+            openFile(atPath: path)
+        } else if let url = URL(string: raw) {
+            NSWorkspace.shared.open(url) // Fallback
+        } else {
+            NSSound.beep()
+        }
+    }
+
+    /// Wandelt einen Link (file://-URL, absoluter, ~- oder relativer Pfad) in einen
+    /// konkreten Dateipfad. Relative Pfade werden gegen das Arbeitsverzeichnis (OSC 7)
+    /// aufgelöst; nil, wenn das nicht möglich ist.
+    private func resolveFilePath(_ link: String) -> String? {
+        var s = link
+
+        // "file://…" abstreifen. file:///abs → "/abs"; file://host/abs → "/abs".
+        if let r = s.range(of: "file://", options: [.caseInsensitive, .anchored]) {
+            s = String(s[r.upperBound...])
+            if !s.hasPrefix("/"), let slash = s.firstIndex(of: "/") {
+                s = String(s[slash...]) // Authority (host) verwerfen
+            }
+        }
+        s = s.removingPercentEncoding ?? s
+        guard !s.isEmpty else { return nil }
+
+        if s.hasPrefix("/") { return s }
+        if s.hasPrefix("~") { return (s as NSString).expandingTildeInPath }
+
+        // Relativ → gegen das aktuelle Arbeitsverzeichnis auflösen.
+        guard let cwd = currentWorkingDirectory() else { return nil }
+        return (cwd as NSString).appendingPathComponent(s)
+    }
+
+    /// Das per OSC 7 gemeldete Arbeitsverzeichnis als nackter Dateipfad (typ.
+    /// "file://host/Users/…"), oder nil wenn (noch) keines gemeldet wurde.
+    private func currentWorkingDirectory() -> String? {
+        guard let raw = getTerminal().hostCurrentDirectory else { return nil }
+        if let url = URL(string: raw), url.isFileURL { return url.path }
+        return raw.hasPrefix("/") ? raw : nil
+    }
+
+    /// Öffnet einen existierenden Pfad (Ordner → Finder, Datei → Standard-App).
+    /// Existiert er nicht, kurz piepen statt den kryptischen Finder-Fehler -50.
+    private func openFile(atPath path: String) {
+        let url = URL(fileURLWithPath: path)
+        guard FileManager.default.fileExists(atPath: url.path) else {
+            NSSound.beep()
+            return
+        }
+        NSWorkspace.shared.open(url)
+    }
+
     override func scrolled(source: TerminalView, position: Double) {
         super.scrolled(source: source, position: position)
         onScrolled?()
