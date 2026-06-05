@@ -107,7 +107,7 @@ LatexTerm/
   katex/                     Bundled KaTeX assets (CSS, JS, woff2)
   Assets.xcassets/
   Info.plist
-SwiftTermLocal/              Vendored SwiftTerm fork (patched cellHeight)
+SwiftTermLocal/              Vendored SwiftTerm fork (adds extraLineSpacing)
   Sources/SwiftTerm/...
   Package.swift              Library-only manifest (no executables, no tests)
 ```
@@ -120,4 +120,9 @@ SwiftTermLocal/              Vendored SwiftTerm fork (patched cellHeight)
 
 ## License
 
-KaTeX assets are MIT licensed (bundled under `LatexTerm/katex/`). SwiftTerm is MIT licensed (vendored at `SwiftTermLocal/`). Project code is unlicensed for now.
+LatexTerm is released under the [MIT License](LICENSE) — Copyright (c) 2026 Mats Luca Dagott.
+
+It bundles third-party software, each under its own license (see [`NOTICE`](NOTICE)):
+
+- **SwiftTerm** — MIT, Copyright (c) 2019–2022 Miguel de Icaza and contributors. Vendored fork at [`SwiftTermLocal/`](SwiftTermLocal/LICENSE). Upstream: https://github.com/migueldeicaza/SwiftTerm
+- **KaTeX** v0.16.9 — MIT, Copyright (c) 2013–2020 Khan Academy and contributors. Bundled at [`LatexTerm/katex/`](LatexTerm/katex/LICENSE). The KaTeX fonts are under the SIL Open Font License 1.1.

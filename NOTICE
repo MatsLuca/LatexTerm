@@ -1,0 +1,18 @@
+LatexTerm
+Copyright (c) 2026 Mats Luca Dagott
+Licensed under the MIT License (see LICENSE).
+
+This product bundles third-party software:
+
+1. SwiftTerm — MIT License
+   Copyright (c) 2019-2022 Miguel de Icaza and contributors.
+   Vendored fork at `SwiftTermLocal/`. Source: https://github.com/migueldeicaza/SwiftTerm
+   Full license: SwiftTermLocal/LICENSE
+
+2. KaTeX v0.16.9 — MIT License
+   Copyright (c) 2013-2020 Khan Academy and other contributors.
+   Bundled at `LatexTerm/katex/` (katex.min.js, katex.min.css). Source: https://github.com/KaTeX/KaTeX
+   Full license: LatexTerm/katex/LICENSE
+
+3. KaTeX fonts — SIL Open Font License 1.1
+   Bundled at `LatexTerm/katex/fonts/`. See LatexTerm/katex/LICENSE for details.
