@@ -1,0 +1,38 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build (macOS, Release, unsigned)
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select latest Xcode
+        run: sudo xcode-select -switch /Applications/Xcode.app && xcodebuild -version
+
+      - name: Install Metal Toolchain
+        run: xcodebuild -downloadComponent MetalToolchain || echo "Metal toolchain already present or not required"
+
+      - name: Build
+        run: |
+          xcodebuild \
+            -project LatexTerm.xcodeproj \
+            -scheme LatexTerm \
+            -configuration Release \
+            -derivedDataPath .build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: Upload app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LatexTerm-app
+          path: .build/Build/Products/Release/LatexTerm.app
+          if-no-files-found: warn

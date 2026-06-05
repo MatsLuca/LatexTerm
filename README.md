@@ -1,6 +1,13 @@
 # LatexTerm
 
-Native macOS terminal that renders LaTeX formulas live as KaTeX overlays — positioned directly over the source characters between `$...$`, `$$...$$`, `\(...\)` and `\[...\]`.
+[![Platform: macOS 14+](https://img.shields.io/badge/platform-macOS%2014%2B-black)](#requirements)
+[![Language: Swift](https://img.shields.io/badge/Swift-5.9-orange)](https://swift.org)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
+Native macOS terminal that renders LaTeX formulas live as KaTeX overlays — positioned directly over the source characters between `$...$`, `$$...$$`, `\(...\)` and `\[...\]`. No OCR: a vendored SwiftTerm fork gives us the real cell grid, so formulas sit exactly on their source text.
+
+<!-- DEMO: replace this line with an animated GIF, e.g. ![LatexTerm demo](docs/demo.gif) -->
+> **Demo:** drop a GIF at `docs/demo.gif` and reference it here — see [Recording a demo](#recording-a-demo).
 
 ## Why
 
@@ -30,12 +37,24 @@ PTY (zsh) → SwiftTerm VT parser → Buffer grid
 - **Premium Visuals & Window Design**: The terminal window features a frameless blending design (`fullSizeContentView`, transparent titlebar, hidden title, and window-wide dragging). It embeds a native `NSVisualEffectView` behind the terminal panes (`.underWindowBackground`, `.behindWindow` blend modes) for a premium translucent macOS feel.
 - **Flicker-free scrolling**: scrolling is a rapid sequence of static states, and repositioning the out-of-process WebView on every intermediate step flickers. SwiftTerm's `scrolled` event drives a separate path (`onScrolled` → `scheduleReposition`) that hides the overlay layer on the first scroll event and arms an idle timer. While events keep flowing (including trackpad momentum) the overlays stay hidden; ~150 ms after the last event the layer is repositioned and revealed only once the WebView has painted the new positions (gated on the first `onBounds` report). The 30 ms `scheduleRescan` debounce now only serves terminal output, resize, and settings changes.
 
+## Install
+
+Grab the latest `LatexTerm.app` from the [**Releases**](https://github.com/MatsLuca/LatexTerm/releases) page, unzip, and drop it into `/Applications`.
+
+The build is currently unsigned, so on first launch macOS Gatekeeper will block it. Right‑click the app → **Open** → **Open**, or clear the quarantine flag:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/LatexTerm.app
+```
+
+Prefer building it yourself? See [Build from source](#build-from-source).
+
 ## Requirements
 
-- macOS 14+
-- Xcode 26+ with Metal Toolchain installed (`xcodebuild -downloadComponent MetalToolchain` — SwiftTerm ships Metal shaders even when the Metal renderer is off)
+- **To run:** macOS 14+
+- **To build:** Xcode 26+ with the Metal Toolchain installed (`xcodebuild -downloadComponent MetalToolchain` — SwiftTerm ships Metal shaders even when the CPU renderer is used)
 
-## Build
+## Build from source
 
 Open in Xcode:
 
@@ -48,9 +67,9 @@ open LatexTerm.xcodeproj
 Or build from CLI:
 
 ```bash
-xcodebuild -project LatexTerm.xcodeproj -scheme LatexTerm -configuration Debug \
+xcodebuild -project LatexTerm.xcodeproj -scheme LatexTerm -configuration Release \
   -derivedDataPath .build CODE_SIGNING_ALLOWED=NO build
-open .build/Build/Products/Debug/LatexTerm.app
+open .build/Build/Products/Release/LatexTerm.app
 ```
 
 ## Keyboard shortcuts
@@ -85,6 +104,14 @@ Bruch: $\frac{n(n+1)(2n+1)}{6}$
 Tief: $\frac{x+1}{\frac{a+b}{c-d}}$
 EOF
 ```
+
+## Recording a demo
+
+The README shows a GIF of formulas rendering live as you type. To regenerate it:
+
+1. Launch LatexTerm and paste a few formulas (see [Testing formulas](#testing-formulas)).
+2. Record the window with macOS screen capture (`⇧⌘5`) or [Gifski](https://gif.ski) / `ffmpeg`.
+3. Save it as `docs/demo.gif` and it will appear at the top of this README automatically.
 
 ## Project layout
 

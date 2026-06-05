@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-06-05
+
+First public release.
+
+### Added
+- Native macOS terminal emulator (vendored SwiftTerm fork) that renders LaTeX live as KaTeX overlays over the source text — `$..$`, `$$..$$`, `\(..\)`, `\[..\]`, including multi-line display blocks.
+- Hover-to-enlarge preview and click-to-pin with copy buttons (**LaTeX**, **Lesbar** Unicode-math, **Bild** PNG).
+- Split-screen pane tiling (`⌘T` / `⌘W` / `⌘1…9`), per-pane overlays, flicker-free scrolling.
+- Offline KaTeX rendering (bundled CSS/JS/woff2 — no network).
+- Open-source release: MIT license, third-party attribution (SwiftTerm, KaTeX), contributor docs and CI build.
+
 ### Changed
 - **Rendering-Architektur: ein WKWebView statt einer pro Formel.** `MathOverlayView` (ein WebView je Formel) wurde durch `FormulaLayer` ersetzt – ein einzelnes, einmalig KaTeX ladendes WebView, das jede Formel als absolut positioniertes `<div>` hält. Der gewünschte Zustand wird pro Scan als JSON übergeben und in JS abgeglichen (`sync()`): neue Keys erzeugen ein `<div>`, fehlende werden entfernt, überlebende nur neu positioniert (kein KaTeX-Re-Render).
 - **Overlay-Keys an die absolute Scrollback-Zeile gebunden** (`viewportRow + buffer.yDisp`). Scrollen positioniert Overlays jetzt neu, statt sie zu zerstören und neu aufzubauen.
