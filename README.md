@@ -6,8 +6,7 @@
 
 Native macOS terminal that renders LaTeX formulas live as KaTeX overlays — positioned directly over the source characters between `$...$`, `$$...$$`, `\(...\)` and `\[...\]`. No OCR: a vendored SwiftTerm fork gives us the real cell grid, so formulas sit exactly on their source text.
 
-<!-- DEMO: replace this line with an animated GIF, e.g. ![LatexTerm demo](docs/demo.gif) -->
-> **Demo:** drop a GIF at `docs/demo.gif` and reference it here — see [Recording a demo](#recording-a-demo).
+![LatexTerm rendering LaTeX live across a 4-pane split terminal](docs/demo.gif)
 
 ## Why
 

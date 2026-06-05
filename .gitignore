@@ -31,3 +31,6 @@ icon_design/
 
 # Icon source image (kept locally, not in repo)
 image.png
+
+# Local demo content for GIF recording (not published)
+demo-showcase*.md
