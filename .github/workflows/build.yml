@@ -20,6 +20,16 @@ jobs:
       - name: Install Metal Toolchain
         run: xcodebuild -downloadComponent MetalToolchain || echo "Metal toolchain already present or not required"
 
+      - name: Test
+        run: |
+          xcodebuild \
+            -project LatexTerm.xcodeproj \
+            -scheme LatexTerm \
+            -destination 'platform=macOS' \
+            -derivedDataPath .build \
+            CODE_SIGNING_ALLOWED=NO \
+            test
+
       - name: Build
         run: |
           xcodebuild \

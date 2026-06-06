@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Unit-Test-Suite für `LaTeXDetector` & `LaTeXReadable`.** Neues `LatexTermTests`-Target als reines Logic-Test-Bundle (kein Test-Host → die App startet beim Testen nicht, kein PTY/SwiftTerm/Metal fürs Bundle nötig). Es kompiliert die beiden reinen Quelldateien direkt mit und prüft sie gegen Fixture-Tabellen: 18 Tests über Inline-/Display-Delimiter, `\$`-Escaping, leere/ungeschlossene Bodies, Spalten-Arithmetik, mehrzeilige `findBlocks` (Delimiter-allein-auf-Zeile-Regel, fehlender Closer, `maxBlockRows`-Grenze) sowie Brüche, Wurzeln, Sub/Superscript-Mapping, Griechisch und die Mitternachtsformel. Eingehängt über das idempotente `scripts/add_test_target.rb` (das App-Target ist ein `PBXFileSystemSynchronizedRootGroup`, daher per GUI umständlich).
+- **CI führt jetzt Tests aus.** Der GitHub-Actions-Workflow läuft `xcodebuild test` vor dem Release-Build.
+
 ## [0.1.0] - 2026-06-05
 
 First public release.

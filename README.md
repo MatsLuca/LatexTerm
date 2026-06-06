@@ -71,6 +71,15 @@ xcodebuild -project LatexTerm.xcodeproj -scheme LatexTerm -configuration Release
 open .build/Build/Products/Release/LatexTerm.app
 ```
 
+Run the tests (`Cmd+U` in Xcode, or from the CLI):
+
+```bash
+xcodebuild test -project LatexTerm.xcodeproj -scheme LatexTerm \
+  -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
+```
+
+`LatexTermTests` is a logic-only unit-test bundle (no test host) covering `LaTeXDetector` and `LaTeXReadable`.
+
 ## Keyboard shortcuts
 
 | Shortcut | Action |
