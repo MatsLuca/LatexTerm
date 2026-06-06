@@ -53,7 +53,11 @@ final class LatexTerminalView: LocalProcessTerminalView {
     private var fontObserver: NSObjectProtocol?
 
     let overlay = OverlayHost()
-    var onRangeChanged: (() -> Void)?
+    /// Inhalt geändert: `startY..endY` ist der von SwiftTerm gemeldete (viewport-relative)
+    /// Änderungsbereich → inkrementeller Rescan.
+    var onRangeChanged: ((_ startY: Int, _ endY: Int) -> Void)?
+    /// Geometrie/Konfiguration geändert (z.B. Schriftgröße) → voller Rescan nötig.
+    var onNeedsFullRescan: (() -> Void)?
     /// Reiner Scroll: Inhalt unverändert, nur neu positionieren → Sofort-Pfad ohne Debounce.
     var onScrolled: (() -> Void)?
     /// Cmd+T: neue Terminal-Kachel rechts anlegen.
@@ -93,7 +97,7 @@ final class LatexTerminalView: LocalProcessTerminalView {
 
     override func rangeChanged(source: TerminalView, startY: Int, endY: Int) {
         super.rangeChanged(source: source, startY: startY, endY: endY)
-        onRangeChanged?()
+        onRangeChanged?(startY, endY)
     }
 
     // MARK: - Link-Öffnen (Cmd-Klick)
@@ -239,7 +243,7 @@ final class LatexTerminalView: LocalProcessTerminalView {
     private func applyFont(size: CGFloat) {
         guard size != font.pointSize else { return }
         font = NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
-        onRangeChanged?()
+        onNeedsFullRescan?()
     }
 
     override func becomeFirstResponder() -> Bool {

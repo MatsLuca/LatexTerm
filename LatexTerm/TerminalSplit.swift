@@ -58,10 +58,11 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         }
 
         term.processDelegate = self
-        term.onRangeChanged = { [weak self, weak controller] in
-            controller?.scheduleRescan()
+        term.onRangeChanged = { [weak self, weak controller] startY, endY in
+            controller?.scheduleRescan(dirtyStart: startY, dirtyEnd: endY)
             self?.scheduleContrastAnalysis()
         }
+        term.onNeedsFullRescan = { [weak controller] in controller?.scheduleRescan() }
         term.onScrolled = { [weak controller] in controller?.scheduleReposition() }
         term.onSplitRequested = { [weak self] in
             guard let self else { return }

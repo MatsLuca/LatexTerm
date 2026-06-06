@@ -53,7 +53,24 @@ final class OverlayController {
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
     }
 
+    /// Voller Rescan: alle Zeilen neu parsen. Für Settings/Font/Resize/Initial, wo sich
+    /// Geometrie oder Konfiguration ändern und der Pro-Zeile-Cache nicht greift.
     func scheduleRescan() {
+        needsFullScan = true
+        armRescan()
+    }
+
+    /// Inkrementeller Rescan: nur `startY..endY` gilt als „dirty". Die Werte sind
+    /// viewport-relativ (SwiftTerm `getUpdateRange`), aber **nur ein Hint** – die
+    /// eigentliche Wahrheit ist der Content-Hash pro Zeile (s. `rescan()`), weil
+    /// SwiftTerm den Bereich über zwei Pfade in inkonsistenten Koordinaten meldet.
+    func scheduleRescan(dirtyStart startY: Int, dirtyEnd endY: Int) {
+        dirtyStart = min(dirtyStart, min(startY, endY))
+        dirtyEnd   = max(dirtyEnd,   max(startY, endY))
+        armRescan()
+    }
+
+    private func armRescan() {
         if pending { return }
         pending = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
@@ -113,6 +130,18 @@ final class OverlayController {
     private var lastConfigJSON: String?
     private var pendingClear = false
     private var lastEmpty = false
+
+    // Inkrementelle Detection (#2). Pro Viewport-Zeile werden die Inline-Treffer
+    // zusammen mit einem Content-Hash gecacht; unveränderte Zeilen überspringen den
+    // `LaTeXDetector.find`-Parse. `needsFullScan` erzwingt einen kompletten Durchlauf
+    // (Settings/Font/Resize/Initial), `dirtyStart/End` sammelt den gemeldeten
+    // Änderungsbereich über das Debounce-Fenster. `lastItemsJSON` erlaubt, den
+    // `sync()`-Call (IPC zur WebView) zu überspringen, wenn sich nichts geändert hat.
+    private var rowCache: [Int: (hash: Int, hits: [LaTeXHit])] = [:]
+    private var needsFullScan = true
+    private var dirtyStart = Int.max
+    private var dirtyEnd = -1
+    private var lastItemsJSON: String?
 
     // Hover-Vorschau. Hitbox je Formel-Key: startet grob (Quelltext-Box) und wird
     // durch die echten gerenderten Bounds aus der WebView eng nachgezogen.
@@ -186,11 +215,21 @@ final class OverlayController {
         pendingClear = true
         lastFontPx = 0
         lastConfigJSON = nil
+        lastItemsJSON = nil
+        rowCache.removeAll()
+        needsFullScan = true
     }
 
     func rescan() {
         guard let terminal else { return }
         let settings = FormulaSettings.shared
+
+        // Dirty-Zustand dieses Durchlaufs übernehmen und zurücksetzen (ein während des
+        // Scans erneut gemeldeter Bereich armt sauber den nächsten Durchlauf).
+        let full = needsFullScan
+        needsFullScan = false
+        let dStart = dirtyStart, dEnd = dirtyEnd
+        dirtyStart = Int.max; dirtyEnd = -1
 
         // Inhalt ändert sich → laufende Vorschau schließen (Hover triggert neu)
         preview.hide()
@@ -199,6 +238,8 @@ final class OverlayController {
         guard settings.formulasEnabled else {
             if !lastEmpty { layer.run("clearAll();"); lastEmpty = true }
             hitboxes.removeAll()
+            rowCache.removeAll()
+            lastItemsJSON = nil
             return
         }
 
@@ -212,7 +253,9 @@ final class OverlayController {
         let span = Self.verticalSpan
         let yPad = cell.height * (span - 1) / 2
 
-        // Schriftgröße geändert → kompletter Neuaufbau (KaTeX bei neuer Größe re-rendern)
+        // Schriftgröße geändert → kompletter Neuaufbau (KaTeX bei neuer Größe re-rendern).
+        // Der Pro-Zeile-Cache bleibt gültig: `find()`-Treffer hängen nur am Text, nicht an
+        // der Geometrie – nur die abgeleiteten Item-Positionen ändern sich.
         var clear = pendingClear
         pendingClear = false
         if abs(fontPx - lastFontPx) > 0.1 {
@@ -224,25 +267,27 @@ final class OverlayController {
         // damit Scrollen Overlays nur neu positioniert statt sie neu zu erzeugen.
         let yDisp = term.buffer.yDisp
 
-        // Sichtbares Grid einlesen. Leere Grid-Zellen liefern als code 0 ein NULL-Zeichen
-        // (\u{0}), das KaTeX im Strict-Mode mit "Unexpected character" ablehnt. 1:1 in ein
-        // Leerzeichen wandeln – erhält die Spalten-Positionen für startCol/endCol.
-        var grid: [[Character]] = []
-        grid.reserveCapacity(rows)
-        for vr in 0..<rows {
-            let text = term.getLine(row: vr)?
+        // Sichtbares Grid als Strings einlesen (für `findBlocks` und Geometrie). Leere Zellen
+        // liefern als code 0 ein NULL-Zeichen (\u{0}), das KaTeX im Strict-Mode ablehnt; 1:1
+        // in ein Leerzeichen wandeln – erhält die Spalten-Positionen für startCol/endCol.
+        let rowTexts: [String] = (0..<rows).map { vr in
+            term.getLine(row: vr)?
                 .translateToString(trimRight: false)
                 .replacingOccurrences(of: "\u{0}", with: " ") ?? ""
-            grid.append(Array(text))
         }
 
         var items: [[String: Any]] = []
         hitboxes.removeAll()
+        var scanned = 0
 
         // 1) Mehrzeilige Display-Blöcke ($$..$$, \[..\]): echtes displayMode, das Overlay
         //    spannt den ganzen Quell-Zeilenbereich – der Platz ist im Text schon reserviert.
-        for b in LaTeXDetector.findBlocks(in: grid.map { String($0) }) {
-            let box = blockBox(b, grid: grid, cell: cell)
+        //    `findBlocks` läuft direkt auf den Strings (keine Grid→String-Rückwandlung mehr).
+        //    Block-berührte Zeilen werden maskiert, damit die Inline-Erkennung sie nicht
+        //    doppelt trifft; diese Zeilen werden stets frisch gescannt (nicht gecacht).
+        var blockMasked: [Int: [Character]] = [:]
+        for b in LaTeXDetector.findBlocks(in: rowTexts) {
+            let box = blockBox(b, rowTexts: rowTexts, cell: cell)
             let key = "B|\(b.startRow + yDisp)|\(b.startCol)|\(b.body)"
             items.append([
                 "key": key,
@@ -251,14 +296,41 @@ final class OverlayController {
                 "display": true
             ])
             hitboxes[key] = (rect: box, latex: b.body)
-            // Quellzellen des Blocks maskieren, damit die Inline-Erkennung sie nicht doppelt trifft.
-            maskBlock(b, in: &grid)
+            for r in b.startRow...b.endRow {
+                var chars = blockMasked[r] ?? Array(rowTexts[r])
+                let from = (r == b.startRow) ? b.startCol : 0
+                let to = (r == b.endRow) ? min(b.endCol, chars.count) : chars.count
+                var c = from
+                while c < to { chars[c] = " "; c += 1 }
+                blockMasked[r] = chars
+            }
         }
 
-        // 2) Inline-Formeln pro Zeile auf dem maskierten Grid. displayMode wird durchgereicht:
-        //    einzeiliges $$/\[ rendert displaystyle (in seine Zeile skaliert), $/\( inline.
+        // 2) Inline-Formeln pro Zeile. Unveränderte, nicht block-berührte Zeilen überspringen
+        //    den `find()`-Parse via Cache (Schlüssel: Viewport-Zeile + Content-Hash). Die
+        //    Range ist nur ein Hint; der Hash ist die Wahrheit (fängt auch verschobene Zeilen
+        //    nach Scroll/Stream-Output, deren Bereich SwiftTerm evtl. nicht meldet).
         for vr in 0..<rows {
-            for hit in LaTeXDetector.find(in: String(grid[vr])) {
+            let hits: [LaTeXHit]
+            if let masked = blockMasked[vr] {
+                hits = LaTeXDetector.find(in: String(masked))   // Block-Zeile: immer frisch
+                rowCache[vr] = nil
+                scanned += 1
+            } else {
+                let text = rowTexts[vr]
+                let h = text.hashValue
+                let inRange = vr >= dStart && vr <= dEnd
+                if full || inRange || rowCache[vr]?.hash != h {
+                    hits = LaTeXDetector.find(in: text)
+                    rowCache[vr] = (hash: h, hits: hits)
+                    scanned += 1
+                } else {
+                    hits = rowCache[vr]!.hits
+                }
+            }
+            // displayMode wird durchgereicht: einzeiliges $$/\[ rendert displaystyle
+            // (in seine Zeile skaliert), $/\( inline.
+            for hit in hits {
                 let key = "\(vr + yDisp)|\(hit.startCol)|\(hit.body)"
                 let frame = CGRect(
                     x: CGFloat(hit.startCol) * cell.width,
@@ -284,17 +356,27 @@ final class OverlayController {
             "bg": Self.css(bg),
             "userScale": scale
         ])
+        let itemsJSON = Self.json(items)
 
+        // sync() schickt JSON über die Prozessgrenze in die WebView. Nur senden, wenn nötig:
+        // bei clear/Config-Änderung immer, sonst nur wenn sich die Items wirklich geändert
+        // haben (spart IPC bei schnellem Nicht-Formel-Output, z.B. `yes`).
+        let configChanged = clear || configJSON != lastConfigJSON
         var js = ""
         if clear { js += "clearAll();" }
-        if clear || configJSON != lastConfigJSON {
-            js += "setConfig(\(configJSON));"
-            lastConfigJSON = configJSON
-        }
-        js += "sync(\(Self.json(items)));"
-        layer.run(js)
+        if configChanged { js += "setConfig(\(configJSON));"; lastConfigJSON = configJSON }
+        if configChanged || itemsJSON != lastItemsJSON { js += "sync(\(itemsJSON));" }
+        if !js.isEmpty { layer.run(js); lastItemsJSON = itemsJSON }
 
         lastEmpty = items.isEmpty
+
+        #if DEBUG
+        if ProcessInfo.processInfo.environment["LATEXTERM_SCAN_LOG"] != nil {
+            NSLog("[LatexTerm] rescan: %d/%d Zeilen geparst (full=%@ dirty=%d…%d blocks=%d synced=%@)",
+                  scanned, rows, full ? "y" : "n", dStart, dEnd, blockMasked.isEmpty ? 0 : 1,
+                  js.contains("sync(") ? "y" : "n")
+        }
+        #endif
     }
 
     // MARK: - Block-Geometrie
@@ -302,10 +384,10 @@ final class OverlayController {
     /// Enge Pixel-Box um die Quellzellen eines Blocks: min/max belegte Spalte über alle
     /// Block-Zeilen, volle Zeilenhöhe von Start- bis Schlusszeile (gibt der Display-Formel
     /// echten vertikalen Platz, sodass sie nicht in Nachbarzeilen skaliert werden muss).
-    private func blockBox(_ b: LaTeXBlock, grid: [[Character]], cell: CGSize) -> CGRect {
+    private func blockBox(_ b: LaTeXBlock, rowTexts: [String], cell: CGSize) -> CGRect {
         var minCol = Int.max, maxCol = 0
         for r in b.startRow...b.endRow {
-            let chars = grid[r]
+            let chars = Array(rowTexts[r])
             let from = (r == b.startRow) ? b.startCol : 0
             let to = (r == b.endRow) ? min(b.endCol, chars.count) : chars.count
             var c = from
@@ -323,21 +405,12 @@ final class OverlayController {
         )
     }
 
-    /// Überschreibt die vom Block belegten Zellen mit Leerzeichen (Spalten bleiben erhalten),
-    /// damit die nachgelagerte Inline-Erkennung dort nichts mehr findet.
-    private func maskBlock(_ b: LaTeXBlock, in grid: inout [[Character]]) {
-        for r in b.startRow...b.endRow {
-            let from = (r == b.startRow) ? b.startCol : 0
-            let to = (r == b.endRow) ? min(b.endCol, grid[r].count) : grid[r].count
-            var c = from
-            while c < to { grid[r][c] = " "; c += 1 }
-        }
-    }
-
     // MARK: - JSON / Farb-Helfer
 
+    // `.sortedKeys`: deterministische Schlüsselreihenfolge, damit der String-Vergleich
+    // von Config/Items (zum Überspringen unnötiger sync()-Calls) verlässlich ist.
     private static func json(_ obj: Any) -> String {
-        guard let data = try? JSONSerialization.data(withJSONObject: obj),
+        guard let data = try? JSONSerialization.data(withJSONObject: obj, options: [.sortedKeys]),
               let s = String(data: data, encoding: .utf8) else { return "null" }
         return s
     }
