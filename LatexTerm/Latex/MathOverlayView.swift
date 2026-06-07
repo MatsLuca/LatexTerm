@@ -19,12 +19,17 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
     /// Meldet die echten gerenderten Pixel-Bounds je Formel-Key (Host-Koordinaten).
     var onBounds: (([String: CGRect]) -> Void)?
 
+    /// Meldet KaTeX-Render-Fehler je Formel-Key (Meldung, z.B. „Undefined control
+    /// sequence: \\fra"). Keys ohne Eintrag haben fehlerfrei gerendert.
+    var onError: (([String: String]) -> Void)?
+
     init() {
         let cfg = WKWebViewConfiguration()
         let ucc = WKUserContentController()
         cfg.userContentController = ucc
         super.init(frame: .zero, configuration: cfg)
         ucc.add(self, name: "bounds")
+        ucc.add(self, name: "errors")
         setValue(false, forKey: "drawsBackground")   // transparent → Terminal scheint durch
         navigationDelegate = self
         autoresizingMask = [.width, .height]
@@ -42,17 +47,30 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
     }
 
     func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == "bounds", let arr = message.body as? [[String: Any]] else { return }
-        var out: [String: CGRect] = [:]
-        for e in arr {
-            guard let k = e["key"] as? String,
-                  let x = (e["x"] as? NSNumber)?.doubleValue,
-                  let y = (e["y"] as? NSNumber)?.doubleValue,
-                  let w = (e["w"] as? NSNumber)?.doubleValue,
-                  let h = (e["h"] as? NSNumber)?.doubleValue, w > 0, h > 0 else { continue }
-            out[k] = CGRect(x: x, y: y, width: w, height: h)
+        guard let arr = message.body as? [[String: Any]] else { return }
+        switch message.name {
+        case "bounds":
+            var out: [String: CGRect] = [:]
+            for e in arr {
+                guard let k = e["key"] as? String,
+                      let x = (e["x"] as? NSNumber)?.doubleValue,
+                      let y = (e["y"] as? NSNumber)?.doubleValue,
+                      let w = (e["w"] as? NSNumber)?.doubleValue,
+                      let h = (e["h"] as? NSNumber)?.doubleValue, w > 0, h > 0 else { continue }
+                out[k] = CGRect(x: x, y: y, width: w, height: h)
+            }
+            if !out.isEmpty { onBounds?(out) }
+        case "errors":
+            // Vollständige aktuelle Fehlermenge je sync (leer = alles fehlerfrei).
+            var out: [String: String] = [:]
+            for e in arr {
+                guard let k = e["key"] as? String, let m = e["message"] as? String else { continue }
+                out[k] = m
+            }
+            onError?(out)
+        default:
+            break
         }
-        if !out.isEmpty { onBounds?(out) }
     }
 
     /// Führt JS aus, sobald die Seite bereit ist – sonst gepuffert.
@@ -72,6 +90,8 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
     .f .m{position:absolute;left:2px;top:50%;transform-origin:left center;white-space:nowrap;}
     .katex{white-space:nowrap;}
     .fallback{font-family:ui-monospace,Menlo,monospace;opacity:.65;font-style:italic;}
+    /* KaTeX-Fehler: roher Text bleibt sichtbar, aber rot wellig unterstrichen. */
+    .f .m.err{opacity:.85;text-decoration:underline wavy #E85E3E;text-decoration-skip-ink:none;text-underline-offset:2px;}
     </style></head><body>
     <div id="root"></div>
     <script>
@@ -107,7 +127,7 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
           var bg=document.createElement('div'); bg.className='bg';
           var m=document.createElement('div'); m.className='m';
           wrap.appendChild(bg); wrap.appendChild(m); root.appendChild(wrap);
-          e={wrap:wrap,bg:bg,m:m,latex:null,display:false}; els[it.key]=e;
+          e={wrap:wrap,bg:bg,m:m,latex:null,display:false,err:null}; els[it.key]=e;
         }
         e.wrap.style.left=it.x+'px'; e.wrap.style.top=it.y+'px';
         e.wrap.style.width=it.w+'px'; e.wrap.style.height=it.h+'px';
@@ -120,11 +140,13 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
           if(e.display){ e.m.style.left='50%'; e.m.style.top='50%'; e.m.style.transformOrigin='center center'; }
           else { e.m.style.left='2px'; e.m.style.top='50%'; e.m.style.transformOrigin='left center'; }
           if(it.latex===""){           // reines Masken-Item (gewrappte Formel): nur bg, kein KaTeX
-            e.m.className='m'; e.m.innerHTML='';
+            e.m.className='m'; e.m.innerHTML=''; e.err=null;
           } else {
             try{ e.m.className='m';
-                 e.m.innerHTML=katex.renderToString(it.latex,{displayMode:e.display,throwOnError:true}); }
-            catch(err){ e.m.className='m fallback'; e.m.textContent=it.latex; }
+                 e.m.innerHTML=katex.renderToString(it.latex,{displayMode:e.display,throwOnError:true});
+                 e.err=null; }
+            catch(err){ e.m.className='m fallback err'; e.m.textContent=it.latex;
+                 e.err=(err&&err.message)?err.message:String(err); }
             if(document.fonts&&document.fonts.ready){document.fonts.ready.then(function(){fit(e);});}
             fit(e);
           }
@@ -132,7 +154,16 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
       }
       for(var k in els){ if(!seen[k]){ root.removeChild(els[k].wrap); delete els[k]; } }
       reportBounds();
+      reportErrors();
       if(document.fonts&&document.fonts.ready){document.fonts.ready.then(reportBounds);}
+    }
+
+    // Aktuelle KaTeX-Fehlermenge (Key → Meldung) an Swift melden; leer = alles ok.
+    function reportErrors(){
+      var out=[];
+      for(var k in els){ if(els[k].err){ out.push({key:k, message:els[k].err}); } }
+      if(window.webkit&&window.webkit.messageHandlers&&window.webkit.messageHandlers.errors)
+        window.webkit.messageHandlers.errors.postMessage(out);
     }
 
     // Echte gerenderte Pixel-Bounds je Formel (nach Skalierung) an Swift melden.
@@ -163,6 +194,13 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
     private var anchor: CGRect = .zero
     private weak var hostView: NSView?
     private var shownLatex: String?
+    /// Aktuelle KaTeX-Fehlermeldung (falls die gezeigte Formel nicht rendert) – wird beim
+    /// „LaTeX"-Kopieren mit angehängt, damit man Quelle + Fehler zusammen weitergeben kann.
+    private var shownError: String?
+    /// Zuletzt tatsächlich in die WebView gerenderte Formel. Verhindert, dass der
+    /// Hover (feuert pro Maus-Pixel) `render()` hunderte Male neu evaluiert und die
+    /// WebView-Nachrichtenschlange flutet, sodass der `size`-Callback nie zurückkommt.
+    private var renderedKey: String?
 
     /// Im gepinnten Zustand nimmt das Panel Klicks an (Buttons) und bleibt sichtbar,
     /// bis es aktiv geschlossen wird. Im Hover-Zustand ist es rein visuell.
@@ -173,6 +211,9 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
     private var imageButton: NSButton!
     private var lastContentW: CGFloat = 0
     private var lastContentH: CGFloat = 0
+    /// Zeigt die Vorschau gerade einen KaTeX-Fehler? Dann ergeben „Lesbar"/„Bild"
+    /// keinen Sinn (Unicode-Konvertierung/Bild einer kaputten Formel) → ausgeblendet.
+    private var isError = false
 
     /// Zuletzt gezeigte Hintergrundfarbe (für das Chip-Bild).
     private var exportBackground: NSColor = .black
@@ -239,23 +280,41 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         if let js = pendingJS { pendingJS = nil; web.evaluateJavaScript(js) }
     }
 
-    /// Zeigt die Formel groß über (oder unter) `rect` an.
+    /// Zeigt die Formel groß über (oder unter) `rect` an. Ist `error` gesetzt (KaTeX
+    /// konnte nicht rendern), wird statt der Formel die rohe Quelle + die Fehlermeldung
+    /// (rot) angezeigt.
     func show(latex: String, over rect: CGRect, in host: NSView, fontPx: CGFloat,
-              foreground: NSColor, background: NSColor) {
-        // Identischer Hover → nichts neu rendern (mouseMoved feuert pro Pixel)
-        if !isHidden, shownLatex == latex, anchor == rect { return }
+              foreground: NSColor, background: NSColor, error: String? = nil) {
         if superview !== host { removeFromSuperview(); host.addSubview(self) }
         hostView = host
         anchor = rect
         shownLatex = latex
+        shownError = error
         exportBackground = background
 
         layer?.backgroundColor = background.cgColor
         layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
 
+        // Gleiche Formel wie zuletzt gerendert → KaTeX nicht neu evaluieren (sonst flutet
+        // der pro-Pixel-Hover die WebView). Nur sicherstellen, dass das Popover sichtbar
+        // ist; die Maße liegen aus dem vorigen Render bereits vor.
+        if renderedKey == latex {
+            if isHidden, lastContentW > 0, let host = hostView {
+                layoutPreview(contentW: lastContentW, contentH: lastContentH, in: host)
+            }
+            return
+        }
+        renderedKey = latex
+        isError = (error != nil)
+
         let escaped = Self.jsString(latex)
-        let big = max(30, fontPx * 2.4)
-        let js = "render(\(escaped), \(big), \(Self.jsString(Self.css(foreground))));"
+        let js: String
+        if let error {
+            js = "renderError(\(escaped), \(Self.jsString(error)));"
+        } else {
+            let big = max(30, fontPx * 2.4)
+            js = "render(\(escaped), \(big), \(Self.jsString(Self.css(foreground))));"
+        }
         if loaded { web.evaluateJavaScript(js) } else { pendingJS = js }
     }
 
@@ -278,7 +337,9 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
 
     @objc private func copyLatex() {
         guard let s = shownLatex else { return }
-        copyToPasteboard(s)
+        // Bei Fehler Quelle + KaTeX-Meldung zusammen kopieren (zum Fixen/Weitergeben).
+        let text = shownError.map { "\(s)\n\n\($0)" } ?? s
+        copyToPasteboard(text)
         flash(latexButton, original: "LaTeX")
     }
 
@@ -365,12 +426,20 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
             buttonBar.isHidden = false
             buttonBar.frame = CGRect(x: 0, y: boxH - Self.barH, width: boxW, height: Self.barH)
             let bw: CGFloat = 72, bh: CGFloat = 24, gap: CGFloat = 8
-            let total = bw * 3 + gap * 2
-            let bx = (boxW - total) / 2
             let by = (Self.barH - bh) / 2
-            latexButton.frame = CGRect(x: bx, y: by, width: bw, height: bh)
-            readableButton.frame = CGRect(x: bx + bw + gap, y: by, width: bw, height: bh)
-            imageButton.frame = CGRect(x: bx + 2 * (bw + gap), y: by, width: bw, height: bh)
+            // Bei Fehler nur „LaTeX" (rohe Quelle kopieren, um sie zu fixen); „Lesbar"/„Bild"
+            // sind für eine nicht-renderbare Formel sinnlos.
+            readableButton.isHidden = isError
+            imageButton.isHidden = isError
+            if isError {
+                latexButton.frame = CGRect(x: (boxW - bw) / 2, y: by, width: bw, height: bh)
+            } else {
+                let total = bw * 3 + gap * 2
+                let bx = (boxW - total) / 2
+                latexButton.frame = CGRect(x: bx, y: by, width: bw, height: bh)
+                readableButton.frame = CGRect(x: bx + bw + gap, y: by, width: bw, height: bh)
+                imageButton.frame = CGRect(x: bx + 2 * (bw + gap), y: by, width: bw, height: bh)
+            }
         } else {
             buttonBar.isHidden = true
         }
@@ -402,18 +471,28 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
     #m{position:absolute;left:0;top:0;white-space:nowrap;}
     .katex{white-space:nowrap;}
     .fallback{font-family:ui-monospace,Menlo,monospace;font-style:italic;opacity:.7;}
+    /* KaTeX-Fehleransicht: rohe Quelle + Meldung gestapelt, Meldung rot. */
+    #m.err{white-space:normal;width:320px;font-family:ui-monospace,Menlo,monospace;}
+    #m.err .src{font-size:14px;color:#C8C2C2;opacity:.7;margin-bottom:8px;word-break:break-word;}
+    #m.err .msg{font-size:13px;line-height:1.4;color:#E85E3E;word-break:break-word;}
     </style></head><body>
     <div id="m"></div>
     <script>
     var el=document.getElementById('m');
+    function post(){ window.webkit.messageHandlers.size.postMessage({w:el.offsetWidth, h:el.offsetHeight}); }
     function render(latex, fontPx, fg){
       el.style.fontSize=fontPx+'px'; el.style.color=fg; el.className='';
       try{ el.innerHTML=katex.renderToString(latex,{displayMode:true,throwOnError:true}); }
       catch(e){ el.className='fallback'; el.textContent=latex; }
-      var post=function(){
-        window.webkit.messageHandlers.size.postMessage({w:el.offsetWidth, h:el.offsetHeight});
-      };
       if(document.fonts&&document.fonts.ready){document.fonts.ready.then(post);} else {requestAnimationFrame(post);}
+    }
+    // Fehleransicht: zeigt die rohe Formel und die konkrete KaTeX-Meldung.
+    function renderError(latex, message){
+      el.style.color=''; el.style.fontSize='14px'; el.className='err'; el.innerHTML='';
+      var src=document.createElement('div'); src.className='src'; src.textContent=latex;
+      var msg=document.createElement('div'); msg.className='msg'; msg.textContent=message;
+      el.appendChild(src); el.appendChild(msg);
+      requestAnimationFrame(post);
     }
     </script>
     </body></html>

@@ -36,6 +36,9 @@ final class OverlayController {
         // Echte gerenderte Bounds aus der WebView → enge Hitboxen
         layer.onBounds = { [weak self] tight in self?.applyTightBounds(tight) }
 
+        // KaTeX-Render-Fehler je Key → für Hover/Pin-Anzeige merken (#4)
+        layer.onError = { [weak self] errs in self?.formulaErrors = errs }
+
         // Bei Einstellungsänderungen alles neu aufbauen (Farbe/Scale/Spacing) und neu scannen
         observer = NotificationCenter.default.addObserver(
             forName: FormulaSettings.didChange,
@@ -147,6 +150,7 @@ final class OverlayController {
     // durch die echten gerenderten Bounds aus der WebView eng nachgezogen.
     private let preview = FormulaPreview()
     private var hitboxes: [String: (rect: CGRect, latex: String)] = [:]
+    private var formulaErrors: [String: String] = [:]   // Key → KaTeX-Fehlermeldung (#4)
     private static let hoverPad: CGFloat = 2   // kleine Toleranz fürs Treffen
 
     /// Ersetzt grobe Hitboxen durch die echten gerenderten Pixel-Bounds.
@@ -170,14 +174,15 @@ final class OverlayController {
 
         if preview.pinned, preview.frame.contains(p) { return event }   // Button-Klick
 
-        for hb in hitboxes.values where hb.rect.contains(p) {
+        for (key, hb) in hitboxes where hb.rect.contains(p) {
             preview.show(
                 latex: hb.latex,
                 over: hb.rect,
                 in: terminal.overlay,
                 fontPx: terminal.font.pointSize,
                 foreground: FormulaSettings.shared.formulaColor,
-                background: terminal.nativeBackgroundColor
+                background: terminal.nativeBackgroundColor,
+                error: formulaErrors[key]
             )
             preview.pin()
             return nil   // Treffer → schlucken, damit keine Terminal-Selektion startet
@@ -196,14 +201,15 @@ final class OverlayController {
     private func handleHover(_ p: NSPoint) {
         guard let terminal, FormulaSettings.shared.formulasEnabled else { preview.hide(); return }
         if preview.pinned { return }   // gepinnt: Hover ändert nichts
-        for hb in hitboxes.values where hb.rect.contains(p) {
+        for (key, hb) in hitboxes where hb.rect.contains(p) {
             preview.show(
                 latex: hb.latex,
                 over: hb.rect,
                 in: terminal.overlay,
                 fontPx: terminal.font.pointSize,
                 foreground: FormulaSettings.shared.formulaColor,
-                background: terminal.nativeBackgroundColor
+                background: terminal.nativeBackgroundColor,
+                error: formulaErrors[key]
             )
             return
         }
@@ -238,6 +244,7 @@ final class OverlayController {
         guard settings.formulasEnabled else {
             if !lastEmpty { layer.run("clearAll();"); lastEmpty = true }
             hitboxes.removeAll()
+            formulaErrors.removeAll()
             rowCache.removeAll()
             lastItemsJSON = nil
             return
