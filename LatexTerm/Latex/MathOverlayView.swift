@@ -119,11 +119,15 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
           e.latex=it.latex; e.display=!!it.display;
           if(e.display){ e.m.style.left='50%'; e.m.style.top='50%'; e.m.style.transformOrigin='center center'; }
           else { e.m.style.left='2px'; e.m.style.top='50%'; e.m.style.transformOrigin='left center'; }
-          try{ e.m.className='m';
-               e.m.innerHTML=katex.renderToString(it.latex,{displayMode:e.display,throwOnError:true}); }
-          catch(err){ e.m.className='m fallback'; e.m.textContent=it.latex; }
-          if(document.fonts&&document.fonts.ready){document.fonts.ready.then(function(){fit(e);});}
-          fit(e);
+          if(it.latex===""){           // reines Masken-Item (gewrappte Formel): nur bg, kein KaTeX
+            e.m.className='m'; e.m.innerHTML='';
+          } else {
+            try{ e.m.className='m';
+                 e.m.innerHTML=katex.renderToString(it.latex,{displayMode:e.display,throwOnError:true}); }
+            catch(err){ e.m.className='m fallback'; e.m.textContent=it.latex; }
+            if(document.fonts&&document.fonts.ready){document.fonts.ready.then(function(){fit(e);});}
+            fit(e);
+          }
         }
       }
       for(var k in els){ if(!seen[k]){ root.removeChild(els[k].wrap); delete els[k]; } }

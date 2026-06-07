@@ -21,7 +21,9 @@ public final class BufferLine: CustomDebugStringConvertible {
         /// Renders the bottom of a character, using two cells
         case doubledDown
     }
-    var isWrapped: Bool
+    // public-read so LatexTerm can reconstruct logical (soft-wrapped) lines for
+    // formula detection across row breaks; write stays internal to the module.
+    public internal(set) var isWrapped: Bool
     var renderMode: RenderLineMode = .single
     private var data: UnsafeMutableBufferPointer<CharData>
     private var dataSize: Int

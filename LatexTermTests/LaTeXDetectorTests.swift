@@ -111,6 +111,62 @@ final class LaTeXDetectorTests: XCTestCase {
         XCTAssertTrue(LaTeXDetector.find(in: "Preis \\\\$5").isEmpty)
     }
 
+    // MARK: - findWrapped(rows:continues:) — über Zeilenumbrüche (#1)
+
+    func testWrappedAcrossTwoRows() {
+        // Formel beginnt auf Zeile 0, läuft via Soft-Wrap auf Zeile 1 weiter.
+        let hits = LaTeXDetector.findWrapped(
+            rows: ["abc $\\frac{n}", "{2}$ def"],
+            continues: [false, true]
+        )
+        XCTAssertEqual(hits, [
+            LaTeXWrappedHit(body: "\\frac{n}{2}", startRow: 0, startCol: 4,
+                            endRow: 1, endCol: 4, displayMode: false)
+        ])
+    }
+
+    func testWrappedAcrossThreeRows() {
+        let hits = LaTeXDetector.findWrapped(
+            rows: ["$\\frac{a+", "b+c}{d+", "e}$"],
+            continues: [false, true, true]
+        )
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertEqual(hits.first?.body, "\\frac{a+b+c}{d+e}")
+        XCTAssertEqual(hits.first?.startRow, 0)
+        XCTAssertEqual(hits.first?.endRow, 2)
+    }
+
+    func testWrappedSubsumesSingleLine() {
+        // continues alle false → identisches Ergebnis wie find(in:) pro Zeile.
+        let hits = LaTeXDetector.findWrapped(
+            rows: ["$a$ und $b$", "plain"],
+            continues: [false, false]
+        )
+        XCTAssertEqual(hits.map(\.body), ["a", "b"])
+        XCTAssertTrue(hits.allSatisfy { $0.startRow == $0.endRow && $0.startRow == 0 })
+        XCTAssertEqual(hits.map(\.startCol), [0, 8])
+    }
+
+    func testHitFullyWithinOneRowInsideWrapGroup() {
+        // In einer Wrap-Gruppe, aber der Treffer liegt komplett auf einer Row.
+        let hits = LaTeXDetector.findWrapped(
+            rows: ["x $a$ yyyy", "yyy $b$"],
+            continues: [false, true]
+        )
+        XCTAssertEqual(hits, [
+            LaTeXWrappedHit(body: "a", startRow: 0, startCol: 2, endRow: 0, endCol: 5, displayMode: false),
+            LaTeXWrappedHit(body: "b", startRow: 1, startCol: 4, endRow: 1, endCol: 7, displayMode: false)
+        ])
+    }
+
+    func testWrapGroupWithoutCloserYieldsNoHit() {
+        // Formel öffnet, schließt aber nirgends in der (sichtbaren) Gruppe.
+        XCTAssertTrue(LaTeXDetector.findWrapped(
+            rows: ["text $x+y", "z+w more"],
+            continues: [false, true]
+        ).isEmpty)
+    }
+
     // MARK: - findBlocks(in:) — mehrzeilige Display-Blöcke
 
     func testCanonicalMultiLineBlock() {

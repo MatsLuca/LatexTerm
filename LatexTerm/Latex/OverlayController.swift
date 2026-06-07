@@ -270,10 +270,17 @@ final class OverlayController {
         // Sichtbares Grid als Strings einlesen (für `findBlocks` und Geometrie). Leere Zellen
         // liefern als code 0 ein NULL-Zeichen (\u{0}), das KaTeX im Strict-Mode ablehnt; 1:1
         // in ein Leerzeichen wandeln – erhält die Spalten-Positionen für startCol/endCol.
-        let rowTexts: [String] = (0..<rows).map { vr in
-            term.getLine(row: vr)?
+        // Pro Zeile zugleich das `isWrapped`-Flag erfassen (eine getLine-Runde):
+        // markiert, dass die Zeile die Fortsetzung der vorigen ist → für die
+        // Rekonstruktion logischer (weich-umgebrochener) Zeilen, s.u.
+        var rowTexts: [String] = []; rowTexts.reserveCapacity(rows)
+        var wrappedFlags = [Bool](repeating: false, count: rows)
+        for vr in 0..<rows {
+            let line = term.getLine(row: vr)
+            rowTexts.append(line?
                 .translateToString(trimRight: false)
-                .replacingOccurrences(of: "\u{0}", with: " ") ?? ""
+                .replacingOccurrences(of: "\u{0}", with: " ") ?? "")
+            wrappedFlags[vr] = line?.isWrapped ?? false
         }
 
         var items: [[String: Any]] = []
@@ -306,47 +313,102 @@ final class OverlayController {
             }
         }
 
-        // 2) Inline-Formeln pro Zeile. Unveränderte, nicht block-berührte Zeilen überspringen
-        //    den `find()`-Parse via Cache (Schlüssel: Viewport-Zeile + Content-Hash). Die
-        //    Range ist nur ein Hint; der Hash ist die Wahrheit (fängt auch verschobene Zeilen
-        //    nach Scroll/Stream-Output, deren Bereich SwiftTerm evtl. nicht meldet).
-        for vr in 0..<rows {
-            let hits: [LaTeXHit]
-            if let masked = blockMasked[vr] {
-                hits = LaTeXDetector.find(in: String(masked))   // Block-Zeile: immer frisch
-                rowCache[vr] = nil
-                scanned += 1
-            } else {
-                let text = rowTexts[vr]
-                let h = text.hashValue
-                let inRange = vr >= dStart && vr <= dEnd
-                if full || inRange || rowCache[vr]?.hash != h {
-                    hits = LaTeXDetector.find(in: text)
-                    rowCache[vr] = (hash: h, hits: hits)
-                    scanned += 1
+        // 2) Inline-Formeln. Aufeinanderfolgende weich-umgebrochene Zeilen werden zu einer
+        //    logischen Zeile zusammengefasst (`findWrapped`), damit eine über den Umbruch
+        //    laufende Formel erkannt wird (#1). Der Pro-Zeile-Cache (#2) bleibt für den
+        //    Normalfall erhalten: nur echte Mehrzeilen-Gruppen werden frisch via findWrapped
+        //    gescannt, Einzelzeilen behalten den Cache-Pfad (Viewport-Zeile + Content-Hash;
+        //    Range nur ein Hint, der Hash ist die Wahrheit).
+
+        // Fortsetzungs-Flags: continues[vr] ⇒ vr setzt vr-1 fort (= isWrapped). continues[0]
+        // gilt als false. An Block-Grenzen brechen, damit Block-Zeilen nie in eine logische
+        // Gruppe geraten – sie laufen weiter über den Block-/Frisch-Pfad.
+        var continues = [Bool](repeating: false, count: rows)
+        if rows > 1 { for vr in 1..<rows { continues[vr] = wrappedFlags[vr] } }
+        for r in blockMasked.keys {
+            if r < rows { continues[r] = false }
+            if r + 1 < rows { continues[r + 1] = false }
+        }
+
+        // Emittiert eine (ggf. über mehrere Rows laufende) Formel. Mehrzeiler: in das
+        // breiteste Quell-Segment rendern (geringste Skalierung = beste Lesbarkeit); die
+        // übrigen Segmente mit einem reinen Hintergrund-Item (leeres latex) maskieren, damit
+        // kein roher Fragment-Text durchscheint. displayMode wird durchgereicht.
+        func emitFormula(startRow: Int, startCol: Int, endRow: Int, endCol: Int,
+                         body: String, display: Bool) {
+            let key = "\(startRow + yDisp)|\(startCol)|\(body)"
+            func box(row: Int, fromCol: Int, toCol: Int) -> CGRect {
+                CGRect(x: CGFloat(fromCol) * cell.width,
+                       y: CGFloat(row) * cell.height - yPad,
+                       width: CGFloat(toCol - fromCol) * cell.width,
+                       height: cell.height * span)
+            }
+            func appendItem(_ k: String, _ f: CGRect, _ latex: String, _ disp: Bool) {
+                items.append([
+                    "key": k, "x": f.minX, "y": f.minY, "w": f.width, "h": f.height,
+                    "latex": latex, "display": disp
+                ])
+            }
+            if startRow == endRow {
+                let f = box(row: startRow, fromCol: startCol, toCol: endCol)
+                appendItem(key, f, body, display)
+                hitboxes[key] = (rect: f, latex: body)   // grobe Hitbox; per onBounds verfeinert
+                return
+            }
+            var segs: [(row: Int, from: Int, to: Int)] = []
+            for r in startRow...endRow {
+                let from = (r == startRow) ? startCol : 0
+                let to   = (r == endRow)   ? endCol   : rowTexts[r].count
+                segs.append((r, from, to))
+            }
+            let renderIdx = segs.indices.max {
+                (segs[$0].to - segs[$0].from) < (segs[$1].to - segs[$1].from)
+            } ?? 0
+            for (i, seg) in segs.enumerated() {
+                let f = box(row: seg.row, fromCol: seg.from, toCol: seg.to)
+                if i == renderIdx {
+                    appendItem(key, f, body, display)
+                    hitboxes[key] = (rect: f, latex: body)
                 } else {
-                    hits = rowCache[vr]!.hits
+                    appendItem("M|\(startRow + yDisp)|\(startCol)|\(seg.row)", f, "", false)
                 }
             }
-            // displayMode wird durchgereicht: einzeiliges $$/\[ rendert displaystyle
-            // (in seine Zeile skaliert), $/\( inline.
-            for hit in hits {
-                let key = "\(vr + yDisp)|\(hit.startCol)|\(hit.body)"
-                let frame = CGRect(
-                    x: CGFloat(hit.startCol) * cell.width,
-                    y: CGFloat(vr) * cell.height - yPad,
-                    width: CGFloat(hit.endCol - hit.startCol) * cell.width,
-                    height: cell.height * span
-                )
-                items.append([
-                    "key": key,
-                    "x": frame.minX, "y": frame.minY, "w": frame.width, "h": frame.height,
-                    "latex": hit.body,
-                    "display": hit.displayMode
-                ])
-                // grobe Hitbox; wird per onBounds eng nachgezogen
-                hitboxes[key] = (rect: frame, latex: hit.body)
+        }
+
+        var vr = 0
+        while vr < rows {
+            var groupEnd = vr
+            while groupEnd + 1 < rows, continues[groupEnd + 1] { groupEnd += 1 }
+
+            if groupEnd == vr {
+                // Einzelzeile: Cache-Pfad (bzw. block-maskierte Zeile frisch) wie bisher.
+                let hits: [LaTeXHit]
+                if let masked = blockMasked[vr] {
+                    hits = LaTeXDetector.find(in: String(masked)); rowCache[vr] = nil; scanned += 1
+                } else {
+                    let text = rowTexts[vr]; let h = text.hashValue
+                    let inRange = vr >= dStart && vr <= dEnd
+                    if full || inRange || rowCache[vr]?.hash != h {
+                        hits = LaTeXDetector.find(in: text); rowCache[vr] = (hash: h, hits: hits); scanned += 1
+                    } else { hits = rowCache[vr]!.hits }
+                }
+                for hit in hits {
+                    emitFormula(startRow: vr, startCol: hit.startCol, endRow: vr,
+                                endCol: hit.endCol, body: hit.body, display: hit.displayMode)
+                }
+            } else {
+                // Mehrzeilen-Gruppe: immer frisch via findWrapped (Wraps sind selten/billig).
+                let slice = Array(rowTexts[vr...groupEnd])
+                var sliceCont = [Bool](repeating: true, count: slice.count); sliceCont[0] = false
+                for r in vr...groupEnd { rowCache[r] = nil }   // nicht einzeln gecacht
+                scanned += slice.count
+                for wh in LaTeXDetector.findWrapped(rows: slice, continues: sliceCont) {
+                    emitFormula(startRow: vr + wh.startRow, startCol: wh.startCol,
+                                endRow: vr + wh.endRow, endCol: wh.endCol,
+                                body: wh.body, display: wh.displayMode)
+                }
             }
+            vr = groupEnd + 1
         }
 
         let configJSON = Self.json([

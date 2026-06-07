@@ -18,6 +18,19 @@ struct LaTeXBlock: Equatable {
     let endCol: Int   // Spalte direkt nach dem Schluss-Delimiter (auf endRow)
 }
 
+/// Ein Treffer, der – durch weiches Zeilen-Wrapping – über eine oder mehrere
+/// physische Grid-Zeilen reichen kann. Row-Indizes beziehen sich auf das an
+/// `findWrapped` übergebene `rows`-Array. `endCol` ist exklusiv (Spalte direkt
+/// nach dem Schluss-Delimiter) auf `endRow`.
+struct LaTeXWrappedHit: Equatable {
+    let body: String
+    let startRow: Int
+    let startCol: Int
+    let endRow: Int
+    let endCol: Int
+    let displayMode: Bool
+}
+
 enum LaTeXDetector {
     static func find(in line: String) -> [LaTeXHit] {
         let chars = Array(line)
@@ -44,6 +57,62 @@ enum LaTeXDetector {
             }
         }
         return hits
+    }
+
+    /// Erkennt Inline-Formeln über weiche Zeilenumbrüche hinweg. `continues[i] == true`
+    /// bedeutet, dass `rows[i]` die Fortsetzung von `rows[i-1]` ist (= SwiftTerms
+    /// `BufferLine.isWrapped`); `continues[0]` gilt stets als `false`. Aufeinanderfolgende
+    /// fortgesetzte Zeilen werden zu einer **logischen Zeile** zusammengefügt, als Ganzes
+    /// gescannt und jeder Treffer auf Grid-Koordinaten `(row, col)` zurückprojiziert.
+    /// Subsumiert den Einzelzeilen-Fall: eine Gruppe der Größe 1 liefert dieselben Spans
+    /// wie `find(in:)`. Kein Doppeltreffer an Bruchstellen, da pro logischer Zeile genau
+    /// ein `find`-Lauf erfolgt.
+    static func findWrapped(rows: [String], continues: [Bool]) -> [LaTeXWrappedHit] {
+        var result: [LaTeXWrappedHit] = []
+        var r = 0
+        while r < rows.count {
+            // Logische Gruppe: r plus alle direkt folgenden Fortsetzungszeilen.
+            var groupEnd = r
+            while groupEnd + 1 < rows.count, groupEnd + 1 < continues.count, continues[groupEnd + 1] {
+                groupEnd += 1
+            }
+
+            if groupEnd == r {
+                // Einzelne Zeile: direkter Scan, kein Mapping nötig.
+                for hit in find(in: rows[r]) {
+                    result.append(LaTeXWrappedHit(
+                        body: hit.body,
+                        startRow: r, startCol: hit.startCol,
+                        endRow: r, endCol: hit.endCol,
+                        displayMode: hit.displayMode
+                    ))
+                }
+            } else {
+                // Mehrere Zeilen: konkatenieren und Index→(row,col)-Mapping mitführen.
+                var logical: [Character] = []
+                var map: [(row: Int, col: Int)] = []
+                for gr in r...groupEnd {
+                    let chars = Array(rows[gr])
+                    for (col, ch) in chars.enumerated() {
+                        logical.append(ch)
+                        map.append((gr, col))
+                    }
+                }
+                for hit in find(in: String(logical)) {
+                    // startCol/endCol sind Indizes in die logische Zeile; endCol ist exklusiv.
+                    let start = map[hit.startCol]
+                    let last = map[hit.endCol - 1]   // letztes Zeichen des Treffers
+                    result.append(LaTeXWrappedHit(
+                        body: hit.body,
+                        startRow: start.row, startCol: start.col,
+                        endRow: last.row, endCol: last.col + 1,
+                        displayMode: hit.displayMode
+                    ))
+                }
+            }
+            r = groupEnd + 1
+        }
+        return result
     }
 
     /// Maximale Höhe eines Blocks. Begrenzt den Suchradius für den Schluss-Delimiter,
