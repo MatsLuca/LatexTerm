@@ -118,10 +118,23 @@ enum LaTeXDetector {
         return nil
     }
 
+    /// Sucht den Schluss-Delimiter ab `from`. Führt die Tiefe nicht-escapter
+    /// `{`/`}`-Gruppen mit: ein `$` innerhalb einer Gruppe (`$\text{cost: $5}$`)
+    /// zählt **nicht** als Closer, sondern nur ein Delimiter auf Tiefe 0.
+    /// Escapte Klammern (`\{`, `\}`) sind literale Zeichen und ändern die Tiefe
+    /// nicht; die Tiefe wird bei `}`-Überschuss auf 0 geklemmt, damit ein
+    /// einzelnes literales `\}` ohne `\{` den Closer nicht verschluckt.
     private static func findCloser(_ delim: [Character], in chars: [Character], from: Int) -> Int? {
         var j = from
+        var depth = 0
         while j + delim.count <= chars.count {
-            if matches(delim, at: j, in: chars) && !isEscaped(at: j, chars: chars) {
+            let c = chars[j]
+            if (c == "{" || c == "}") && !isEscaped(at: j, chars: chars) {
+                depth = c == "{" ? depth + 1 : max(0, depth - 1)
+                j += 1
+                continue
+            }
+            if depth == 0 && matches(delim, at: j, in: chars) && !isEscaped(at: j, chars: chars) {
                 if delim == ["$"], j + 1 < chars.count, chars[j+1] == "$" {
                     j += 2
                     continue

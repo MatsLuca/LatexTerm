@@ -151,6 +151,7 @@ SwiftTermLocal/              Vendored SwiftTerm fork (adds extraLineSpacing)
 
 - **No wrapped-inline detection.** Inline formulas (`$..$`, `\(..\)`) must fit on one row; if they wrap across rows they are not detected. Multi-line *display* blocks (`$$` / `\[` … `\]`) are supported, but only in canonical form with each delimiter alone on its own line — a block whose delimiters share a line with other content is not detected.
 - **Display mode `$$..$$` / `\[..\]` is rendered** with true KaTeX `displayMode`. Single-line display formulas are scaled into their row (so they stay one line tall); multi-line blocks span their source row range.
+- **Greedy `$`-pairing in prose.** Inline `$..$` detection is brace-aware (an inner `$` inside `{..}`, e.g. `$\text{cost: $5}$`, no longer closes the formula early), but two bare shell-style `$` on one line (`echo $PATH and $HOME`) are still paired greedily into a false formula. A safe heuristic can't be found without breaking legitimate math (`$(a+b)$`, `$n$th`, `$X$ … $Y$`), so math correctness wins.
 - **No theme sync after launch.** Background color is captured per rescan into the layer config. Changing the terminal background at runtime updates formula backgrounds on the next rescan, but is not pushed live. Formula foreground color is user-controlled via the "Formeln" menu.
 
 ## License

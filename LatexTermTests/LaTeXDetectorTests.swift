@@ -70,6 +70,47 @@ final class LaTeXDetectorTests: XCTestCase {
         XCTAssertEqual(hit?.endCol, 6)
     }
 
+    // MARK: - Brace-Awareness & Shell-Robustheit (#3)
+
+    func testInnerDollarInBraceDoesNotCloseEarly() {
+        // Das $ in "cost: $5" steht innerhalb einer {…}-Gruppe und darf den
+        // Schluss-Delimiter nicht vorziehen → genau EINE Formel.
+        let hits = LaTeXDetector.find(in: "$\\text{cost: $5}$")
+        XCTAssertEqual(hits.count, 1)
+        XCTAssertEqual(hits.first?.body, "\\text{cost: $5}")
+        XCTAssertEqual(hits.first?.startCol, 0)
+        XCTAssertEqual(hits.first?.endCol, 17)
+    }
+
+    func testSubscriptBraceStillCloses() {
+        // Regress: ausgeglichene Gruppe darf den Closer nicht verschlucken.
+        XCTAssertEqual(LaTeXDetector.find(in: "$a_{i}$").first?.body, "a_{i}")
+        XCTAssertEqual(LaTeXDetector.find(in: "$\\frac{1}{2}$").first?.body, "\\frac{1}{2}")
+    }
+
+    func testEscapedBracesAreLiteralAndCloserSurvives() {
+        // \{ \} sind literale Zeichen, nicht Gruppen → Closer wird erkannt.
+        XCTAssertEqual(LaTeXDetector.find(in: "$\\{a\\}$").first?.body, "\\{a\\}")
+    }
+
+    func testUnbalancedLiteralCloseBraceDoesNotEatCloser() {
+        // Einzelnes literales \} (ohne \{) klemmt die Tiefe auf 0 → Closer bleibt gültig.
+        XCTAssertEqual(LaTeXDetector.find(in: "$\\}$").first?.body, "\\}")
+    }
+
+    func testShellArtifactsWithoutCloserYieldNoHits() {
+        // $$, $PATH, $(…) ohne schließendes $ erzeugen keine Overlays.
+        XCTAssertTrue(LaTeXDetector.find(in: "PID ist $$ heute").isEmpty)
+        XCTAssertTrue(LaTeXDetector.find(in: "echo $PATH ende").isEmpty)
+        XCTAssertTrue(LaTeXDetector.find(in: "echo $((1+2)) ende").isEmpty)
+        XCTAssertTrue(LaTeXDetector.find(in: "Betrag $5 ohne close").isEmpty)
+    }
+
+    func testLiteralBackslashThenDollarYieldsNoHit() {
+        // \\$5 = literaler Backslash + $ ohne Closer → keine Formel.
+        XCTAssertTrue(LaTeXDetector.find(in: "Preis \\\\$5").isEmpty)
+    }
+
     // MARK: - findBlocks(in:) — mehrzeilige Display-Blöcke
 
     func testCanonicalMultiLineBlock() {
