@@ -184,6 +184,19 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
     function setScroll(dy){ root.style.transform = dy ? ('translateY('+dy+'px)') : ''; }
 
     function clearAll(){ root.innerHTML=''; els={}; root.style.transform=''; }
+
+    // Vorwärmen: KaTeX-Init + Font-Download beim Laden erzwingen (off-screen, außerhalb
+    // von #root → kein sync()-Konflikt), damit das ERSTE gerenderte Formel-Overlay sofort
+    // erscheint statt erst nach dem WebView-Cold-Start.
+    (function(){
+      try{
+        var warm=document.createElement('div');
+        warm.style.cssText='position:absolute;left:-9999px;top:-9999px;visibility:hidden;';
+        warm.innerHTML=katex.renderToString('x^2',{throwOnError:false});
+        document.body.appendChild(warm);
+        if(document.fonts&&document.fonts.ready){document.fonts.ready.then(function(){warm.remove();});}
+      }catch(e){}
+    })();
     </script>
     </body></html>
     """
@@ -499,6 +512,18 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
       el.appendChild(src); el.appendChild(msg);
       requestAnimationFrame(post);
     }
+    // Vorwärmen: KaTeX-Init + Font-Download schon beim Laden erzwingen (off-screen,
+    // ohne #m anzufassen → kein size-Post, kein Popover), damit das ERSTE Hover sofort
+    // erscheint statt erst nach dem WebView-Cold-Start.
+    (function(){
+      try{
+        var warm=document.createElement('div');
+        warm.style.cssText='position:absolute;left:-9999px;top:-9999px;visibility:hidden;';
+        warm.innerHTML=katex.renderToString('x^2',{throwOnError:false});
+        document.body.appendChild(warm);
+        if(document.fonts&&document.fonts.ready){document.fonts.ready.then(function(){warm.remove();});}
+      }catch(e){}
+    })();
     </script>
     </body></html>
     """

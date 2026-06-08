@@ -13,10 +13,24 @@ enum LaTeXReadable {
 
     /// Öffentlicher Einstieg: konvertiert und räumt Whitespace auf.
     static func readable(_ latex: String) -> String {
+        cacheLock.lock()
+        if let hit = cache[latex] { cacheLock.unlock(); return hit }
+        cacheLock.unlock()
+
         let r = convert(latex)
-        let collapsed = r.replacingOccurrences(of: " +", with: " ", options: .regularExpression)
-        return collapsed.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Mehrzeilige Ausgaben (Matrizen, cases) behalten ihre Ausricht-Spaces;
+        // einzeilige Formeln werden von Spacing-Artefakten befreit.
+        let cleaned = r.contains("\n")
+            ? r
+            : r.replacingOccurrences(of: " +", with: " ", options: .regularExpression)
+        let result = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
+
+        cacheLock.lock(); cache[latex] = result; cacheLock.unlock()
+        return result
     }
+
+    private static let cacheLock = NSLock()
+    private static var cache: [String: String] = [:]
 
     // MARK: - Rekursiver Parser
 
@@ -89,12 +103,15 @@ enum LaTeXReadable {
             let (a, n1) = readArg(chars, i); i = n1
             return a
 
-        // Akzente/Stile: Inhalt konvertieren, Dekoration weglassen
-        case "mathbf", "boldsymbol", "bm", "mathit", "mathcal", "mathfrak",
-             "vec", "hat", "bar", "tilde", "dot", "ddot", "overline", "underline",
-             "overrightarrow", "widehat", "widetilde":
+        // Stile: Inhalt konvertieren, Dekoration weglassen
+        case "mathbf", "boldsymbol", "bm", "mathit", "mathcal", "mathfrak", "mathscr":
             let (a, n1) = readArg(chars, i); i = n1
             return convert(a)
+
+        // Akzente: als Unicode-Combining-Mark auf das konvertierte Argument
+        case let c where accents[c] != nil:
+            let (a, n1) = readArg(chars, i); i = n1
+            return accent(convert(a), accents[c]!)
 
         case "left", "right":
             var j = i
@@ -102,7 +119,21 @@ enum LaTeXReadable {
             if j < chars.count, chars[j] == "." { i = j + 1 }   // unsichtbarer Delimiter
             return ""
 
-        case "begin", "end":
+        case "begin":
+            let (env, n1) = readArg(chars, i); i = n1
+            let envName = env.trimmingCharacters(in: .whitespaces)
+            if envName == "array" {            // Spaltenspezifikation {cc} überspringen
+                var j = i
+                while j < chars.count, chars[j] == " " { j += 1 }
+                if j < chars.count, chars[j] == "{" {
+                    let (_, n2) = readBalanced(chars, j); i = n2
+                }
+            }
+            let (body, next) = readEnvBody(chars, i, envName)
+            i = next
+            return formatEnv(envName, body)
+
+        case "end":   // nur erreichbar, wenn \end ohne passendes \begin auftaucht
             let (_, n1) = readArg(chars, i); i = n1
             return ""
 
@@ -202,7 +233,207 @@ enum LaTeXReadable {
         s.count <= 1 ? s : "(" + s + ")"
     }
 
+    /// Setzt eine Combining-Mark hinter das erste Zeichen des Inhalts (`x` + ̃ → `x̃`).
+    private static func accent(_ s: String, _ mark: Character) -> String {
+        guard let first = s.first else { return "" }
+        return String(first) + String(mark) + String(s.dropFirst())
+    }
+
+    // MARK: - Environments (Matrizen, cases)
+
+    /// Liest den Rumpf zwischen `\begin{name}` und dem passenden `\end{name}`
+    /// (balanciert über verschachtelte Environments) und liefert den Index dahinter.
+    private static func readEnvBody(_ chars: [Character], _ start: Int, _ name: String) -> (String, Int) {
+        var i = start
+        var depth = 1
+        var body = ""
+        while i < chars.count {
+            if chars[i] == "\\" {
+                let (cmd, after) = readCommand(chars, i)
+                if cmd == "begin" {
+                    depth += 1
+                    body += String(chars[i..<after]); i = after; continue
+                }
+                if cmd == "end" {
+                    depth -= 1
+                    if depth == 0 {
+                        let (_, a2) = readArg(chars, after)   // \end{name} schlucken
+                        return (body, a2)
+                    }
+                    body += String(chars[i..<after]); i = after; continue
+                }
+                body += String(chars[i..<after]); i = after; continue
+            }
+            body.append(chars[i]); i += 1
+        }
+        return (body, i)
+    }
+
+    /// Zerlegt einen Environment-Rumpf in Zeilen (`\\`) und Spalten (`&`),
+    /// wobei Inhalte in `{…}` und verschachtelten Environments unangetastet bleiben.
+    private static func parseGrid(_ s: String) -> [[String]] {
+        let chars = Array(s)
+        var rows: [[String]] = []
+        var cols: [String] = []
+        var cur = ""
+        var brace = 0
+        var env = 0
+        var i = 0
+        while i < chars.count {
+            let c = chars[i]
+            if c == "{" { brace += 1; cur.append(c); i += 1; continue }
+            if c == "}" { brace -= 1; cur.append(c); i += 1; continue }
+            if c == "&", brace == 0, env == 0 {
+                cols.append(cur); cur = ""; i += 1; continue
+            }
+            if c == "\\" {
+                let (cmd, after) = readCommand(chars, i)
+                if cmd == "\\", brace == 0, env == 0 {          // Zeilenumbruch
+                    cols.append(cur); cur = ""
+                    rows.append(cols); cols = []
+                    i = after; continue
+                }
+                if cmd == "begin" { env += 1 }
+                else if cmd == "end" { env = max(0, env - 1) }
+                cur += String(chars[i..<after]); i = after; continue
+            }
+            cur.append(c); i += 1
+        }
+        cols.append(cur); rows.append(cols)
+        return rows
+    }
+
+    /// Konvertiert die Zellen und wählt das passende Layout (Matrix-Klammern vs. cases).
+    private static func formatEnv(_ name: String, _ body: String) -> String {
+        let base = name.hasSuffix("*") ? String(name.dropLast()) : name
+        var grid = parseGrid(body).map { row in
+            row.map { convert($0).trimmingCharacters(in: .whitespaces) }
+        }
+        while let last = grid.last, last.allSatisfy({ $0.isEmpty }) { grid.removeLast() }
+        if grid.isEmpty { return "" }
+        if base == "cases" { return formatCases(grid) }
+        return formatMatrix(grid, delim: delimKind(for: base))
+    }
+
+    /// Spaltenbündige 2D-Darstellung mit (optionalen) Klammer-Glyphen.
+    private static func formatMatrix(_ grid: [[String]], delim: DelimKind) -> String {
+        let nCols = grid.map(\.count).max() ?? 0
+        var widths = [Int](repeating: 0, count: nCols)
+        for row in grid {
+            for (c, cell) in row.enumerated() { widths[c] = max(widths[c], cell.count) }
+        }
+        let lines: [String] = grid.map { row in
+            var parts: [String] = []
+            for c in 0..<nCols {
+                let cell = c < row.count ? row[c] : ""
+                // Letzte Spalte nur padden, wenn rechts ein Delimiter folgt.
+                if c == nCols - 1, !delim.hasRight { parts.append(cell) }
+                else { parts.append(pad(cell, widths[c])) }
+            }
+            return parts.joined(separator: "  ")
+        }
+        return wrap(lines, delim)
+    }
+
+    /// `cases`: nur linke geschweifte Klammer, Spalten mit ", " verbunden.
+    private static func formatCases(_ grid: [[String]]) -> String {
+        let lines = grid.map { $0.filter { !$0.isEmpty }.joined(separator: ", ") }
+        if lines.count == 1 { return "{ " + lines[0] }
+        let L = braceColumn("⎧", "⎪", "⎨", "⎩", lines.count)
+        return (0..<lines.count).map { L[$0] + " " + lines[$0] }.joined(separator: "\n")
+    }
+
+    // MARK: - Klammer-Glyphen
+
+    private enum DelimKind {
+        case none, paren, bracket, brace, vert, vvert
+        var hasRight: Bool { self != .none }
+    }
+
+    private static func delimKind(for base: String) -> DelimKind {
+        switch base {
+        case "pmatrix": return .paren
+        case "bmatrix": return .bracket
+        case "Bmatrix": return .brace
+        case "vmatrix": return .vert
+        case "Vmatrix": return .vvert
+        default:        return .none   // matrix, smallmatrix, array, aligned, gather, …
+        }
+    }
+
+    private static func wrap(_ lines: [String], _ d: DelimKind) -> String {
+        if d == .none { return lines.map(rstrip).joined(separator: "\n") }
+        let n = lines.count
+        if n == 1 {
+            let (l, r) = simpleDelims(d)
+            return l + lines[0] + r
+        }
+        let L = sideGlyphs(d, n, left: true)
+        let R = sideGlyphs(d, n, left: false)
+        return (0..<n).map { L[$0] + lines[$0] + R[$0] }.joined(separator: "\n")
+    }
+
+    private static func simpleDelims(_ d: DelimKind) -> (String, String) {
+        switch d {
+        case .paren:   return ("(", ")")
+        case .bracket: return ("[", "]")
+        case .brace:   return ("{", "}")
+        case .vert:    return ("|", "|")
+        case .vvert:   return ("‖", "‖")
+        case .none:    return ("", "")
+        }
+    }
+
+    private static func sideGlyphs(_ d: DelimKind, _ n: Int, left: Bool) -> [String] {
+        switch d {
+        case .paren:   return left ? column("⎛", "⎜", "⎝", n) : column("⎞", "⎟", "⎠", n)
+        case .bracket: return left ? column("⎡", "⎢", "⎣", n) : column("⎤", "⎥", "⎦", n)
+        case .brace:   return left ? braceColumn("⎧", "⎪", "⎨", "⎩", n)
+                                   : braceColumn("⎫", "⎪", "⎬", "⎭", n)
+        case .vert:    return column("│", "│", "│", n)
+        case .vvert:   return column("‖", "‖", "‖", n)
+        case .none:    return Array(repeating: "", count: n)
+        }
+    }
+
+    /// Klammer-Spalte: oben/Mitte/unten.
+    private static func column(_ top: String, _ mid: String, _ bottom: String, _ n: Int) -> [String] {
+        if n == 1 { return [mid] }
+        return (0..<n).map { $0 == 0 ? top : ($0 == n - 1 ? bottom : mid) }
+    }
+
+    /// Geschweifte Klammer mit Mittel-Glyph (`⎨`/`⎬`) in der vertikalen Mitte.
+    private static func braceColumn(_ top: String, _ ext: String, _ mid: String, _ bottom: String, _ n: Int) -> [String] {
+        if n == 1 { return [mid] }
+        let center = (n - 1) / 2
+        return (0..<n).map {
+            $0 == 0 ? top : ($0 == n - 1 ? bottom : ($0 == center ? mid : ext))
+        }
+    }
+
+    private static func pad(_ s: String, _ w: Int) -> String {
+        s.count >= w ? s : s + String(repeating: " ", count: w - s.count)
+    }
+
+    private static func rstrip(_ s: String) -> String {
+        var t = s
+        while t.hasSuffix(" ") { t.removeLast() }
+        return t
+    }
+
     // MARK: - Tabellen
+
+    /// Akzent-Kommando → Unicode-Combining-Mark.
+    private static let accents: [String: Character] = [
+        "hat": "\u{0302}", "widehat": "\u{0302}",
+        "tilde": "\u{0303}", "widetilde": "\u{0303}",
+        "bar": "\u{0304}", "overline": "\u{0304}",
+        "vec": "\u{20D7}", "overrightarrow": "\u{20D7}",
+        "dot": "\u{0307}", "ddot": "\u{0308}",
+        "check": "\u{030C}", "breve": "\u{0306}",
+        "acute": "\u{0301}", "grave": "\u{0300}",
+        "mathring": "\u{030A}", "underline": "\u{0332}"
+    ]
 
     private static let blackboard: [String: String] = [
         "R": "ℝ", "N": "ℕ", "Z": "ℤ", "Q": "ℚ", "C": "ℂ",
@@ -216,7 +447,9 @@ enum LaTeXReadable {
         "a": "ᵃ", "b": "ᵇ", "c": "ᶜ", "d": "ᵈ", "e": "ᵉ", "f": "ᶠ", "g": "ᵍ",
         "h": "ʰ", "i": "ⁱ", "j": "ʲ", "k": "ᵏ", "l": "ˡ", "m": "ᵐ", "n": "ⁿ",
         "o": "ᵒ", "p": "ᵖ", "r": "ʳ", "s": "ˢ", "t": "ᵗ", "u": "ᵘ", "v": "ᵛ",
-        "w": "ʷ", "x": "ˣ", "y": "ʸ", "z": "ᶻ"
+        "w": "ʷ", "x": "ˣ", "y": "ʸ", "z": "ᶻ",
+        // Griechisch (bereits zu Unicode konvertiert, bevor superscript() greift)
+        "α": "ᵅ", "β": "ᵝ", "γ": "ᵞ", "δ": "ᵟ", "φ": "ᵠ", "χ": "ᵡ", "θ": "ᶿ"
     ]
 
     private static let subMap: [Character: Character] = [
@@ -225,7 +458,9 @@ enum LaTeXReadable {
         "+": "₊", "-": "₋", "=": "₌", "(": "₍", ")": "₎",
         "a": "ₐ", "e": "ₑ", "h": "ₕ", "i": "ᵢ", "j": "ⱼ", "k": "ₖ", "l": "ₗ",
         "m": "ₘ", "n": "ₙ", "o": "ₒ", "p": "ₚ", "r": "ᵣ", "s": "ₛ", "t": "ₜ",
-        "u": "ᵤ", "v": "ᵥ", "x": "ₓ"
+        "u": "ᵤ", "v": "ᵥ", "x": "ₓ",
+        // Griechisch
+        "β": "ᵦ", "γ": "ᵧ", "ρ": "ᵨ", "φ": "ᵩ", "χ": "ᵪ"
     ]
 
     private static let functions: Set<String> = [
