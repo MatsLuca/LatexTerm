@@ -178,7 +178,12 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
         window.webkit.messageHandlers.bounds.postMessage(out);
     }
 
-    function clearAll(){ root.innerHTML=''; els={}; }
+    // Block-Mitlauf beim Scrollen (#14): den ganzen Formel-Container vertikal verschieben.
+    // CSS-translateY ist eindeutig (positiv = runter), GPU-composited und – anders als ein
+    // negativer NSView-frame-Origin der Out-of-Process-WebView – auch nach oben verlässlich.
+    function setScroll(dy){ root.style.transform = dy ? ('translateY('+dy+'px)') : ''; }
+
+    function clearAll(){ root.innerHTML=''; els={}; root.style.transform=''; }
     </script>
     </body></html>
     """

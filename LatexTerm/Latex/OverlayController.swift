@@ -77,33 +77,49 @@ final class OverlayController {
         if pending { return }
         pending = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) { [weak self] in
-            self?.pending = false
-            self?.rescan()
+            guard let self else { return }
+            self.pending = false
+            // Während des Scrollens NICHT neu synchronisieren: `scrollTo` feuert pro Step ein
+            // `rangeChanged(0,rows)` (via refresh+updateDisplay), das hier sonst einen vollen
+            // out-of-process `sync()` auslöst, der die Divs neu positioniert und gegen die
+            // Block-Translation kämpft → starkes Flackern. Die Translation hält die Formeln
+            // am Text; den exakten Rescan macht `scrollSettled()` nach dem Scroll-Ende. Der
+            // akkumulierte Dirty-Bereich bleibt erhalten (wird erst im rescan() konsumiert).
+            if self.isScrolling { return }
+            self.rescan()
         }
     }
 
-    // MARK: - Scroll
+    // MARK: - Scroll (#14: Formeln als Block mitschieben statt aus-/einblenden)
 
     // Scrollen ist kein "Vorgang", sondern eine schnelle Folge statischer Zustände.
-    // Würden wir die Overlays bei jedem Zwischenschritt neu setzen, flackert die
-    // out-of-process WebView (Neupositionieren + Divs an den Rändern an/aus).
-    // Stattdessen: beim ersten Scroll-Event den Layer ausblenden und einen Idle-Timer
-    // armen. Solange Events fließen (inkl. Trackpad-Momentum) bleibt er aus. Erst wenn
-    // ~90 ms keins mehr kommt = "wieder statisch", wird neu positioniert und – nach dem
-    // ersten Bounds-Report, also wenn die WebView die neuen Positionen gezeichnet hat –
-    // wieder eingeblendet (kein Aufpoppen an falscher Stelle).
+    // Das Terminal scrollt uniform um Δrows × cellHeight; alle sichtbaren Formeln bewegen
+    // sich um exakt denselben Pixelbetrag. Statt die out-of-process WebView pro Schritt neu
+    // zu positionieren (flackert) oder sie auszublenden, verschieben wir den gesamten
+    // Formel-Container als einen Block per CSS-translateY (GPU-composited, kein Div-Umbau).
+    //
+    // Die Divs wurden zuletzt für `lastRenderedYDisp` positioniert. Um sie am Text zu halten,
+    // verschieben wir um die Differenz zum aktuellen Scroll-Offset. Nach dem Settle macht
+    // rescan() die exakten Absolut-Positionen + neu reingescrollte Zeilen UND setzt die
+    // Translation im SELBEN JS-Aufruf auf 0 zurück → ein WebView-Frame, kein sichtbarer
+    // Sprung (überlebende Formeln sitzen pixelgleich), also kein Verstecken nötig.
     private var isScrolling = false
     private var scrollIdleWork: DispatchWorkItem?
-    private var revealOnNextBounds = false
+    private var lastRenderedYDisp = 0      // yDisp, für den die Divs zuletzt positioniert wurden
+    private var needsScrollReset = false   // beim nächsten rescan() translateY(0) mit-emittieren
     private static let scrollIdle: TimeInterval = 0.15
 
     func scheduleReposition() {
+        guard let terminal else { return }
         if !isScrolling {
             isScrolling = true
-            revealOnNextBounds = false   // evtl. ausstehendes Reveal abbrechen
             preview.hide()
-            layer.isHidden = true
         }
+        let yDisp = terminal.getTerminal().buffer.yDisp
+        let cellH = terminal.cellSize().height
+        let off = CGFloat(lastRenderedYDisp - yDisp) * cellH
+        setLayerOffset(off)
+
         scrollIdleWork?.cancel()
         let work = DispatchWorkItem { [weak self] in self?.scrollSettled() }
         scrollIdleWork = work
@@ -112,15 +128,17 @@ final class OverlayController {
 
     private func scrollSettled() {
         isScrolling = false
-        revealOnNextBounds = true
-        rescan()   // positioniert die Divs neu, Layer noch versteckt
-        // Fallback: ohne sichtbare Formel feuert onBounds nicht – dann trotzdem
-        // einblenden (leerer Layer, unkritisch).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) { [weak self] in
-            guard let self, self.revealOnNextBounds else { return }
-            self.revealOnNextBounds = false
-            self.layer.isHidden = false
-        }
+        needsScrollReset = true   // rescan() bündelt setScroll(0) + sync() in einen JS-Aufruf
+        rescan()
+    }
+
+    /// Verschiebt den Formel-Container als Block (Block-Translation beim Scrollen).
+    /// Per CSS-translateY INNERHALB der WebView statt über den NSView-frame-Origin: der
+    /// negative Origin einer layer-backed Out-of-Process-WebView verschob den Inhalt im
+    /// flipped Host nicht zuverlässig nach oben (Formeln drifteten beim Runterscrollen weg).
+    /// CSS-y ist eindeutig und in beide Richtungen verlässlich, ohne Div-Umbau/sync().
+    private func setLayerOffset(_ dy: CGFloat) {
+        layer.run("setScroll(\(Int(dy)));")
     }
 
     // MARK: - Privat
@@ -157,11 +175,6 @@ final class OverlayController {
     private func applyTightBounds(_ tight: [String: CGRect]) {
         for (key, rect) in tight where hitboxes[key] != nil {
             hitboxes[key]!.rect = rect.insetBy(dx: -Self.hoverPad, dy: -Self.hoverPad)
-        }
-        // Nach dem Settle-Rescan: jetzt sind die neuen Positionen gezeichnet → einblenden.
-        if revealOnNextBounds {
-            revealOnNextBounds = false
-            layer.isHidden = false
         }
     }
 
@@ -273,6 +286,10 @@ final class OverlayController {
         // Absoluter Scrollback-Offset: Keys an die absolute Buffer-Zeile binden,
         // damit Scrollen Overlays nur neu positioniert statt sie neu zu erzeugen.
         let yDisp = term.buffer.yDisp
+
+        // Die Divs werden für genau dieses yDisp gelegt → künftige Block-Translation
+        // (#14) misst von hier.
+        lastRenderedYDisp = yDisp
 
         // Sichtbares Grid als Strings einlesen (für `findBlocks` und Geometrie). Leere Zellen
         // liefern als code 0 ein NULL-Zeichen (\u{0}), das KaTeX im Strict-Mode ablehnt; 1:1
@@ -435,6 +452,9 @@ final class OverlayController {
         if clear { js += "clearAll();" }
         if configChanged { js += "setConfig(\(configJSON));"; lastConfigJSON = configJSON }
         if configChanged || itemsJSON != lastItemsJSON { js += "sync(\(itemsJSON));" }
+        // Settle nach Scrollen: Block-Translation im SELBEN Aufruf wie sync() auf 0 zurück,
+        // damit beides in einem WebView-Frame landet (überlebende Formeln springen nicht).
+        if needsScrollReset { js += "setScroll(0);"; needsScrollReset = false }
         if !js.isEmpty { layer.run(js); lastItemsJSON = itemsJSON }
 
         lastEmpty = items.isEmpty
