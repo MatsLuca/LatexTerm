@@ -24,8 +24,12 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         let settings = FormulaSettings.shared
         let term = LatexTerminalView(frame: .zero)
         term.nativeForegroundColor = NSColor(red: 230/255.0, green: 225/255.0, blue: 225/255.0, alpha: 1.0)
-        // Leicht transparenter Hintergrund für edle Window-Vibrancy
-        term.nativeBackgroundColor = NSColor(red: 23/255.0, green: 20/255.0, blue: 20/255.0, alpha: 0.85)
+        // Opaker Hintergrund: die Formel-Overlays maskieren den Quelltext mit einer
+        // volldeckenden Box in genau dieser Farbe (Alpha wird in OverlayController.css
+        // verworfen). Wäre der Terminal-BG transluzent (Vibrancy darunter), erschiene die
+        // opake Maske dunkler als der umgebende Hintergrund. Vibrancy bleibt in den
+        // Kachel-Stegen (gapColor) erhalten.
+        term.nativeBackgroundColor = NSColor(red: 23/255.0, green: 20/255.0, blue: 20/255.0, alpha: 1.0)
         term.caretColor = settings.accentColor
         // Pulsierender Cursor
         term.getTerminal().setCursorStyle(.blinkBlock)
