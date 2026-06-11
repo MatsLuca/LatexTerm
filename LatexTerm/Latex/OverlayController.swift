@@ -177,6 +177,17 @@ final class OverlayController {
     private var formulaErrors: [String: String] = [:]   // Key → KaTeX-Fehlermeldung (#4)
     private static let hoverPad: CGFloat = 2   // kleine Toleranz fürs Treffen
 
+    /// Vertikaler Versatz der Formel-Divs während des Scrollens (#21): die Block-
+    /// Translation (#14) verschiebt die Divs per CSS, die Swift-seitigen `hitboxes`
+    /// bleiben aber auf den Positionen des letzten Rescans. Maus-Treffer müssen den
+    /// Versatz herausrechnen, sonst trifft ein Klick im Settle-Fenster die falsche
+    /// (Vor-Scroll-)Position.
+    private func scrollHitboxOffset() -> CGFloat {
+        guard isScrolling, let terminal else { return 0 }
+        let yDisp = terminal.getTerminal().buffer.yDisp
+        return CGFloat(lastRenderedYDisp - yDisp) * terminal.cellSize().height
+    }
+
     /// Ersetzt grobe Hitboxen durch die echten gerenderten Pixel-Bounds.
     private func applyTightBounds(_ tight: [String: CGRect]) {
         for (key, rect) in tight where hitboxes[key] != nil {
@@ -193,10 +204,14 @@ final class OverlayController {
 
         if preview.pinned, preview.frame.contains(p) { return event }   // Button-Klick
 
-        for (key, hb) in hitboxes where hb.rect.contains(p) {
+        // Während des Scrollens sind die Divs um den Block-Offset verschoben (#21):
+        // Hitbox-Test gegen die verschobene Position, Anker ebenfalls verschieben.
+        let off = scrollHitboxOffset()
+        let q = NSPoint(x: p.x, y: p.y - off)
+        for (key, hb) in hitboxes where hb.rect.contains(q) {
             preview.show(
                 latex: hb.latex,
-                over: hb.rect,
+                over: hb.rect.offsetBy(dx: 0, dy: off),
                 in: terminal.overlay,
                 fontPx: terminal.font.pointSize,
                 foreground: FormulaSettings.shared.formulaColor,
@@ -220,10 +235,12 @@ final class OverlayController {
     private func handleHover(_ p: NSPoint) {
         guard let terminal, FormulaSettings.shared.formulasEnabled else { preview.hide(); return }
         if preview.pinned { return }   // gepinnt: Hover ändert nichts
-        for (key, hb) in hitboxes where hb.rect.contains(p) {
+        let off = scrollHitboxOffset()   // Block-Translation beim Scrollen herausrechnen (#21)
+        let q = NSPoint(x: p.x, y: p.y - off)
+        for (key, hb) in hitboxes where hb.rect.contains(q) {
             preview.show(
                 latex: hb.latex,
-                over: hb.rect,
+                over: hb.rect.offsetBy(dx: 0, dy: off),
                 in: terminal.overlay,
                 fontPx: terminal.font.pointSize,
                 foreground: FormulaSettings.shared.formulaColor,
@@ -462,10 +479,12 @@ final class OverlayController {
         var js = ""
         if clear { js += "clearAll();" }
         if configChanged { js += "setConfig(\(configJSON));"; lastConfigJSON = configJSON }
-        if configChanged || itemsJSON != lastItemsJSON { js += "sync(\(itemsJSON));" }
         // Settle nach Scrollen: Block-Translation im SELBEN Aufruf wie sync() auf 0 zurück,
         // damit beides in einem WebView-Frame landet (überlebende Formeln springen nicht).
+        // VOR sync() emittieren: reportBounds() innerhalb von sync() misst sonst einmal
+        // mit dem alten translateY und meldet um dy verschobene Bounds (#21).
         if needsScrollReset { js += "setScroll(0);"; needsScrollReset = false }
+        if configChanged || itemsJSON != lastItemsJSON { js += "sync(\(itemsJSON));" }
         if !js.isEmpty { layer.run(js); lastItemsJSON = itemsJSON }
 
         lastEmpty = items.isEmpty
