@@ -270,12 +270,23 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         view.terminate()
     }
 
-    /// Startet die Login-Shell des Users im Home-Verzeichnis.
-    func start() {
+    /// Aktuelles Arbeitsverzeichnis dieser Pane (OSC 7), falls die Shell eins gemeldet hat.
+    var currentDirectory: String? { view.currentWorkingDirectory() }
+
+    /// Startet die Login-Shell des Users. `directory` (z.B. das CWD der fokussierten
+    /// Kachel bei ⌘T, #8) geht als Arbeitsverzeichnis an den KINDPROZESS
+    /// (`startProcess(currentDirectory:)`) statt prozessweit an die ganze App (#20).
+    /// Nicht (mehr) existierende Verzeichnisse fallen auf Home zurück.
+    func start(in directory: String? = nil) {
         let shell = Self.userShell()
         let shellIdiom = "-" + (shell as NSString).lastPathComponent
-        FileManager.default.changeCurrentDirectoryPath(FileManager.default.homeDirectoryForCurrentUser.path)
-        view.startProcess(executable: shell, execName: shellIdiom)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        var dir = directory ?? home
+        var isDir: ObjCBool = false
+        if !(FileManager.default.fileExists(atPath: dir, isDirectory: &isDir) && isDir.boolValue) {
+            dir = home
+        }
+        view.startProcess(executable: shell, execName: shellIdiom, currentDirectory: dir)
     }
 
     // MARK: - LocalProcessTerminalViewDelegate
@@ -381,15 +392,18 @@ final class TerminalSplitView: NSView {
     }
 
     @discardableResult
-    func addPane() -> TerminalPane {
+    func addPane(startingIn directory: String? = nil) -> TerminalPane {
         let pane = TerminalPane()
         pane.onClosed = { [weak self] p in self?.removePane(p) }
-        pane.onSplitRequested = { [weak self] _ in self?.addPane() }
+        // ⌘T: die anfordernde Kachel ist die fokussierte → ihr CWD vererben (#8).
+        pane.onSplitRequested = { [weak self] requester in
+            self?.addPane(startingIn: requester.currentDirectory)
+        }
         pane.onCloseRequested = { [weak self] p in self?.closePane(p) }
         pane.onEnsurePaneCount = { [weak self] n in self?.ensurePaneCount(n) }
         panes.append(pane)
         addSubview(pane.view)
-        pane.start()
+        pane.start(in: directory)
         relayout(animated: true)
         // Fokus erst im nächsten Runloop – der frisch hinzugefügte View ist dann bereit.
         DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(pane.view) }
