@@ -515,7 +515,7 @@ enum LaTeXReadable {
         "circ": "∘", "bullet": "•", "degree": "°", "prime": "′",
         "langle": "⟨", "rangle": "⟩", "lceil": "⌈", "rceil": "⌉",
         "lfloor": "⌊", "rfloor": "⌋", "backslash": "\\",
-        "leftarrow ": "←", "cdotp": "·",
+        "cdotp": "·",
         // Wörter, die als Symbol gemeint sind
         "quad": " ", "qquad": "  "
     ]

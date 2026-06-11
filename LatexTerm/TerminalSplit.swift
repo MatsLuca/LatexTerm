@@ -50,7 +50,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         super.init()
 
         // Fokus-Visualisierung
-        term.onFocusChanged = { [weak term] focused in
+        term.onFocusChanged = { [weak self, weak term] focused in
             guard let term else { return }
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.18
@@ -59,6 +59,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                 term.layer?.borderColor = FormulaSettings.shared.accentColor.withAlphaComponent(0.65).cgColor
                 term.layer?.borderWidth = focused ? 1.5 : 0
             }
+            // Fokuswechsel übernimmt den zuletzt von DIESER Shell gemeldeten Titel (#21).
+            if focused { self?.applyStoredTitle() }
         }
 
         term.processDelegate = self
@@ -105,15 +107,19 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     private var contrastPending = false
 
+    /// Ist diese Kachel gerade fokussiert (First Responder im oder unterm Terminal-View)?
+    private var isFocused: Bool {
+        let fr = view.window?.firstResponder
+        return (fr === view) || ((fr as? NSView)?.isDescendant(of: view) ?? false)
+    }
+
     /// Wartet 1,8 Sekunden Cooldown ab, bevor die Kontrastanalyse durchgeführt wird.
     func scheduleContrastAnalysis() {
         guard FormulaSettings.shared.isAdaptiveAccent else { return }
         if contrastPending { return }
-        
+
         // Nur das fokussierte Terminal darf die globale Akzentfarbe anpassen!
-        let fr = view.window?.firstResponder
-        let focused = (fr === view) || ((fr as? NSView)?.isDescendant(of: view) ?? false)
-        guard focused else { return }
+        guard isFocused else { return }
 
         contrastPending = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.8) { [weak self] in
@@ -277,8 +283,19 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {
         controller.scheduleRescan()
     }
+    /// Zuletzt von der Shell dieser Kachel gemeldeter Titel (für Fokuswechsel-Übernahme).
+    private var lastTitle = ""
+
+    /// Nur die FOKUSSIERTE Kachel darf den Fenstertitel setzen (#21) — sonst gewinnt
+    /// bei mehreren Panes der letzte Schreiber, unabhängig davon, wo man arbeitet.
+    /// Unfokussierte Panes merken sich den Titel; der Fokuswechsel holt ihn nach.
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
-        source.window?.title = title.isEmpty ? "LatexTerm" : title
+        lastTitle = title
+        if isFocused { applyStoredTitle() }
+    }
+
+    fileprivate func applyStoredTitle() {
+        view.window?.title = lastTitle.isEmpty ? "LatexTerm" : lastTitle
     }
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
     func processTerminated(source: TerminalView, exitCode: Int32?) {
