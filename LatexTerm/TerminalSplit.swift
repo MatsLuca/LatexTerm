@@ -83,14 +83,17 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             forName: FormulaSettings.didChange,
             object: nil,
             queue: .main
-        ) { [weak self, weak term] _ in
+        ) { [weak self, weak term] note in
             let settings = FormulaSettings.shared
             term?.extraLineSpacing = settings.extraLineSpacing
             term?.caretColor = settings.accentColor
             term?.layer?.borderColor = settings.accentColor.withAlphaComponent(0.65).cgColor
-            
-            // Wenn der Modus aktiviert wurde, sofort analysieren
-            if settings.isAdaptiveAccent {
+
+            // Nur wenn der Modus selbst eingeschaltet wurde, sofort analysieren —
+            // sonst stieße jede (adaptiv gesetzte) accentColor-Änderung gleich die
+            // nächste Analyse an.
+            let change = note.userInfo?[FormulaSettings.changeKey] as? FormulaSettings.Change
+            if change == .isAdaptiveAccent, settings.isAdaptiveAccent {
                 self?.scheduleContrastAnalysis()
             }
         }
@@ -201,13 +204,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             let avgColor = NSColor(red: avgR, green: avgG, blue: avgB, alpha: 1.0)
             let bestColor = Self.findBestContrastColor(to: avgColor)
 
-            if FormulaSettings.shared.accentColor != bestColor {
-                // Animierter Übergang für extrem befriedigende Veredelung!
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.35
-                    context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                    FormulaSettings.shared.accentColor = bestColor
-                }
+            // Farbraumfest vergleichen: die geladene Akzentfarbe (sRGB) wäre per
+            // NSColor-`==` nie gleich einer Palettenfarbe (anderer Farbraum).
+            if !FormulaSettings.shared.accentColor.srgbMatches(bestColor) {
+                FormulaSettings.shared.accentColor = bestColor
             }
         }
     }
@@ -291,8 +291,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         let buffer = UnsafeMutablePointer<Int8>.allocate(capacity: bufsize)
         defer { buffer.deallocate() }
         var pwd = passwd()
-        var result: UnsafeMutablePointer<passwd>? = UnsafeMutablePointer<passwd>.allocate(capacity: 1)
-        if getpwuid_r(getuid(), &pwd, buffer, bufsize, &result) != 0 {
+        // Reiner Out-Pointer: getpwuid_r setzt ihn auf &pwd oder NULL. NULL bei
+        // Rückgabewert 0 heißt „kein Eintrag" — pwd ist dann undefiniert.
+        var result: UnsafeMutablePointer<passwd>? = nil
+        guard getpwuid_r(getuid(), &pwd, buffer, bufsize, &result) == 0, result != nil else {
             return "/bin/zsh"
         }
         let s = String(cString: pwd.pw_shell)
@@ -489,5 +491,20 @@ final class TerminalSplitView: NSView {
             }
         }
         isFirstLayout = false
+    }
+}
+
+private extension NSColor {
+    /// Farbraumfester Vergleich über sRGB-Komponenten. NSColor-`==` vergleicht den
+    /// Farbraum mit — eine aus UserDefaults geladene Farbe wäre nie `==` zu einer
+    /// Palettenfarbe, obwohl sie visuell identisch ist (#18). Die Toleranz deckt
+    /// Rundungsverluste der Konvertierung/Persistierung ab.
+    func srgbMatches(_ other: NSColor) -> Bool {
+        guard let a = usingColorSpace(.sRGB), let b = other.usingColorSpace(.sRGB) else { return false }
+        let eps: CGFloat = 0.5 / 255
+        return abs(a.redComponent - b.redComponent) < eps
+            && abs(a.greenComponent - b.greenComponent) < eps
+            && abs(a.blueComponent - b.blueComponent) < eps
+            && abs(a.alphaComponent - b.alphaComponent) < eps
     }
 }

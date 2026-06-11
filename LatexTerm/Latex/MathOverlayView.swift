@@ -1,6 +1,19 @@
 import AppKit
 import WebKit
 
+/// `WKUserContentController` hält seine Message-Handler **stark**. Eine View, die
+/// sich selbst registriert, zykelt also über ihre eigene Configuration
+/// (WebView → configuration → userContentController → View) und wird nie
+/// freigegeben — inklusive des out-of-process WebContent-Prozesses. Der Proxy
+/// hält das echte Ziel nur `weak` und bricht den Zyklus (#15).
+private final class WeakScriptMessageHandler: NSObject, WKScriptMessageHandler {
+    private weak var target: WKScriptMessageHandler?
+    init(_ target: WKScriptMessageHandler) { self.target = target }
+    func userContentController(_ uc: WKUserContentController, didReceive message: WKScriptMessage) {
+        target?.userContentController(uc, didReceive: message)
+    }
+}
+
 /// Eine einzige WKWebView für ALLE Formeln des Terminals.
 ///
 /// Früher gab es eine WKWebView (= eigener Browser-Prozess + kompletter
@@ -12,8 +25,10 @@ import WebKit
 final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandler {
 
     private var loaded = false
-    /// Letztes noch nicht abgespieltes JS (Seite noch nicht fertig geladen).
-    /// Da jeder Rescan den vollständigen Zustand schickt, genügt der jeweils letzte.
+    /// Noch nicht abgespieltes JS (Seite noch nicht fertig geladen). Wird
+    /// **akkumuliert**, nicht ersetzt: `sync(...)` ist zwar idempotent, aber
+    /// `setConfig(...)` wird nur bei Swift-seitiger Änderung gesendet — ein
+    /// zweiter Rescan vor `didFinish` dürfte es sonst verschlucken (#16).
     private var pendingJS: String?
 
     /// Meldet die echten gerenderten Pixel-Bounds je Formel-Key (Host-Koordinaten).
@@ -28,8 +43,8 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
         let ucc = WKUserContentController()
         cfg.userContentController = ucc
         super.init(frame: .zero, configuration: cfg)
-        ucc.add(self, name: "bounds")
-        ucc.add(self, name: "errors")
+        ucc.add(WeakScriptMessageHandler(self), name: "bounds")
+        ucc.add(WeakScriptMessageHandler(self), name: "errors")
         setValue(false, forKey: "drawsBackground")   // transparent → Terminal scheint durch
         navigationDelegate = self
         autoresizingMask = [.width, .height]
@@ -73,9 +88,9 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
         }
     }
 
-    /// Führt JS aus, sobald die Seite bereit ist – sonst gepuffert.
+    /// Führt JS aus, sobald die Seite bereit ist – sonst gepuffert (akkumulierend).
     func run(_ js: String) {
-        if loaded { evaluateJavaScript(js) } else { pendingJS = js }
+        if loaded { evaluateJavaScript(js) } else { pendingJS = (pendingJS ?? "") + js + ";" }
     }
 
     private static let pageHTML = """
@@ -265,7 +280,7 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         layer?.shadowRadius = 14
         layer?.shadowOffset = CGSize(width: 0, height: 4)
 
-        ucc.add(self, name: "size")
+        ucc.add(WeakScriptMessageHandler(self), name: "size")
         web.setValue(false, forKey: "drawsBackground")
         web.navigationDelegate = self
         addSubview(web)

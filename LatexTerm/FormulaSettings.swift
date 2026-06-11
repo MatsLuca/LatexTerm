@@ -8,8 +8,24 @@ final class FormulaSettings: ObservableObject {
     static let shared = FormulaSettings()
 
     /// Notification, die nach jeder Einstellungsänderung gepostet wird.
-    /// OverlayController hört darauf und triggert einen Rescan.
+    /// `userInfo[changeKey]` trägt als `Change`, **welche** Einstellung sich geändert
+    /// hat — Observer reagieren nur auf die für sie relevanten Änderungen (#18).
     static let didChange = Notification.Name("FormulaSettings.didChange")
+    static let changeKey = "change"
+
+    /// Welche Einstellung sich geändert hat. `affectsFormulas` steuert, ob der
+    /// OverlayController alle Formeln verwerfen und neu rendern muss — die
+    /// Akzentfarbe (Caret + Kachelrahmen) betrifft Formeln nicht.
+    nonisolated enum Change {
+        case formulaColor, accentColor, isAdaptiveAccent, formulasEnabled, extraLineSpacing, formulaScale
+
+        var affectsFormulas: Bool {
+            switch self {
+            case .formulaColor, .formulasEnabled, .extraLineSpacing, .formulaScale: return true
+            case .accentColor, .isAdaptiveAccent: return false
+            }
+        }
+    }
 
     // MARK: - UserDefaults Keys
 
@@ -44,38 +60,38 @@ final class FormulaSettings: ObservableObject {
     // MARK: - Published Properties
 
     @Published var formulaColor: NSColor {
-        didSet { saveColor(formulaColor); postChange() }
+        didSet { saveColor(formulaColor); postChange(.formulaColor) }
     }
 
     @Published var accentColor: NSColor {
-        didSet { saveAccentColor(accentColor); postChange() }
+        didSet { saveAccentColor(accentColor); postChange(.accentColor) }
     }
 
     @Published var isAdaptiveAccent: Bool {
         didSet {
             UserDefaults.standard.set(isAdaptiveAccent, forKey: Keys.isAdaptiveAccent)
-            postChange()
+            postChange(.isAdaptiveAccent)
         }
     }
 
     @Published var formulasEnabled: Bool {
         didSet {
             UserDefaults.standard.set(formulasEnabled, forKey: Keys.formulasEnabled)
-            postChange()
+            postChange(.formulasEnabled)
         }
     }
 
     @Published var extraLineSpacing: CGFloat {
         didSet {
             UserDefaults.standard.set(Double(extraLineSpacing), forKey: Keys.extraLineSpacing)
-            postChange()
+            postChange(.extraLineSpacing)
         }
     }
 
     @Published var formulaScale: CGFloat {
         didSet {
             UserDefaults.standard.set(Double(formulaScale), forKey: Keys.formulaScale)
-            postChange()
+            postChange(.formulaScale)
         }
     }
 
@@ -93,7 +109,9 @@ final class FormulaSettings: ObservableObject {
             ? CGFloat(d.double(forKey: Keys.formulaColorBlue)) : CGFloat(225/255.0)
         let a = d.object(forKey: Keys.formulaColorAlpha) != nil
             ? CGFloat(d.double(forKey: Keys.formulaColorAlpha)) : CGFloat(1.0)
-        formulaColor = NSColor(calibratedRed: r, green: g, blue: b, alpha: a)
+        // sRGB laden, weil saveColor in sRGB-Komponenten speichert — ein calibrated
+        // geladener NSColor wäre nie `==`/komponentengleich zu den gespeicherten Werten.
+        formulaColor = NSColor(srgbRed: r, green: g, blue: b, alpha: a)
 
         // Akzentfarbe laden
         let ar = d.object(forKey: Keys.accentColorRed) != nil
@@ -104,7 +122,7 @@ final class FormulaSettings: ObservableObject {
             ? CGFloat(d.double(forKey: Keys.accentColorBlue)) : CGFloat(62/255.0)
         let aa = d.object(forKey: Keys.accentColorAlpha) != nil
             ? CGFloat(d.double(forKey: Keys.accentColorAlpha)) : CGFloat(1.0)
-        accentColor = NSColor(calibratedRed: ar, green: ag, blue: ab, alpha: aa)
+        accentColor = NSColor(srgbRed: ar, green: ag, blue: ab, alpha: aa)
 
         // isAdaptiveAccent laden (default: false)
         isAdaptiveAccent = d.object(forKey: Keys.isAdaptiveAccent) != nil
@@ -145,8 +163,9 @@ final class FormulaSettings: ObservableObject {
         d.set(Double(rgb.alphaComponent), forKey: Keys.accentColorAlpha)
     }
 
-    private func postChange() {
-        NotificationCenter.default.post(name: Self.didChange, object: self)
+    private func postChange(_ change: Change) {
+        NotificationCenter.default.post(name: Self.didChange, object: self,
+                                        userInfo: [Self.changeKey: change])
     }
 
     // MARK: - Mutating Actions (für Menüleiste)

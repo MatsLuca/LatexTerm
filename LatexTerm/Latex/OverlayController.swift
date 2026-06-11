@@ -39,12 +39,16 @@ final class OverlayController {
         // KaTeX-Render-Fehler je Key → für Hover/Pin-Anzeige merken (#4)
         layer.onError = { [weak self] errs in self?.formulaErrors = errs }
 
-        // Bei Einstellungsänderungen alles neu aufbauen (Farbe/Scale/Spacing) und neu scannen
+        // Bei formelrelevanten Einstellungsänderungen (Farbe/Scale/Spacing/Toggle) alles
+        // neu aufbauen und neu scannen. Akzentfarben-Änderungen (Caret/Kachelrahmen,
+        // bei adaptivem Akzent häufig!) lösen bewusst KEINEN KaTeX-Rebuild aus (#18).
         observer = NotificationCenter.default.addObserver(
             forName: FormulaSettings.didChange,
             object: nil,
             queue: .main
-        ) { [weak self] _ in
+        ) { [weak self] note in
+            guard let change = note.userInfo?[FormulaSettings.changeKey] as? FormulaSettings.Change,
+                  change.affectsFormulas else { return }
             self?.invalidateAll()
             self?.scheduleRescan()
         }
