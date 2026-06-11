@@ -203,6 +203,15 @@ final class LatexTerminalView: LocalProcessTerminalView {
         if let d = Int(a) ?? Int(b), (1...9).contains(d), !mods.contains(.shift) {
             onEnsurePaneCount?(d); return true
         }
+        if (a == "f" || b == "f"), !mods.contains(.shift) {
+            // ⌘F: Suchleiste der FOKUSSIERTEN Kachel (#9). Gleiche Fokus-Weiterreichung
+            // wie ⌘W: unfokussierte Kacheln geben das Event weiter. Die Leiste selbst
+            // (Fork: TerminalFindBarView) übernimmt Enter/Shift-Enter/Esc und Optionen.
+            let fr = window?.firstResponder
+            let focused = (fr === self) || ((fr as? NSView)?.isDescendant(of: self) ?? false)
+            if focused { showFindInterface(); return true }
+            return super.performKeyEquivalent(with: event)
+        }
         if a == "+" || b == "+" || a == "=" || b == "=" {
             adjustFont(by: +1); return true
         }

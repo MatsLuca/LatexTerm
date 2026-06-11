@@ -1798,6 +1798,20 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         pasteboard.setString(term, forType: .string)
     }
 
+    /// Public entry points for hosts without an AppKit Find menu (e.g. SwiftUI apps
+    /// that handle Cmd+F themselves): show/hide the built-in find bar directly.
+    public func showFindInterface() {
+        showFindBar(prefillSelection: true)
+    }
+
+    public func hideFindInterface() {
+        hideFindBar()
+    }
+
+    public var isFindInterfaceVisible: Bool {
+        findBar?.isHidden == false
+    }
+
     private func ensureFindBar() -> TerminalFindBarView {
         if let findBar {
             return findBar
