@@ -33,6 +33,14 @@ final class OverlayController {
             self?.handleKeyDown(event) ?? event
         }
 
+        // Editier-Loop (#7): bestätigter Ausdruck wird als Text in die PTY getippt
+        // (= aktive Prompt-Zeile; Scrollback ist immutable), Fokus zurück ans Terminal.
+        preview.onCommitEdit = { [weak self] expr in
+            guard let terminal = self?.terminal else { return }
+            terminal.send(txt: expr)
+            terminal.window?.makeFirstResponder(terminal)
+        }
+
         // Echte gerenderte Bounds aus der WebView → enge Hitboxen
         layer.onBounds = { [weak self] tight in self?.applyTightBounds(tight) }
 

@@ -220,7 +220,7 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
 /// Großer Vorschau-Popover für eine einzelne Formel (Ansichts-Modus beim Hover).
 /// Rendert in echtem Display-Mode, misst die Inhaltsgröße per JS-Callback und
 /// dimensioniert/positioniert sich selbst clamped in die Host-Bounds.
-final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler {
+final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler, NSTextFieldDelegate {
     private let web: WKWebView
     private var loaded = false
     private var pendingJS: String?
@@ -244,6 +244,18 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
     private var imageButton: NSButton!
     private var pdfButton: NSButton!
     private var markdownButton: NSButton!
+    private var editButton: NSButton!
+
+    // Editier-Loop (#7): gepinntes Panel → „✎" → Inline-Textfeld mit Live-KaTeX-
+    // Vorschau; Enter injiziert den (delimitierten) Ausdruck in die Prompt-Zeile.
+    private var editing = false
+    private let editField = NSTextField()
+    private var editDebounce: DispatchWorkItem?
+    private var lastShowFontPx: CGFloat = 13
+    private var lastShowForeground: NSColor = .white
+    /// Bestätigter Ausdruck (inkl. $-Delimiter) → wird vom OverlayController in die PTY
+    /// der aktiven Prompt-Zeile geschrieben (Scrollback ist immutable, Variante a).
+    var onCommitEdit: ((String) -> Void)?
     private var lastContentW: CGFloat = 0
     private var lastContentH: CGFloat = 0
     /// Zeigt die Vorschau gerade einen KaTeX-Fehler? Dann ergeben „Lesbar"/„Bild"
@@ -257,6 +269,7 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
     private static let gap: CGFloat = 10        // Abstand Box ↔ Quell-Formel
     private static let edge: CGFloat = 8        // Mindestabstand zum Host-Rand
     private static let barH: CGFloat = 38       // Höhe der Button-Leiste (gepinnt)
+    private static let editH: CGFloat = 34      // Höhe der Editier-Zeile (#7)
 
     override var isFlipped: Bool { true }
 
@@ -292,11 +305,21 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         imageButton = Self.makeButton("Bild", target: self, action: #selector(copyImage))
         pdfButton = Self.makeButton("PDF", target: self, action: #selector(copyPDF))
         markdownButton = Self.makeButton("MD", target: self, action: #selector(copyMarkdown))
+        editButton = Self.makeButton("✎", target: self, action: #selector(toggleEdit))
         buttonBar.addSubview(latexButton)
         buttonBar.addSubview(readableButton)
         buttonBar.addSubview(imageButton)
         buttonBar.addSubview(pdfButton)
         buttonBar.addSubview(markdownButton)
+        buttonBar.addSubview(editButton)
+
+        editField.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        editField.placeholderString = "LaTeX bearbeiten — Enter schreibt in die Prompt-Zeile"
+        editField.delegate = self
+        editField.target = self
+        editField.action = #selector(commitEdit)
+        editField.isHidden = true
+        addSubview(editField)
         buttonBar.isHidden = true
         addSubview(buttonBar)
 
@@ -330,6 +353,9 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         shownLatex = latex
         shownError = error
         exportBackground = background
+        lastShowFontPx = fontPx
+        lastShowForeground = foreground
+        if editing { exitEditMode() }   // neue Formel → Editier-Modus der alten verwerfen
 
         layer?.backgroundColor = background.cgColor
         layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
@@ -362,6 +388,7 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         shownLatex = nil
         pinned = false
         buttonBar.isHidden = true
+        if editing { exitEditMode() }
     }
 
     /// Fixiert die aktuell gezeigte Formel und blendet die Button-Leiste ein.
@@ -461,6 +488,69 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
          .replacingOccurrences(of: "\n", with: " ")
     }
 
+    // MARK: - Editier-Loop (#7)
+
+    /// „✎": Editier-Modus an/aus. Im Editier-Modus erscheint unter der Vorschau ein
+    /// Textfeld mit der LaTeX-Quelle; jede Änderung rendert die Vorschau live neu.
+    @objc private func toggleEdit() {
+        if editing { exitEditMode(); relayout(); return }
+        guard let latex = shownLatex else { return }
+        editing = true
+        editButton.contentTintColor = .controlAccentColor
+        editField.stringValue = latex
+        editField.isHidden = false
+        relayout()
+        window?.makeFirstResponder(editField)
+    }
+
+    private func exitEditMode() {
+        editing = false
+        editDebounce?.cancel()
+        editField.isHidden = true
+        editButton.contentTintColor = nil
+    }
+
+    /// Live-Vorschau: Tipp-Pausen von 150 ms abwarten, dann KaTeX neu rendern. Der
+    /// `size`-Callback zieht die Panel-Größe automatisch nach. Die editierte Quelle
+    /// wird zur aktuellen Formel (alle Export-Buttons arbeiten auf dem Edit-Stand).
+    func controlTextDidChange(_ obj: Notification) {
+        guard editing else { return }
+        editDebounce?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.renderEdited() }
+        editDebounce = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15, execute: work)
+    }
+
+    private func renderEdited() {
+        guard editing else { return }
+        let latex = editField.stringValue
+        shownLatex = latex
+        shownError = nil
+        isError = false
+        renderedKey = latex
+        let big = max(30, lastShowFontPx * 2.4)
+        let js = "render(\(Self.jsString(latex)), \(big), \(Self.jsString(Self.css(lastShowForeground))));"
+        if loaded { web.evaluateJavaScript(js) } else { pendingJS = js }
+    }
+
+    /// Enter im Textfeld: Ausdruck (mit $-Delimitern, falls keine vorhanden) in die
+    /// aktive Prompt-Zeile schreiben und das Panel schließen. Scrollback ist immutable —
+    /// der editierte Ausdruck landet bewusst als neuer Text an der Prompt (Variante a).
+    @objc private func commitEdit() {
+        let body = editField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !body.isEmpty else { return }
+        let hasDelimiter = body.hasPrefix("$") || body.hasPrefix("\\(") || body.hasPrefix("\\[")
+        let expr = hasDelimiter ? body : "$\(body)$"
+        onCommitEdit?(expr)
+        hide()
+    }
+
+    private func relayout() {
+        if let host = hostView, lastContentW > 0 || lastContentH > 0 {
+            layoutPreview(contentW: lastContentW, contentH: lastContentH, in: host)
+        }
+    }
+
     private func failFlash(_ button: NSButton, original: String) {
         button.title = "Fehler"
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak button] in
@@ -496,13 +586,13 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         lastContentH = contentH
 
         let pad = Self.innerPad
-        let bar = pinned ? Self.barH : 0
+        let bar = pinned ? Self.barH + (editing ? Self.editH : 0) : 0
         let maxW = host.bounds.width  - 2 * Self.edge
         let maxH = host.bounds.height - 2 * Self.edge
 
         var boxW = min(contentW + 2 * pad, maxW)
         var boxH = min(contentH + 2 * pad + bar, maxH)
-        boxW = max(boxW, pinned ? 346 : 40)   // gepinnt: Platz für fünf Buttons
+        boxW = max(boxW, pinned ? 396 : 40)   // gepinnt: Platz für sechs Buttons
         boxH = max(boxH, 30 + bar)
 
         // x: über der Formel zentriert, in Host-Bounds geklemmt
@@ -520,14 +610,19 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         if pinned {
             buttonBar.isHidden = false
             buttonBar.frame = CGRect(x: 0, y: boxH - Self.barH, width: boxW, height: Self.barH)
+            if editing {
+                editField.frame = CGRect(x: pad, y: boxH - Self.barH - Self.editH + 4,
+                                         width: boxW - 2 * pad, height: 24)
+            }
             let bh: CGFloat = 24, gap: CGFloat = 6
             let by = (Self.barH - bh) / 2
-            // Bei Fehler nur „LaTeX" (rohe Quelle kopieren, um sie zu fixen); die übrigen
-            // Exporte sind für eine nicht-renderbare Formel sinnlos.
+            // Bei Fehler nur „LaTeX" (Quelle kopieren) und „✎" (Quelle direkt fixen);
+            // die Exporte sind für eine nicht-renderbare Formel sinnlos.
             let exportButtons: [NSButton] = [readableButton, imageButton, pdfButton, markdownButton]
             exportButtons.forEach { $0.isHidden = isError }
-            let visible: [NSButton] = isError ? [latexButton] : [latexButton] + exportButtons
-            let bw: CGFloat = isError ? 72 : 60
+            let visible: [NSButton] = isError ? [latexButton, editButton]
+                                              : [latexButton] + exportButtons + [editButton]
+            let bw: CGFloat = isError ? 72 : 58
             let total = CGFloat(visible.count) * bw + CGFloat(visible.count - 1) * gap
             var bx = (boxW - total) / 2
             for b in visible {
