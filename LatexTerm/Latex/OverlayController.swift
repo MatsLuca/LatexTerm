@@ -117,7 +117,9 @@ final class OverlayController {
         guard let terminal else { return }
         if !isScrolling {
             isScrolling = true
-            preview.hide()
+            // Hover-Vorschau beim Scrollen schließen; ein gepinntes Panel bleibt stehen
+            // (#19, Option A) — es ist bewusst vom Terminal-Inhalt entkoppelt.
+            if !preview.pinned { preview.hide() }
         }
         let yDisp = terminal.getTerminal().buffer.yDisp
         let cellH = terminal.cellSize().height
@@ -254,11 +256,16 @@ final class OverlayController {
         let dStart = dirtyStart, dEnd = dirtyEnd
         dirtyStart = Int.max; dirtyEnd = -1
 
-        // Inhalt ändert sich → laufende Vorschau schließen (Hover triggert neu)
-        preview.hide()
+        // Inhalt ändert sich → laufende Hover-Vorschau schließen (Hover triggert neu).
+        // Ein GEPINNTES Panel überlebt jeden Rescan (#19, Option A): es dient dem
+        // Festhalten/Kopieren während laufendem Output und wird nur aktiv geschlossen
+        // (Esc / Klick daneben) — auch wenn die Quell-Formel wegscrollt oder sich ändert.
+        if !preview.pinned { preview.hide() }
 
-        // Formeln deaktiviert → Layer leeren und abbrechen
+        // Formeln deaktiviert → Layer leeren und abbrechen. Hier schließt auch ein
+        // gepinntes Panel: das Feature ist aus, nichts soll mehr Formeln zeigen.
         guard settings.formulasEnabled else {
+            preview.hide()
             if !lastEmpty { layer.run("clearAll();"); lastEmpty = true }
             hitboxes.removeAll()
             formulaErrors.removeAll()
