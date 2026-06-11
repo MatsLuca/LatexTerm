@@ -242,6 +242,8 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
     private var latexButton: NSButton!
     private var readableButton: NSButton!
     private var imageButton: NSButton!
+    private var pdfButton: NSButton!
+    private var markdownButton: NSButton!
     private var lastContentW: CGFloat = 0
     private var lastContentH: CGFloat = 0
     /// Zeigt die Vorschau gerade einen KaTeX-Fehler? Dann ergeben „Lesbar"/„Bild"
@@ -288,9 +290,13 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         latexButton = Self.makeButton("LaTeX", target: self, action: #selector(copyLatex))
         readableButton = Self.makeButton("Lesbar", target: self, action: #selector(copyReadable))
         imageButton = Self.makeButton("Bild", target: self, action: #selector(copyImage))
+        pdfButton = Self.makeButton("PDF", target: self, action: #selector(copyPDF))
+        markdownButton = Self.makeButton("MD", target: self, action: #selector(copyMarkdown))
         buttonBar.addSubview(latexButton)
         buttonBar.addSubview(readableButton)
         buttonBar.addSubview(imageButton)
+        buttonBar.addSubview(pdfButton)
+        buttonBar.addSubview(markdownButton)
         buttonBar.isHidden = true
         addSubview(buttonBar)
 
@@ -398,11 +404,67 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
                FormulaImageRenderer.copyToPasteboard(chip) {
                 self.flash(self.imageButton, original: "Bild")
             } else {
-                self.imageButton.title = "Fehler"
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                    self?.imageButton.title = "Bild"
-                }
+                self.failFlash(self.imageButton, original: "Bild")
             }
+        }
+    }
+
+    /// Vektorieller Export (#5): die Preview-WebView rendert KaTeX als HTML+CSS mit echten
+    /// Font-Glyphen — `createPDF` druckt genau das als Vektor-PDF (beliebig skalierbar).
+    /// KaTeX kann kein SVG; PDF ist der verlustfreie Pfad, SVG bleibt Stretch-Goal.
+    @objc private func copyPDF() {
+        guard shownLatex != nil, lastContentW > 0, lastContentH > 0 else { return }
+        pdfButton.title = "…"
+        let cfg = WKPDFConfiguration()
+        cfg.rect = CGRect(x: 0, y: 0, width: lastContentW, height: lastContentH)
+        web.createPDF(configuration: cfg) { [weak self] result in
+            guard let self else { return }
+            if case .success(let data) = result {
+                let pb = NSPasteboard.general
+                pb.clearContents()
+                pb.setData(data, forType: .pdf)
+                self.flash(self.pdfButton, original: "PDF")
+            } else {
+                self.failFlash(self.pdfButton, original: "PDF")
+            }
+        }
+    }
+
+    /// Markdown-Data-URI (#5): PNG-Chip base64-encodet als `![formula](data:image/png;…)` —
+    /// ein-Klick-Paste in GitHub/Notion/Obsidian, ohne Datei-Anhang.
+    @objc private func copyMarkdown() {
+        guard shownLatex != nil, lastContentW > 0, lastContentH > 0 else { return }
+        markdownButton.title = "…"
+        let bg = exportBackground
+        let cfg = WKSnapshotConfiguration()
+        cfg.rect = CGRect(x: 0, y: 0, width: lastContentW, height: lastContentH)
+        web.takeSnapshot(with: cfg) { [weak self] snapshot, _ in
+            guard let self else { return }
+            if let snapshot,
+               let chip = FormulaImageRenderer.makeChip(from: snapshot, background: bg),
+               let png = FormulaImageRenderer.pngData(chip) {
+                let alt = self.shownLatex ?? "formula"
+                let md = "![\(Self.markdownAltText(alt))](data:image/png;base64,\(png.base64EncodedString()))"
+                self.copyToPasteboard(md)
+                self.flash(self.markdownButton, original: "MD")
+            } else {
+                self.failFlash(self.markdownButton, original: "MD")
+            }
+        }
+    }
+
+    /// LaTeX-Quelle als Markdown-Alt-Text: eckige Klammern und Zeilenumbrüche
+    /// würden die `![…](…)`-Syntax brechen.
+    private static func markdownAltText(_ s: String) -> String {
+        s.replacingOccurrences(of: "[", with: "(")
+         .replacingOccurrences(of: "]", with: ")")
+         .replacingOccurrences(of: "\n", with: " ")
+    }
+
+    private func failFlash(_ button: NSButton, original: String) {
+        button.title = "Fehler"
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak button] in
+            button?.title = original
         }
     }
 
@@ -413,7 +475,7 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
     }
 
     private func flash(_ button: NSButton, original: String) {
-        button.title = "Kopiert ✓"
+        button.title = "✓"
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak button] in
             button?.title = original
         }
@@ -440,7 +502,7 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
 
         var boxW = min(contentW + 2 * pad, maxW)
         var boxH = min(contentH + 2 * pad + bar, maxH)
-        boxW = max(boxW, pinned ? 252 : 40)   // gepinnt: Platz für drei Buttons
+        boxW = max(boxW, pinned ? 346 : 40)   // gepinnt: Platz für fünf Buttons
         boxH = max(boxH, 30 + bar)
 
         // x: über der Formel zentriert, in Host-Bounds geklemmt
@@ -458,20 +520,19 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         if pinned {
             buttonBar.isHidden = false
             buttonBar.frame = CGRect(x: 0, y: boxH - Self.barH, width: boxW, height: Self.barH)
-            let bw: CGFloat = 72, bh: CGFloat = 24, gap: CGFloat = 8
+            let bh: CGFloat = 24, gap: CGFloat = 6
             let by = (Self.barH - bh) / 2
-            // Bei Fehler nur „LaTeX" (rohe Quelle kopieren, um sie zu fixen); „Lesbar"/„Bild"
-            // sind für eine nicht-renderbare Formel sinnlos.
-            readableButton.isHidden = isError
-            imageButton.isHidden = isError
-            if isError {
-                latexButton.frame = CGRect(x: (boxW - bw) / 2, y: by, width: bw, height: bh)
-            } else {
-                let total = bw * 3 + gap * 2
-                let bx = (boxW - total) / 2
-                latexButton.frame = CGRect(x: bx, y: by, width: bw, height: bh)
-                readableButton.frame = CGRect(x: bx + bw + gap, y: by, width: bw, height: bh)
-                imageButton.frame = CGRect(x: bx + 2 * (bw + gap), y: by, width: bw, height: bh)
+            // Bei Fehler nur „LaTeX" (rohe Quelle kopieren, um sie zu fixen); die übrigen
+            // Exporte sind für eine nicht-renderbare Formel sinnlos.
+            let exportButtons: [NSButton] = [readableButton, imageButton, pdfButton, markdownButton]
+            exportButtons.forEach { $0.isHidden = isError }
+            let visible: [NSButton] = isError ? [latexButton] : [latexButton] + exportButtons
+            let bw: CGFloat = isError ? 72 : 60
+            let total = CGFloat(visible.count) * bw + CGFloat(visible.count - 1) * gap
+            var bx = (boxW - total) / 2
+            for b in visible {
+                b.frame = CGRect(x: bx, y: by, width: bw, height: bh)
+                bx += bw + gap
             }
         } else {
             buttonBar.isHidden = true

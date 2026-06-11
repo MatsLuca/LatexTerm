@@ -55,12 +55,18 @@ enum FormulaImageRenderer {
         return out
     }
 
+    /// PNG-Repräsentation eines NSImage (für Pasteboard und Markdown-Data-URI, #5).
+    static func pngData(_ image: NSImage) -> Data? {
+        guard let tiff = image.tiffRepresentation,
+              let rep = NSBitmapImageRep(data: tiff) else { return nil }
+        return rep.representation(using: .png, properties: [:])
+    }
+
     /// Legt ein NSImage als PNG (+ TIFF) in die allgemeine Zwischenablage.
     @discardableResult
     static func copyToPasteboard(_ image: NSImage) -> Bool {
         guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff),
-              let png = rep.representation(using: .png, properties: [:]) else { return false }
+              let png = pngData(image) else { return false }
         let pb = NSPasteboard.general
         pb.clearContents()
         let item = NSPasteboardItem()
