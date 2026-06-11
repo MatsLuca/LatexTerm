@@ -340,6 +340,7 @@ final class TerminalSplitView: NSView {
     private var panes: [TerminalPane] = []
     private let vibrancyView = NSVisualEffectView()
     private var isFirstLayout = true
+    private var terminateObserver: NSObjectProtocol?
 
     /// Lücke (Steg) zwischen den Kacheln in Punkten.
     private static let gap: CGFloat = 8
@@ -356,10 +357,31 @@ final class TerminalSplitView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = Self.gapColor.cgColor   // scheint in den Kachel-Lücken durch
-        addPane()   // erste Kachel
+
+        // Session-Restore (#11): letztes Layout (Pane-Anzahl + CWDs) wiederherstellen;
+        // ohne/mit korruptem Snapshot startet wie bisher eine Kachel im Home.
+        if let snap = SessionStore.load() {
+            for dir in snap.paneDirectories { addPane(startingIn: dir) }
+        } else {
+            addPane()
+        }
+
+        // Beim Beenden den aktuellen Stand sichern (CWDs werden live ausgelesen).
+        terminateObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.saveSession() }
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit {
+        if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
+    }
+
+    private func saveSession() {
+        guard !panes.isEmpty else { return }
+        SessionStore.save(SessionSnapshot(paneDirectories: panes.map { $0.currentDirectory }))
+    }
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
