@@ -158,7 +158,8 @@ final class LatexTerminalView: LocalProcessTerminalView {
 
     /// Das per OSC 7 gemeldete Arbeitsverzeichnis als nackter Dateipfad (typ.
     /// "file://host/Users/…"), oder nil wenn (noch) keines gemeldet wurde.
-    private func currentWorkingDirectory() -> String? {
+    /// Intern sichtbar: ⌘T-CWD-Vererbung (#8) und Session-Restore lesen es.
+    func currentWorkingDirectory() -> String? {
         guard let raw = getTerminal().hostCurrentDirectory else { return nil }
         if let url = URL(string: raw), url.isFileURL { return url.path }
         return raw.hasPrefix("/") ? raw : nil
