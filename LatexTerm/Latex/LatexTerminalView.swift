@@ -176,6 +176,17 @@ final class LatexTerminalView: LocalProcessTerminalView {
         NSWorkspace.shared.open(url)
     }
 
+    /// Appearance-/Theme-Wechsel zur Laufzeit sofort an die Overlays pushen (#12):
+    /// rescan() liest Terminal-Hintergrund & Co. frisch und sendet bei Änderung ein
+    /// setConfig() (restylt alle Formel-Divs ohne KaTeX-Rebuild). Ohne diesen Trigger
+    /// fror der Overlay-Hintergrund bis zum nächsten Output-Rescan ein. Die App
+    /// erzwingt aktuell Dark + feste Farben — der Pfad greift, sobald echtes
+    /// Theming existiert, und kostet bis dahin nichts.
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        onNeedsFullRescan?()
+    }
+
     override func scrolled(source: TerminalView, position: Double) {
         super.scrolled(source: source, position: position)
         onScrolled?()
