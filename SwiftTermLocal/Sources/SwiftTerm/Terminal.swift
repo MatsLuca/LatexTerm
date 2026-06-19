@@ -6299,13 +6299,84 @@ open class Terminal {
             return false
         }
 
-        return seamContainsGhosttyImplicitLink(
+        if seamContainsGhosttyImplicitLink(
             upper: upper,
             lower: lower,
             upperLastCol: upperInfo.lastCol,
             lowerFirstCol: lowerInfo.firstCol,
             in: buffer
+        ) {
+            return true
+        }
+
+        // Fallback for the *interior* of a long wrapped path. The strict seam
+        // test above requires a '.' inside the local seam window (the regex's
+        // dotted-path lookahead). A path that wraps across three or more rows
+        // has middle seams with no nearby dot (e.g. ".../3_Studium/" joining
+        // "2026_SoSe/..."), so the strict test breaks the chain mid-link and we
+        // only recover fragments. Accept a tight, slash-bearing continuation
+        // instead — provided the lower row does not itself begin a fresh
+        // absolute/home anchor, which would mark a separate list item ("/a"
+        // over "/b") rather than a continuation.
+        return seamIsTightPathContinuation(
+            upper: upper,
+            lower: lower,
+            upperLastCol: upperInfo.lastCol,
+            upperFirstChar: upperInfo.firstChar,
+            lowerFirstCol: lowerInfo.firstCol,
+            in: buffer
         )
+    }
+
+    private func seamIsTightPathContinuation(upper: Int, lower: Int, upperLastCol: Int, upperFirstChar: Character, lowerFirstCol: Int, in buffer: Buffer) -> Bool
+    {
+        guard upper >= 0, upper < buffer.lines.count, lower >= 0, lower < buffer.lines.count else {
+            return false
+        }
+
+        let upperLine = buffer.lines[upper]
+        let upperLimit = min(min(cols, upperLine.count), upperLastCol + 1)
+        guard upperLimit > 0 else {
+            return false
+        }
+        let upperText = implicitLineSegmentText(line: upperLine, startCol: max(0, upperLimit - 96), endCol: upperLimit)
+
+        let lowerLine = buffer.lines[lower]
+        let lowerLimit = min(min(cols, lowerLine.count), lowerLine.getTrimmedLength())
+        guard lowerFirstCol < lowerLimit else {
+            return false
+        }
+        let lowerText = implicitLineSegmentText(line: lowerLine, startCol: lowerFirstCol, endCol: min(lowerLimit, lowerFirstCol + 96))
+
+        // Reject only a genuine list of anchored paths: when BOTH rows begin
+        // (at their first non-blank column) with a fresh absolute/home anchor,
+        // they are two separate links ("/a" over "/b"), not a continuation. A
+        // wrap that merely broke just before a '/' has a non-anchored upper row
+        // (it is itself a mid-path fragment), so it still joins. A wrapped list
+        // item's tail row is short and never reaches the fill threshold above,
+        // so cross-item joins cannot slip through here.
+        func isAnchor(_ ch: Character?) -> Bool { ch == "/" || ch == "~" }
+        if isAnchor(upperFirstChar), isAnchor(lowerText.first) {
+            return false
+        }
+
+        let cont = Self.ghosttyContinuationCharacters
+        func isLinkChar(_ ch: Character) -> Bool { ch.unicodeScalars.allSatisfy { cont.contains($0) } }
+        var tail = ""
+        for ch in upperText.reversed() {
+            if isLinkChar(ch) { tail.append(ch) } else { break }
+        }
+        var head = ""
+        for ch in lowerText {
+            if isLinkChar(ch) { head.append(ch) } else { break }
+        }
+        guard !tail.isEmpty, !head.isEmpty else {
+            return false
+        }
+
+        // The tight run straddling the seam should look like a path being
+        // continued (a separator on either side of the break).
+        return tail.contains("/") || head.contains("/")
     }
 
     private func linkRowEdgeInfo(row: Int, in buffer: Buffer) -> LinkRowEdgeInfo?
