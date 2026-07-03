@@ -6339,14 +6339,18 @@ open class Terminal {
         guard upperLimit > 0 else {
             return false
         }
-        let upperText = implicitLineSegmentText(line: upperLine, startCol: max(0, upperLimit - 96), endCol: upperLimit)
+        // No 96-col window here (unlike the strict seam test, where it bounds
+        // regex cost): the tail/head scan is linear and already bounded by the
+        // row width, and a window can hide the run's only '/' (a >96-char
+        // slashless URL token at the seam) — falsely rejecting a real wrap.
+        let upperText = implicitLineSegmentText(line: upperLine, startCol: 0, endCol: upperLimit)
 
         let lowerLine = buffer.lines[lower]
         let lowerLimit = min(min(cols, lowerLine.count), lowerLine.getTrimmedLength())
         guard lowerFirstCol < lowerLimit else {
             return false
         }
-        let lowerText = implicitLineSegmentText(line: lowerLine, startCol: lowerFirstCol, endCol: min(lowerLimit, lowerFirstCol + 96))
+        let lowerText = implicitLineSegmentText(line: lowerLine, startCol: lowerFirstCol, endCol: lowerLimit)
 
         // Reject only a genuine list of anchored paths: when BOTH rows begin
         // (at their first non-blank column) with a fresh absolute/home anchor,
@@ -6360,8 +6364,14 @@ open class Terminal {
             return false
         }
 
+        // The strict seam regex is Unicode-aware (ICU \w matches umlauts and
+        // other letters), so the in-run scan must be too — the ASCII-only
+        // ghosttyContinuationCharacters set would truncate tail/head at e.g.
+        // the 'ü' in "…/Prüfungsübersicht/…" and reject a real continuation.
         let cont = Self.ghosttyContinuationCharacters
-        func isLinkChar(_ ch: Character) -> Bool { ch.unicodeScalars.allSatisfy { cont.contains($0) } }
+        func isLinkChar(_ ch: Character) -> Bool {
+            ch.isLetter || ch.isNumber || ch.unicodeScalars.allSatisfy { cont.contains($0) }
+        }
         var tail = ""
         for ch in upperText.reversed() {
             if isLinkChar(ch) { tail.append(ch) } else { break }
