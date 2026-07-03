@@ -223,13 +223,18 @@ final class LatexTerminalView: LocalProcessTerminalView {
             if focused { showFindInterface(); return true }
             return super.performKeyEquivalent(with: event)
         }
-        if a == "+" || b == "+" || a == "=" || b == "=" {
+        // ⌘⇧+/−/0 gehören dem Zeilenabstand-Menü. Shift ist nur beim `=`-Zeichen
+        // toleriert: auf US-Layouts ist ⌘+ physisch ⌘⇧= — auf Layouts mit
+        // ungeshiftetem `+` (deutsch) ist ⌘⇧+ dagegen eine bewusst andere Kombi
+        // und darf hier nicht als Schriftgröße verschluckt werden.
+        let shifted = mods.contains(.shift)
+        if a == "=" || b == "=" || (!shifted && (a == "+" || b == "+")) {
             adjustFont(by: +1); return true
         }
-        if a == "-" || b == "-" {
+        if !shifted, a == "-" || b == "-" {
             adjustFont(by: -1); return true
         }
-        if a == "0" || b == "0" {
+        if !shifted, a == "0" || b == "0" {
             setFont(size: Self.defaultFontSize); return true
         }
         return super.performKeyEquivalent(with: event)

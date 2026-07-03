@@ -96,10 +96,11 @@ xcodebuild test -project LatexTerm.xcodeproj -scheme LatexTerm \
 | `⌘⇧0` | Reset line spacing to default (8px) |
 | `⌥⌘+` / `⌥⌘-` | Increase/decrease formula render scale by 0.1× |
 | `⌥⌘0` | Reset formula scale to 1.0× |
+| `⌘,` | Open the Settings window (all of the above as sliders/color pickers) |
 
 Font size is persisted in `UserDefaults` under `LatexTerm.fontSize` (range 6–48pt) and restored on next launch. It is **global**: changing it in one pane updates all panes (broadcast via the `LatexTerminalView.fontDidChange` notification).
 
-All formula settings (**color**, **enabled**, **line spacing**, **scale**) are also persisted and restored via `FormulaSettings` in `UserDefaults`.
+All formula settings (**color**, **enabled**, **line spacing**, **scale**) are also persisted and restored via `FormulaSettings` in `UserDefaults`. Everything is adjustable in one place via the native **Settings window** (`⌘,`) — it writes through the same paths as the menu shortcuts, so menu and window never disagree.
 
 ## Testing formulas
 
@@ -126,10 +127,13 @@ The README shows a GIF of formulas rendering live as you type. To regenerate it:
 ```
 LatexTerm.xcodeproj/         App project (SwiftUI lifecycle)
 LatexTerm/
-  LatexTermApp.swift         @main App definition + "Terminal" CommandMenu
+  LatexTermApp.swift         @main App definition + "Terminal" CommandMenu + Settings scene
+  SettingsView.swift         Native Settings window (⌘,) — sliders/color pickers for all options
   TerminalContainer.swift    NSViewRepresentable wrapping the split container
-  TerminalSplit.swift        TerminalPane (shell + overlays per tile) +
+  TerminalSplit.swift        TerminalPane (shell + overlays per tile) + PaneContainerView (tile
+                              chrome: inset, focus ring, corner rules) +
                               TerminalSplitView (animated, vibrancy-integrated auto-tiling grid layout)
+  SessionStore.swift         Session snapshot (pane CWDs) for restore on relaunch
   FormulaSettings.swift      Settings singleton (UserDefaults + NotificationCenter)
   Latex/
     LatexTerminalView.swift  LocalProcessTerminalView subclass: overlay host,

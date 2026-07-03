@@ -73,5 +73,11 @@ struct LatexTermApp: App {
                 }
             }
         }
+
+        // Natives Einstellungen-Fenster (⌘, — der Menüpunkt "Einstellungen…" im
+        // App-Menü kommt mit der Settings-Szene automatisch).
+        Settings {
+            SettingsView()
+        }
     }
 }

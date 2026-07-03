@@ -1,6 +1,50 @@
 import AppKit
 import SwiftTerm
 
+/// Äußere Hülle einer Terminal-Kachel: trägt abgerundete Ecken, Fokus-Rahmen und
+/// Dimmung und hält den Terminal-Inhalt per Innenabstand von der Kante weg —
+/// SwiftTerm zeichnet ab x=0, ohne Inset klebte der Text Pixel an Pixel am Rahmen.
+/// Das Inset lebt bewusst HIER statt im Fork: Zeichnen, Maus-Koordinaten und die
+/// Overlay-Grid→Pixel-Mathematik nehmen alle den Terminal-Ursprung 0 an.
+final class PaneContainerView: NSView {
+    static let contentInset: CGFloat = 4
+    override var isFlipped: Bool { true }
+
+    /// Ziel einer laufenden (animierten) Umsortierung. Solange gesetzt, ignorieren
+    /// die per Animations-Tick eintrudelnden Zwischengrößen die Subviews.
+    private var pinnedTargetSize: NSSize?
+
+    /// Terminal SOFORT auf die Ziel-Geometrie der Umsortierung setzen; die Hülle
+    /// animiert hinterher und gibt den Inhalt progressiv frei (masksToBounds).
+    /// Ohne das Pinning setzte `animator().frame` den Frame pro Animations-Tick
+    /// (~13× in 0,22s) → ebenso viele PTY-Resizes: SwiftTerm reflowt bei JEDER
+    /// Spaltenänderung den kompletten Scrollback (verlustbehaftet über
+    /// Zwischenbreiten!), und laufende TUIs zeichnen bei jeder Zwischenbreite neu —
+    /// deren Fragmente vermüllen den Scrollback dauerhaft.
+    func pinContent(forTargetSize target: NSSize) {
+        let inner = NSRect(origin: .zero, size: target)
+            .insetBy(dx: Self.contentInset, dy: Self.contentInset)
+        guard inner.width > 0, inner.height > 0 else { pinnedTargetSize = nil; return }
+        pinnedTargetSize = target
+        for sub in subviews { sub.frame = inner }
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if let target = pinnedTargetSize {
+            // Zwischengröße der Animation → Inhalt steht schon auf dem Ziel.
+            // Ziel erreicht → Pin lösen (jede Umsortierung pinnt ohnehin neu).
+            if newSize == target { pinnedTargetSize = nil }
+            return
+        }
+        // Direkter Frame-Set außerhalb einer Umsortierung (Robustheits-Fallback):
+        // synchron mitziehen, damit der Inhalt der Hülle nie einen Tick hinterherläuft.
+        let inner = bounds.insetBy(dx: Self.contentInset, dy: Self.contentInset)
+        guard inner.width > 0, inner.height > 0 else { return }
+        for sub in subviews { sub.frame = inner }
+    }
+}
+
 /// Eine einzelne Terminal-Kachel: eigener Shell-Prozess, eigener OverlayController
 /// (= eigene LaTeX-Overlays). Mehrere Panes leben nebeneinander in `TerminalSplitView`.
 /// Übernimmt die Rolle, die früher der `TerminalContainer.Coordinator` für das einzelne
@@ -8,8 +52,17 @@ import SwiftTerm
 final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     let view: LatexTerminalView
+    /// Von der Split-View gemountete/layoutete Hülle; `view` (das Terminal) lebt darin.
+    let container: PaneContainerView
     private let controller: OverlayController
     private var settingsObserver: NSObjectProtocol?
+    /// Aktueller Fokus-Zustand (vom `onFocusChanged`-Callback gepflegt).
+    private var hasFocus = false
+    /// Fokus-Rahmen nur zeigen, wenn es mehrere Kacheln gibt — bei einer einzelnen
+    /// umrandet er nur das ganze Fenster und erklärt nichts. Setzt die Split-View.
+    var showsFocusBorder = true {
+        didSet { if showsFocusBorder != oldValue { applyFocusStyle(animated: false) } }
+    }
 
     /// Shell-Prozess beendet → diese Pane soll entfernt werden.
     var onClosed: ((TerminalPane) -> Void)?
@@ -35,32 +88,31 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         term.getTerminal().setCursorStyle(.blinkBlock)
         term.extraLineSpacing = settings.extraLineSpacing  // aus UserDefaults
 
-        // Kachel-Styling mit abgerundeten Ecken
-        term.wantsLayer = true
-        term.layer?.cornerRadius = 8
-        term.layer?.masksToBounds = true
-        term.layer?.borderWidth = 0
-        term.layer?.borderColor = settings.accentColor.withAlphaComponent(0.65).cgColor
-        
+        // Kachel-Styling (Ecken/Rahmen/Dimmung) liegt auf der Container-Hülle;
+        // ihr Hintergrund füllt das Content-Inset in der Terminal-Farbe auf.
+        let box = PaneContainerView()
+        box.wantsLayer = true
+        box.layer?.cornerRadius = 8
+        box.layer?.masksToBounds = true
+        box.layer?.backgroundColor = term.nativeBackgroundColor.cgColor
+        box.layer?.borderWidth = 0
+        box.layer?.borderColor = settings.accentColor.withAlphaComponent(0.65).cgColor
         // Kachel ist standardmäßig inaktiv (abgedunkelt), bis sie fokussiert wird
-        term.alphaValue = 0.65
+        box.alphaValue = 0.65
+        box.addSubview(term)
 
         self.view = term
+        self.container = box
         self.controller = OverlayController(terminal: term)
         super.init()
 
         // Fokus-Visualisierung
-        term.onFocusChanged = { [weak self, weak term] focused in
-            guard let term else { return }
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.18
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                term.animator().alphaValue = focused ? 1.0 : 0.65
-                term.layer?.borderColor = FormulaSettings.shared.accentColor.withAlphaComponent(0.65).cgColor
-                term.layer?.borderWidth = focused ? 1.5 : 0
-            }
+        term.onFocusChanged = { [weak self] focused in
+            guard let self else { return }
+            self.hasFocus = focused
+            self.applyFocusStyle(animated: true)
             // Fokuswechsel übernimmt den zuletzt von DIESER Shell gemeldeten Titel (#21).
-            if focused { self?.applyStoredTitle() }
+            if focused { self.applyStoredTitle() }
         }
 
         term.processDelegate = self
@@ -89,7 +141,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             let settings = FormulaSettings.shared
             term?.extraLineSpacing = settings.extraLineSpacing
             term?.caretColor = settings.accentColor
-            term?.layer?.borderColor = settings.accentColor.withAlphaComponent(0.65).cgColor
+            self?.container.layer?.borderColor = settings.accentColor.withAlphaComponent(0.65).cgColor
 
             // Nur wenn der Modus selbst eingeschaltet wurde, sofort analysieren —
             // sonst stieße jede (adaptiv gesetzte) accentColor-Änderung gleich die
@@ -103,6 +155,26 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     deinit {
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
+    }
+
+    /// Dimmung immer; Fokus-Rahmen nur, wenn Fokus UND mehrere Kacheln (`showsFocusBorder`).
+    private func applyFocusStyle(animated: Bool) {
+        let alpha: CGFloat = hasFocus ? 1.0 : 0.65
+        let borderWidth: CGFloat = (hasFocus && showsFocusBorder) ? 1.5 : 0
+        let borderColor = FormulaSettings.shared.accentColor.withAlphaComponent(0.65).cgColor
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.18
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                container.animator().alphaValue = alpha
+                container.layer?.borderColor = borderColor
+                container.layer?.borderWidth = borderWidth
+            }
+        } else {
+            container.alphaValue = alpha
+            container.layer?.borderColor = borderColor
+            container.layer?.borderWidth = borderWidth
+        }
     }
 
     private var contrastPending = false
@@ -424,8 +496,9 @@ final class TerminalSplitView: NSView {
         pane.onCloseRequested = { [weak self] p in self?.closePane(p) }
         pane.onEnsurePaneCount = { [weak self] n in self?.ensurePaneCount(n) }
         panes.append(pane)
-        addSubview(pane.view)
+        addSubview(pane.container)
         pane.start(in: directory)
+        updateFocusBorders()
         relayout(animated: true)
         // Fokus erst im nächsten Runloop – der frisch hinzugefügte View ist dann bereit.
         DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(pane.view) }
@@ -448,10 +521,17 @@ final class TerminalSplitView: NSView {
     private func removePane(_ pane: TerminalPane) {
         guard let idx = panes.firstIndex(where: { $0 === pane }) else { return }
         panes.remove(at: idx)
-        pane.view.removeFromSuperview()
+        pane.container.removeFromSuperview()
         guard !panes.isEmpty else { window?.close(); return }
+        updateFocusBorders()
         relayout(animated: true)
         window?.makeFirstResponder(panes[min(idx, panes.count - 1)].view)
+    }
+
+    /// Fokus-Rahmen-Regel: nur bei ≥2 Kacheln gibt es etwas zu unterscheiden.
+    private func updateFocusBorders() {
+        let multi = panes.count > 1
+        for pane in panes { pane.showsFocusBorder = multi }
     }
 
     // MARK: - Grid
@@ -494,54 +574,57 @@ final class TerminalSplitView: NSView {
         let rows = gridRows(for: n, width: W, height: H)
         let counts = rowCounts(n: n, rows: rows)
 
-        let useAnim = animated && !isFirstLayout && window != nil
+        var frames: [NSRect] = []
+        var cornerMasks: [CACornerMask] = []
+        frames.reserveCapacity(n)
+        cornerMasks.reserveCapacity(n)
+        for r in 0..<rows {
+            let yTop = (H * CGFloat(r) / CGFloat(rows)).rounded()
+            let yBot = (H * CGFloat(r + 1) / CGFloat(rows)).rounded()
+            let c = counts[r]
+            for k in 0..<c {
+                let xL = (W * CGFloat(k) / CGFloat(c)).rounded()
+                let xR = (W * CGFloat(k + 1) / CGFloat(c)).rounded()
+                let left   = xL + (k == 0 ? 0 : g / 2)
+                let right  = xR - (k == c - 1 ? 0 : g / 2)
+                let top    = yTop + (r == 0 ? 0 : g / 2)
+                let bottom = yBot - (r == rows - 1 ? 0 : g / 2)
+                frames.append(NSRect(x: left, y: top,
+                                     width: max(0, right - left),
+                                     height: max(0, bottom - top)))
 
-        if useAnim {
-            NSAnimationContext.runAnimationGroup({ context in
+                // Nur Ecken an Innen-Stegen runden. An den Außenkanten übernimmt
+                // die (größere) Fenster-Rundung von macOS — ein eigener 8px-Radius
+                // dort kollidiert sichtbar mit ihr („Doppelabrundung" unterm
+                // Titlebar-Bogen). Eine Ecke ist außen, wenn BEIDE angrenzenden
+                // Kanten außen liegen. AppKit flippt die Layer-Geometrie mit
+                // (isFlipped) → minY = oben.
+                let topOuter = r == 0, bottomOuter = r == rows - 1
+                let leftOuter = k == 0, rightOuter = k == c - 1
+                var mask = CACornerMask()
+                if !(topOuter && leftOuter)     { mask.insert(.layerMinXMinYCorner) }
+                if !(topOuter && rightOuter)    { mask.insert(.layerMaxXMinYCorner) }
+                if !(bottomOuter && leftOuter)  { mask.insert(.layerMinXMaxYCorner) }
+                if !(bottomOuter && rightOuter) { mask.insert(.layerMaxXMaxYCorner) }
+                cornerMasks.append(mask)
+            }
+        }
+
+        for (pane, mask) in zip(panes, cornerMasks) { pane.container.layer?.maskedCorners = mask }
+
+        // Terminals in beiden Zweigen VOR dem Frame-Set auf die Zielgröße pinnen:
+        // genau EIN PTY-Resize (+ Scrollback-Reflow) pro Umsortierung, egal wie
+        // viele Zwischengrößen die Animation produziert.
+        for (pane, frame) in zip(panes, frames) { pane.container.pinContent(forTargetSize: frame.size) }
+
+        if animated && !isFirstLayout && window != nil {
+            NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.22
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                
-                var idx = 0
-                for r in 0..<rows {
-                    let yTop = (H * CGFloat(r) / CGFloat(rows)).rounded()
-                    let yBot = (H * CGFloat(r + 1) / CGFloat(rows)).rounded()
-                    let c = counts[r]
-                    for k in 0..<c {
-                        let xL = (W * CGFloat(k) / CGFloat(c)).rounded()
-                        let xR = (W * CGFloat(k + 1) / CGFloat(c)).rounded()
-                        let left   = xL + (k == 0 ? 0 : g / 2)
-                        let right  = xR - (k == c - 1 ? 0 : g / 2)
-                        let top    = yTop + (r == 0 ? 0 : g / 2)
-                        let bottom = yBot - (r == rows - 1 ? 0 : g / 2)
-                        
-                        let targetFrame = NSRect(x: left, y: top,
-                                                 width: max(0, right - left),
-                                                 height: max(0, bottom - top))
-                        panes[idx].view.animator().frame = targetFrame
-                        idx += 1
-                    }
-                }
-            }, completionHandler: nil)
-        } else {
-            var idx = 0
-            for r in 0..<rows {
-                let yTop = (H * CGFloat(r) / CGFloat(rows)).rounded()
-                let yBot = (H * CGFloat(r + 1) / CGFloat(rows)).rounded()
-                let c = counts[r]
-                for k in 0..<c {
-                    let xL = (W * CGFloat(k) / CGFloat(c)).rounded()
-                    let xR = (W * CGFloat(k + 1) / CGFloat(c)).rounded()
-                    let left   = xL + (k == 0 ? 0 : g / 2)
-                    let right  = xR - (k == c - 1 ? 0 : g / 2)
-                    let top    = yTop + (r == 0 ? 0 : g / 2)
-                    let bottom = yBot - (r == rows - 1 ? 0 : g / 2)
-                    
-                    panes[idx].view.frame = NSRect(x: left, y: top,
-                                                   width: max(0, right - left),
-                                                   height: max(0, bottom - top))
-                    idx += 1
-                }
+                for (pane, frame) in zip(panes, frames) { pane.container.animator().frame = frame }
             }
+        } else {
+            for (pane, frame) in zip(panes, frames) { pane.container.frame = frame }
         }
         isFirstLayout = false
     }

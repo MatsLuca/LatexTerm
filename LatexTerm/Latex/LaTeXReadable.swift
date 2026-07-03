@@ -25,12 +25,19 @@ enum LaTeXReadable {
             : r.replacingOccurrences(of: " +", with: " ", options: .regularExpression)
         let result = cleaned.trimmingCharacters(in: .whitespacesAndNewlines)
 
-        cacheLock.lock(); cache[latex] = result; cacheLock.unlock()
+        cacheLock.lock()
+        // Simpler Überlauf-Schutz statt LRU: der Cache dient nur dazu, wiederholte
+        // Konvertierungen derselben sichtbaren Formeln zu sparen — nach einem
+        // Voll-Reset ist er in einem Rescan wieder warm.
+        if cache.count >= maxCacheEntries { cache.removeAll(keepingCapacity: true) }
+        cache[latex] = result
+        cacheLock.unlock()
         return result
     }
 
     private static let cacheLock = NSLock()
     private static var cache: [String: String] = [:]
+    private static let maxCacheEntries = 512
 
     // MARK: - Rekursiver Parser
 

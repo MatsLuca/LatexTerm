@@ -300,12 +300,18 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         web.navigationDelegate = self
         addSubview(web)
 
-        latexButton = Self.makeButton("LaTeX", target: self, action: #selector(copyLatex))
-        readableButton = Self.makeButton("Lesbar", target: self, action: #selector(copyReadable))
-        imageButton = Self.makeButton("Bild", target: self, action: #selector(copyImage))
-        pdfButton = Self.makeButton("PDF", target: self, action: #selector(copyPDF))
-        markdownButton = Self.makeButton("MD", target: self, action: #selector(copyMarkdown))
-        editButton = Self.makeButton("✎", target: self, action: #selector(toggleEdit))
+        latexButton = Self.makeButton("LaTeX", target: self, action: #selector(copyLatex),
+                                      toolTip: "LaTeX-Quelle kopieren")
+        readableButton = Self.makeButton("Lesbar", target: self, action: #selector(copyReadable),
+                                         toolTip: "Als Unicode-Text kopieren (√, ½, x² …)")
+        imageButton = Self.makeButton("Bild", target: self, action: #selector(copyImage),
+                                      toolTip: "Als PNG-Bild kopieren")
+        pdfButton = Self.makeButton("PDF", target: self, action: #selector(copyPDF),
+                                    toolTip: "Als Vektor-PDF kopieren (verlustfrei skalierbar)")
+        markdownButton = Self.makeButton("MD", target: self, action: #selector(copyMarkdown),
+                                         toolTip: "Als Markdown mit eingebettetem Bild kopieren")
+        editButton = Self.makeButton("✎", target: self, action: #selector(toggleEdit),
+                                     toolTip: "Bearbeiten — Enter schreibt in die Prompt-Zeile")
         buttonBar.addSubview(latexButton)
         buttonBar.addSubview(readableButton)
         buttonBar.addSubview(imageButton)
@@ -329,11 +335,13 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
 
     required init?(coder: NSCoder) { fatalError() }
 
-    private static func makeButton(_ title: String, target: AnyObject, action: Selector) -> NSButton {
+    private static func makeButton(_ title: String, target: AnyObject, action: Selector,
+                                   toolTip: String? = nil) -> NSButton {
         let b = NSButton(title: title, target: target, action: action)
         b.bezelStyle = .rounded
         b.controlSize = .small
         b.font = .systemFont(ofSize: 11)
+        b.toolTip = toolTip
         return b
     }
 
