@@ -1055,7 +1055,16 @@ open class Terminal {
     {
         parser.oscHandlers [code] = handler
     }
-    
+
+    /// LatexTerm patch: public read access to the active ANSI color table, so the
+    /// embedding app can resolve `Attribute.Color.ansi256` cell attributes to the
+    /// concrete RGB values this terminal currently displays (palette + OSC 4 edits).
+    public func ansiColor (code: Int) -> Color?
+    {
+        guard code >= 0 && code < ansiColors.count else { return nil }
+        return ansiColors [code]
+    }
+
     func cmdSet8BitControls ()
     {
         cc.send8bit = true

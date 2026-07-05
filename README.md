@@ -103,6 +103,17 @@ Font size is persisted in `UserDefaults` under `LatexTerm.fontSize` (range 6–4
 
 All formula settings (**color**, **enabled**, **line spacing**, **scale**) are also persisted and restored via `FormulaSettings` in `UserDefaults`. Everything is adjustable in one place via the native **Settings window** (`⌘,`) — it writes through the same paths as the menu shortcuts, so menu and window never disagree.
 
+### Per-pane accent color via escape sequence (OSC 5522)
+
+Any program running in a pane can set that pane's accent color (caret, focus border, zoom badge) in-band — no sockets, no config, works through SSH:
+
+```sh
+printf '\e]5522;accent=#e85e3e\a'   # set this pane's accent
+printf '\e]5522;accent=reset\a'     # back to the global/adaptive accent
+```
+
+The override wins over the global and adaptive accent for that pane until reset or pane close (not persisted). The payload format is `key=value`; unknown keys are ignored (the channel is meant to grow — see the Claude-Code-integration tracking issue #29). Security notes in [SECURITY.md](SECURITY.md).
+
 ## Testing formulas
 
 `echo` in zsh interprets escapes like `\f` and breaks LaTeX in output. Use `printf` or a here-doc instead:

@@ -29,6 +29,17 @@ Please do not open a public issue with full exploit details before a fix is avai
   inherent to the Accessibility permission itself (keystroke synthesis could do
   the same), but it is worth knowing it is an intentional, documented surface —
   not an oversight.
+- **In-band pane control channel, OSC 5522 (by design):** any program writing to
+  a pane's PTY can emit `ESC ] 5522 ; key=value BEL/ST` to control cosmetic
+  per-pane state — currently `accent=#RRGGBB` / `accent=reset` (accent colour of
+  caret, focus border, zoom badge). This is intentionally in-band (like OSC 7/8)
+  so Claude Code hooks/statuslines can drive it without extra infrastructure. The
+  parser is strict (exactly 6 hex digits or `reset`; unknown keys ignored) and the
+  effect is purely visual — no command execution, no file access, no persistence.
+  Untrusted output (`cat`-ing a hostile file) can therefore recolour a pane, which
+  matches the blast radius of standard OSC 4/10/11 colour sequences in mainstream
+  terminals. Future keys added to this channel must keep that cosmetic-only bar or
+  gain explicit confirmation UI.
 - **Cmd-click link opening (standard terminal behaviour):** Cmd-clicking a link
   opens arbitrary URL schemes via `NSWorkspace` (http, mailto, custom schemes…);
   file paths are resolved against the OSC 7 working directory and revealed via

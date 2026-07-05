@@ -10,8 +10,9 @@ struct LatexTermApp: App {
         WindowGroup("LatexTerm") {
             ZStack {
                 Color(red: 23/255.0, green: 20/255.0, blue: 20/255.0)
+                // Bewusst OHNE horizontales Padding: die Akzent-Outlines der
+                // Kacheln sollen an den physischen Fensterkanten anliegen.
                 TerminalContainer()
-                    .padding(.horizontal, 12)
             }
             .frame(minWidth: 640, minHeight: 400)
             .preferredColorScheme(.dark)

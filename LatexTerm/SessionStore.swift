@@ -12,6 +12,10 @@ struct SessionSnapshot: Codable {
     var version: Int = 1
     /// Arbeitsverzeichnis je Pane, in Kachel-Reihenfolge. `nil` = Home.
     var paneDirectories: [String?]
+    /// Akzentfarbe je Pane als `#RRGGBB` (#24), Kachel-Reihenfolge wie oben.
+    /// `nil` = keine Pane-Farbe (global/adaptiv). Optional-Feld: Snapshots
+    /// älterer Versionen ohne das Feld laden weiter (decodeIfPresent-Semantik).
+    var paneAccents: [String?]?
 }
 
 enum SessionStore {
