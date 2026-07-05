@@ -66,6 +66,8 @@ final class LatexTerminalView: LocalProcessTerminalView {
     var onCloseRequested: (() -> Void)?
     /// Cmd+1…9: auf so viele Kacheln auffüllen (nur erweitern, nie schließen).
     var onEnsurePaneCount: ((Int) -> Void)?
+    /// Cmd+⏎: diese Kachel über das ganze Fenster zoomen bzw. zurück ins Grid (#26).
+    var onZoomRequested: (() -> Void)?
     /// Fokus-Änderung an den Kachel-Controller melden.
     var onFocusChanged: ((Bool) -> Void)?
 
@@ -213,6 +215,15 @@ final class LatexTerminalView: LocalProcessTerminalView {
         }
         if let d = Int(a) ?? Int(b), (1...9).contains(d), !mods.contains(.shift) {
             onEnsurePaneCount?(d); return true
+        }
+        if (a == "\r" || b == "\r"), !mods.contains(.shift) {
+            // ⌘⏎: Pane-Zoom-Toggle (#26). Nur der ⌘⏎-Shortcut beendet den Zoom —
+            // Esc bleibt bewusst frei, das gehört vim/TUIs/Claude Code. Gleiche
+            // Fokus-Weiterreichung wie ⌘W.
+            let fr = window?.firstResponder
+            let focused = (fr === self) || ((fr as? NSView)?.isDescendant(of: self) ?? false)
+            if focused { onZoomRequested?(); return true }
+            return super.performKeyEquivalent(with: event)
         }
         if (a == "f" || b == "f"), !mods.contains(.shift) {
             // ⌘F: Suchleiste der FOKUSSIERTEN Kachel (#9). Gleiche Fokus-Weiterreichung

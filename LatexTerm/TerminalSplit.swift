@@ -72,6 +72,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     var onCloseRequested: ((TerminalPane) -> Void)?
     /// Cmd+1…9 in dieser Pane → auf so viele Kacheln auffüllen.
     var onEnsurePaneCount: ((Int) -> Void)?
+    /// Cmd+⏎ in dieser Pane → Zoom-Toggle (#26).
+    var onZoomRequested: ((TerminalPane) -> Void)?
 
     override init() {
         let settings = FormulaSettings.shared
@@ -131,6 +133,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             self.onCloseRequested?(self)
         }
         term.onEnsurePaneCount = { [weak self] n in self?.onEnsurePaneCount?(n) }
+        term.onZoomRequested = { [weak self] in
+            guard let self else { return }
+            self.onZoomRequested?(self)
+        }
 
         // Auf Einstellungs-Änderungen reagieren
         settingsObserver = NotificationCenter.default.addObserver(
@@ -410,6 +416,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 final class TerminalSplitView: NSView {
 
     private var panes: [TerminalPane] = []
+    /// Gezoomte Kachel (#26): liegt über allen anderen auf voller Fenstergröße.
+    /// Das Grid darunter bleibt unangetastet — Entzoomen ist ein normales relayout().
+    /// Weak als Robustheitsnetz; jede Grid-Änderung entzoomt ohnehin explizit.
+    private weak var zoomedPane: TerminalPane?
     private let vibrancyView = NSVisualEffectView()
     private var isFirstLayout = true
     private var terminateObserver: NSObjectProtocol?
@@ -495,6 +505,11 @@ final class TerminalSplitView: NSView {
         }
         pane.onCloseRequested = { [weak self] p in self?.closePane(p) }
         pane.onEnsurePaneCount = { [weak self] n in self?.ensurePaneCount(n) }
+        pane.onZoomRequested = { [weak self] p in self?.toggleZoom(p) }
+        // Grid-Änderung beendet einen aktiven Zoom: die neue Kachel soll sichtbar
+        // im Grid entstehen, nicht unsichtbar unter der gezoomten (⌘T/⌘1–9-Policy).
+        zoomedPane = nil
+        updateZoomBadge()
         panes.append(pane)
         addSubview(pane.container)
         pane.start(in: directory)
@@ -520,6 +535,10 @@ final class TerminalSplitView: NSView {
 
     private func removePane(_ pane: TerminalPane) {
         guard let idx = panes.firstIndex(where: { $0 === pane }) else { return }
+        // Auch wenn eine ANDERE (verdeckte) Kachel stirbt: das Grid darunter ändert
+        // sich — Zoom beenden, damit der Nutzer den neuen Zustand sieht.
+        zoomedPane = nil
+        updateZoomBadge()
         panes.remove(at: idx)
         pane.container.removeFromSuperview()
         guard !panes.isEmpty else { window?.close(); return }
@@ -529,9 +548,68 @@ final class TerminalSplitView: NSView {
     }
 
     /// Fokus-Rahmen-Regel: nur bei ≥2 Kacheln gibt es etwas zu unterscheiden.
+    /// Im Zoom ist effektiv nur eine Kachel sichtbar → Rahmen würde wieder nur
+    /// das ganze Fenster umranden, also auch dann aus.
     private func updateFocusBorders() {
-        let multi = panes.count > 1
+        let multi = panes.count > 1 && zoomedPane == nil
         for pane in panes { pane.showsFocusBorder = multi }
+    }
+
+    // MARK: - Zoom (#26)
+
+    /// ⌘⏎: `pane` über das ganze Fenster ziehen bzw. zurück ins Grid. Kein Umbau
+    /// des Grids — nur ein Merker, den relayout() als Sonderfall behandelt.
+    private func toggleZoom(_ pane: TerminalPane) {
+        guard panes.count > 1 else { return }   // eine Kachel füllt das Fenster eh
+        zoomedPane = (zoomedPane === pane) ? nil : pane
+        updateFocusBorders()
+        updateZoomBadge()
+        relayout(animated: true)
+        window?.makeFirstResponder(pane.view)
+    }
+
+    /// Titlebar-Badge, solange eine Kachel gezoomt ist: gezoomt sieht das Fenster
+    /// aus wie ein normales Ein-Kachel-Fenster — ohne Hinweis vergisst man leicht,
+    /// dass darunter noch ein Grid liegt. Accessory-VC statt Subview: liegt nativ
+    /// in der (transparenten) Titelleiste, kollidiert nicht mit Terminal-Content.
+    private var zoomBadge: NSTitlebarAccessoryViewController?
+
+    private func updateZoomBadge() {
+        if zoomedPane != nil {
+            guard zoomBadge == nil, let window else { return }
+            let accent = FormulaSettings.shared.accentColor
+            let label = NSTextField(labelWithString: "⤢ Zoom   ⌘⏎")
+            label.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+            label.textColor = accent
+            label.sizeToFit()
+
+            let pill = NSView(frame: NSRect(x: 0, y: 0,
+                                            width: label.frame.width + 16,
+                                            height: label.frame.height + 6))
+            pill.wantsLayer = true
+            pill.layer?.backgroundColor = accent.withAlphaComponent(0.16).cgColor
+            pill.layer?.borderColor = accent.withAlphaComponent(0.55).cgColor
+            pill.layer?.borderWidth = 1
+            pill.layer?.cornerRadius = pill.frame.height / 2
+            label.frame.origin = NSPoint(x: 8, y: 3)
+            pill.addSubview(label)
+
+            // Wrapper gibt dem Accessory seine Höhe (≈ Titlebar) und rechts Luft.
+            let wrapper = NSView(frame: NSRect(x: 0, y: 0,
+                                               width: pill.frame.width + 10,
+                                               height: pill.frame.height + 8))
+            pill.frame.origin = NSPoint(x: 0, y: 4)
+            wrapper.addSubview(pill)
+
+            let vc = NSTitlebarAccessoryViewController()
+            vc.view = wrapper
+            vc.layoutAttribute = .trailing
+            window.addTitlebarAccessoryViewController(vc)
+            zoomBadge = vc
+        } else if let vc = zoomBadge {
+            vc.removeFromParent()
+            zoomBadge = nil
+        }
     }
 
     // MARK: - Grid
@@ -608,6 +686,16 @@ final class TerminalSplitView: NSView {
                 if !(bottomOuter && rightOuter) { mask.insert(.layerMaxXMaxYCorner) }
                 cornerMasks.append(mask)
             }
+        }
+
+        // Zoom-Sonderfall (#26): die gezoomte Kachel bekommt statt ihres Grid-Frames
+        // die vollen Bounds und wird per Subview-Reorder über alle anderen gehoben;
+        // deren Grid-Frames bleiben unverändert darunter liegen. Alle Ecken sind
+        // dann Außenkanten → keine eigene Rundung, die Fenster-Rundung übernimmt.
+        if let z = zoomedPane, let zi = panes.firstIndex(where: { $0 === z }) {
+            frames[zi] = bounds
+            cornerMasks[zi] = []
+            addSubview(z.container)   // re-add hebt den View ans Ende der Subview-Liste (= nach vorn)
         }
 
         for (pane, mask) in zip(panes, cornerMasks) { pane.container.layer?.maskedCorners = mask }

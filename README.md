@@ -87,6 +87,7 @@ xcodebuild test -project LatexTerm.xcodeproj -scheme LatexTerm \
 | `⌘T` | New terminal pane (auto-tiled into the grid) |
 | `⌘W` | Close the focused pane (closes the window if it was the last) |
 | `⌘1` … `⌘9` | Grow the grid to N panes (grow-only — never closes panes) |
+| `⌘⏎` | Zoom the focused pane over the whole window (toggle; a titlebar badge shows the zoomed state, any grid change un-zooms first) |
 | `⌘+` / `⌘=` | Increase font size by 1pt (all panes) |
 | `⌘-` | Decrease font size by 1pt (all panes) |
 | `⌘0` | Reset font size to 13pt (default, all panes) |
