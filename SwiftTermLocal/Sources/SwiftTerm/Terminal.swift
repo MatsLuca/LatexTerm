@@ -735,6 +735,16 @@ open class Terminal {
         return buffer.lines [row + buffer.yDisp]
     }
 
+    /// Returns the given row of the LIVE screen (anchored at `yBase`, the bottom of the
+    /// scrollback), regardless of where the user has scrolled the viewport (`yDisp`).
+    /// Row 0 is the top of the live screen, `rows - 1` its bottom line.
+    public func getLiveLine (row: Int) -> BufferLine? {
+        if row < 0 || row >= rows {
+            return nil
+        }
+        return buffer.lines [row + buffer.yBase]
+    }
+
     /// Returns the contents of a line as a BufferLine counting from the begging of the scroll buffer.
     ///
     /// The line is counted  from start of scroll back, not what the terminal has visible right now.

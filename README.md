@@ -114,6 +114,12 @@ printf '\e]5522;accent=reset\a'     # back to the global/adaptive accent
 
 The override wins over the global and adaptive accent for that pane until reset or pane close (not persisted). The payload format is `key=value`; unknown keys are ignored (the channel is meant to grow — see the Claude-Code-integration tracking issue #29). Security notes in [SECURITY.md](SECURITY.md).
 
+### Session notifications ("Claude braucht Input")
+
+Each pane passively detects whether the Claude Code session inside it is **working** (spinner line in the live bottom rows) or **waiting for input** (input box visible, no spinner) — read straight from the buffer grid, no hooks or configuration. When an *unwatched* pane (app in background, or another pane focused) transitions from working to waiting, a macOS notification appears; clicking it brings the app forward, focuses and zooms that pane. While a session works, its titlebar dot pulses gently.
+
+Native channels are wired up too and trigger instantly: the terminal bell (`\a`, Claude Code's `terminal_bell` notification channel) and OSC 777 (`printf '\e]777;notify;Title;Body\a'`). A short per-pane cooldown keeps the native and passive paths from double-reporting.
+
 ## Testing formulas
 
 `echo` in zsh interprets escapes like `\f` and breaks LaTeX in output. Use `printf` or a here-doc instead:
@@ -146,6 +152,7 @@ LatexTerm/
                               chrome: inset, focus ring, corner rules) +
                               TerminalSplitView (animated, vibrancy-integrated auto-tiling grid layout)
   SessionStore.swift         Session snapshot (pane CWDs) for restore on relaunch
+  SessionNotifier.swift      macOS notifications for session state (click → focus + zoom pane)
   FormulaSettings.swift      Settings singleton (UserDefaults + NotificationCenter)
   Latex/
     LatexTerminalView.swift  LocalProcessTerminalView subclass: overlay host,

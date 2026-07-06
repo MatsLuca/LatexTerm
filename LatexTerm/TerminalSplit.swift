@@ -51,6 +51,15 @@ final class PaneContainerView: NSView {
 /// Terminal hatte (Process-Delegate + Settings-Observer + Shell-Spawn).
 final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
+    /// Stabile Identität der Pane über UI-Umbauten hinweg — Notifications (#30)
+    /// referenzieren die Ziel-Pane darüber (der Klick kommt Sekunden später,
+    /// wenn Indizes längst verschoben sein können).
+    let id = UUID()
+
+    /// Passiv erkannter Zustand der Claude-Code-Session in dieser Pane (#30).
+    /// `none` = kein CC-typisches UI im Blick (nackte Shell, fremde TUI).
+    enum SessionState { case none, working, awaitingInput }
+
     let view: LatexTerminalView
     /// Von der Split-View gemountete/layoutete Hülle; `view` (das Terminal) lebt darin.
     let container: PaneContainerView
@@ -94,6 +103,19 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     var paneAccent: NSColor? { accentOverride ?? borderAccent }
     /// Optik dieser Kachel hat sich geändert (Akzent/Fokus) → Titlebar-HUD & Co.
     var onStyleChanged: (() -> Void)?
+
+    /// Bestätigter Session-Zustand (#30) — Schreibzugriff nur über
+    /// `registerSessionScan` (Hysterese). UI (HUD-Puls) liest hier.
+    private(set) var sessionState: SessionState = .none {
+        didSet { if sessionState != oldValue { onStyleChanged?() } }
+    }
+    /// Feuert bei BESTÄTIGTEM Übergang working→awaitingInput — der Moment,
+    /// in dem eine unbeobachtete Session Aufmerksamkeit braucht (#27 v1).
+    var onSessionAwaitingInput: ((TerminalPane) -> Void)?
+    /// Natives Aufmerksamkeits-Signal des Kindprozesses (BEL bzw. OSC 777) —
+    /// Claude Codes eigener Notification-Kanal, Sofort-Auslöser ohne Hysterese.
+    /// title/body sind nur beim OSC-777-Pfad gefüllt.
+    var onAttentionSignal: ((TerminalPane, _ title: String?, _ body: String?) -> Void)?
 
     /// Pane-Farbe als `#RRGGBB` für den Session-Snapshot (#11).
     var accentHex: String? { paneAccent?.srgbHexString }
@@ -183,6 +205,29 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         term.getTerminal().registerOscHandler(code: Self.controlOscCode) { [weak self] data in
             let payload = String(decoding: data, as: UTF8.self)
             DispatchQueue.main.async { self?.handleControlSequence(payload) }
+        }
+
+        // Claude Codes NATIVE Notification-Kanäle (#30): BEL (`terminal_bell`,
+        // der Default) und OSC 777 (`notify;title;body`). Beide sind der präzise
+        // Sofort-Auslöser; die passive Grid-Erkennung bleibt Fallback + Status.
+        term.onBell = { [weak self] in
+            guard let self else { return }
+#if DEBUG
+            Self.statusLog("BELL")
+#endif
+            self.onAttentionSignal?(self, nil, nil)
+        }
+        // Eigene Registrierung überschreibt SwiftTerms eingebauten 777-Handler
+        // (der nur an den ungenutzten TerminalDelegate weiterreicht).
+        term.getTerminal().registerOscHandler(code: 777) { [weak self] data in
+            let text = String(decoding: data, as: UTF8.self)
+            DispatchQueue.main.async {
+                guard let self else { return }
+                let parts = text.components(separatedBy: ";")
+                guard parts.count >= 2, parts[0] == "notify" else { return }
+                let body = parts.count > 2 ? parts[2...].joined(separator: ";") : nil
+                self.onAttentionSignal?(self, parts[1], body)
+            }
         }
 
         // Auf Einstellungs-Änderungen reagieren
@@ -284,21 +329,21 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         return (fr === view) || ((fr as? NSView)?.isDescendant(of: view) ?? false)
     }
 
-    /// Wartet 1,8 Sekunden Cooldown ab, bevor die Kontrastanalyse durchgeführt wird.
+    /// 0,3-s-Sammelticker für alle billigen Grid-Scans (Rahmenfarbe #24,
+    /// Session-Status #30); die teure Pixel-Analyse behält darin ihren
+    /// 1,8-s-Mindestabstand über `lastPixelAnalysis`.
     func scheduleContrastAnalysis() {
-        guard FormulaSettings.shared.isAdaptiveAccent else { return }
-        // Eine explizit per OSC gefärbte Kachel ist autoritativ — sie soll die
-        // globale adaptive Farbe weder treiben noch von ihr überschrieben werden.
-        guard accentOverride == nil else { return }
         if contrastPending { return }
-
-        // Kurze Kadenz nur für den billigen Grid-Scan (~12k Attribut-Reads);
-        // die teure Pixel-Analyse (cacheDisplay + Downsampling) behält ihren
-        // alten 1,8-s-Mindestabstand über `lastPixelAnalysis`.
         contrastPending = true
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
             guard let self else { return }
             self.contrastPending = false
+            // Session-Status (#30) läuft IMMER — unabhängig vom Adaptiv-Modus.
+            self.registerSessionScan(self.detectSessionState())
+            // Akzent-Detektion nur im adaptiven Modus; eine explizit per OSC
+            // gefärbte Kachel ist autoritativ — sie soll die globale adaptive
+            // Farbe weder treiben noch von ihr überschrieben werden.
+            guard FormulaSettings.shared.isAdaptiveAccent, self.accentOverride == nil else { return }
             // Stufe 1 (per-Pane, läuft für JEDE Kachel — auch unfokussierte CC-
             // Sessions färben ihre eigene Kachel): TUI-Rahmenfarbe aus dem Grid.
             if let border = self.detectBorderAccent() {
@@ -405,6 +450,135 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                        + "\n  nonascii(bottom12): \(nonAscii.joined(separator: " "))")
 #endif
         return nil
+    }
+
+    // MARK: - Passive Session-Statuserkennung (#30)
+
+    /// Wie viele Zeilen ab live-Bottom der Status-Scan betrachtet. Claude Codes
+    /// Spinner-Zeile und Input-Box liegen in den untersten ~6 Zeilen; 12 gibt
+    /// Luft für Permission-Dialoge und Todo-Hinweiszeilen.
+    private static let statusScanRows = 12
+
+    /// Struktureller Scan der unteren Live-Zeilen (unabhängig von der Scroll-
+    /// Position, via `getLiveLine`): Claude Codes Spinner-Zeile trägt immer den
+    /// Text „esc to interrupt" = *working*; die Input-/Dialog-Box (Box-Drawing-
+    /// Rahmenzeile wie in `detectBorderAccent`, hier aber farb-agnostisch —
+    /// auch graue Rahmen zählen) ohne Spinner = *awaitingInput*; keins von
+    /// beidem = *none*. Zeichenklassen + festes UI-Vokabular, keine Semantik —
+    /// dieselbe Robustheits-Klasse wie die Rahmenfarb-Erkennung (#24).
+    /// Claude Codes Spinner-Frames (✻ Thinking… etc.) — kommen in normalem
+    /// Terminal-Output praktisch nicht als ERSTES Zeichen einer Zeile vor.
+    private static let spinnerGlyphs: Set<Character> = ["·", "✢", "✳", "✶", "✻", "✽", "∗", "*"]
+
+    private func detectSessionState() -> SessionState {
+        let term = view.getTerminal()
+        let cols = term.cols
+        guard cols >= 16 else { return .none }
+        let minRun = max(8, cols / 2)
+        var sawBorder = false
+        for row in stride(from: term.rows - 1, through: max(0, term.rows - Self.statusScanRows), by: -1) {
+            guard let line = term.getLiveLine(row: row) else { continue }
+            var boxCells = 0
+            var text = ""
+            text.reserveCapacity(cols)
+            for col in 0..<cols {
+                let ch = line[col].getCharacter()
+                // NULL = leere Zelle (siehe OverlayController.rescan) → Space.
+                text.append(ch == "\u{0}" ? " " : ch)
+                if let sc = ch.unicodeScalars.first, (0x2500...0x257F).contains(sc.value) {
+                    boxCells += 1
+                }
+            }
+            // Working-Anker, zwei unabhängige Signale: (a) der Interrupt-Hinweis
+            // (CC setzt ihn zur Laufzeit aus der Keybinding-Tabelle zusammen —
+            // „esc/ctrl+c to interrupt", daher nur das stabile Suffix matchen);
+            // (b) Spinner-Glyph als erstes Nicht-Space-Zeichen + „…" in der Zeile.
+            if text.contains(" to interrupt") { return .working }
+            if let first = text.first(where: { $0 != " " }),
+               Self.spinnerGlyphs.contains(first), text.contains("…") {
+                return .working
+            }
+            if boxCells >= minRun { sawBorder = true }
+        }
+        return sawBorder ? .awaitingInput : .none
+    }
+
+    /// Roh-Ergebnis des letzten Scans + Zähler für die Hysterese.
+    private var pendingSessionState: SessionState = .none
+    private var pendingSessionScans = 0
+
+#if DEBUG
+    /// Status-Debug-Log analog zum Accent-Log (Verifikations-Workflow, CLAUDE.md).
+    private static let statusLogHandle: FileHandle? = {
+        let path = "/tmp/latexterm-status.log"
+        FileManager.default.createFile(atPath: path, contents: nil)
+        return FileHandle(forWritingAtPath: path)
+    }()
+    static func statusLog(_ msg: String) {
+        guard let data = (msg + "\n").data(using: .utf8) else { return }
+        statusLogHandle?.write(data)
+    }
+    /// Letztes geloggtes Roh-Ergebnis — nur Änderungen dumpen, sonst flutet's.
+    private var lastLoggedRaw: SessionState?
+    /// Untere Live-Zeilen als Text (Ground-Truth-Dump bei Roh-Zustandswechsel).
+    private func bottomRowsDump() -> String {
+        let term = view.getTerminal()
+        var rows: [String] = []
+        for row in max(0, term.rows - Self.statusScanRows)..<term.rows {
+            guard let line = term.getLiveLine(row: row) else { continue }
+            var text = ""
+            for col in 0..<term.cols {
+                let ch = line[col].getCharacter()
+                text.append(ch == "\u{0}" ? " " : ch)
+            }
+            let trimmed = text.trimmingCharacters(in: .whitespaces)
+            if !trimmed.isEmpty { rows.append("    [\(row)] \(trimmed.prefix(120))") }
+        }
+        return rows.joined(separator: "\n")
+    }
+#endif
+
+    /// Hysterese-Torwächter: nimmt das Roh-Ergebnis jedes 0,3-s-Scans entgegen
+    /// und entscheidet, wann `sessionState` wirklich kippt. Wichtig: Scans
+    /// laufen nur bei Terminal-Output — wenn Claude fertig ist, kommt nach dem
+    /// letzten Redraw KEIN weiterer Output. Wer einen Übergang über mehrere
+    /// Scans bestätigen will, muss sich Folge-Scans selbst nachlegen
+    /// (`scheduleContrastAnalysis()`), sonst bleibt der Zustand ewig hängen.
+    private func registerSessionScan(_ raw: SessionState) {
+#if DEBUG
+        if raw != lastLoggedRaw {
+            lastLoggedRaw = raw
+            Self.statusLog("RAW \(raw) (committed=\(sessionState), pending=\(pendingSessionScans))\n" + bottomRowsDump())
+        }
+#endif
+        guard raw != sessionState else {
+            // Beobachtung bestätigt den Ist-Zustand → angefangenen Übergang verwerfen.
+            pendingSessionScans = 0
+            return
+        }
+        if raw == pendingSessionState {
+            pendingSessionScans += 1
+        } else {
+            pendingSessionState = raw
+            pendingSessionScans = 1
+        }
+        // Asymmetrische Trägheit: `awaitingInput` löst die Notification aus und
+        // muss Redraw-Lücken (Spinner kurz weg) sicher überstehen → 5 Scans
+        // (~1,5 s). Rein optische Übergänge (working/none) kippen nach 2.
+        let needed = pendingSessionState == .awaitingInput ? 5 : 2
+        if pendingSessionScans >= needed {
+            let old = sessionState
+            sessionState = pendingSessionState
+            pendingSessionScans = 0
+#if DEBUG
+            Self.statusLog("COMMIT \(old) → \(sessionState)")
+#endif
+            if old == .working && sessionState == .awaitingInput { onSessionAwaitingInput?(self) }
+        } else {
+            // Scans sind output-getrieben — nach Claudes letztem Redraw kommt
+            // keiner mehr von allein. Zum Bestätigen selbst nachlegen.
+            scheduleContrastAnalysis()
+        }
     }
 
     /// Zell-Vordergrundfarbe → NSColor. `defaultColor` (Theme-Grau) zählt nicht
@@ -678,6 +852,10 @@ final class TerminalSplitView: NSView {
         terminateObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.saveSession() }
+
+        // Notification-Klick → Pane fokussieren + zoomen (#30). Der Zugriff
+        // setzt zugleich den UNUserNotificationCenter-Delegate früh.
+        SessionNotifier.shared.onActivatePane = { [weak self] id in self?.activatePane(id: id) }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -737,6 +915,10 @@ final class TerminalSplitView: NSView {
         pane.onEnsurePaneCount = { [weak self] n in self?.ensurePaneCount(n) }
         pane.onZoomRequested = { [weak self] p in self?.toggleZoom(p) }
         pane.onStyleChanged = { [weak self] in self?.updateTitlebarHUD() }
+        pane.onSessionAwaitingInput = { [weak self] p in self?.notifySessionAwaiting(p) }
+        pane.onAttentionSignal = { [weak self] p, title, body in
+            self?.notifyAttention(p, title: title, body: body)
+        }
         // Grid-Änderung beendet einen aktiven Zoom: die neue Kachel soll sichtbar
         // im Grid entstehen, nicht unsichtbar unter der gezoomten (⌘T/⌘1–9-Policy).
         setZoomedPane(nil)
@@ -827,12 +1009,9 @@ final class TerminalSplitView: NSView {
         let showDots = panes.count > 1
         let showZoom = zoomedPane != nil
 
-        let fr = window.firstResponder
-        func isFocused(_ pane: TerminalPane) -> Bool {
-            (fr === pane.view) || ((fr as? NSView)?.isDescendant(of: pane.view) ?? false)
-        }
         let signature = panes.map {
             "\($0.effectiveAccent.srgbHexString ?? "-")\(isFocused($0) ? "*" : "")"
+                + ($0.sessionState == .working ? "~" : "")
         }.joined(separator: ",") + "|zoom:\(showZoom)"
         if signature == hudSignature, titlebarHUD != nil || !(showDots || showZoom) { return }
         hudSignature = signature
@@ -844,7 +1023,8 @@ final class TerminalSplitView: NSView {
         if showDots {
             for pane in panes {
                 let focused = isFocused(pane)
-                let dot = PaneDotView(color: pane.effectiveAccent, focused: focused) { [weak self, weak pane] in
+                let dot = PaneDotView(color: pane.effectiveAccent, focused: focused,
+                                      pulsing: pane.sessionState == .working) { [weak self, weak pane] in
                     guard let self, let pane else { return }
                     self.focusPane(pane)
                 }
@@ -892,6 +1072,55 @@ final class TerminalSplitView: NSView {
         label.frame.origin = NSPoint(x: 8, y: 3)
         pill.addSubview(label)
         return pill
+    }
+
+    /// Ist diese Kachel gerade fokussiert (First Responder im/unterm Terminal-View)?
+    private func isFocused(_ pane: TerminalPane) -> Bool {
+        let fr = window?.firstResponder
+        return (fr === pane.view) || ((fr as? NSView)?.isDescendant(of: pane.view) ?? false)
+    }
+
+    // MARK: - Session-Status → Notification (#30)
+
+    /// Bestätigter working→awaitingInput: nur melden, wenn die Session gerade
+    /// niemand ansieht — App im Hintergrund ODER andere Kachel fokussiert.
+    private func notifySessionAwaiting(_ pane: TerminalPane) {
+#if DEBUG
+        TerminalPane.statusLog("NOTIFY? passive appActive=\(NSApp.isActive) focused=\(isFocused(pane))")
+#endif
+        guard !NSApp.isActive || !isFocused(pane) else { return }
+        SessionNotifier.shared.notify(paneID: pane.id, title: "Claude braucht Input",
+                                      body: pane.currentDirectory.map {
+                                          ($0 as NSString).abbreviatingWithTildeInPath
+                                      })
+    }
+
+    /// Natives Signal (BEL/OSC 777): sofort melden, wenn unbeobachtet. Der
+    /// Fallback-Titel nutzt den passiv erkannten Status — eine Glocke in einer
+    /// CC-Session heißt „Claude braucht Input", in einer nackten Shell nicht.
+    private func notifyAttention(_ pane: TerminalPane, title: String?, body: String?) {
+#if DEBUG
+        TerminalPane.statusLog("NOTIFY? native title=\(title ?? "-") appActive=\(NSApp.isActive) focused=\(isFocused(pane))")
+#endif
+        guard !NSApp.isActive || !isFocused(pane) else { return }
+        let fallback = pane.sessionState != .none ? "Claude braucht Input" : "Terminal-Glocke"
+        let detail = body ?? pane.currentDirectory.map { ($0 as NSString).abbreviatingWithTildeInPath }
+        SessionNotifier.shared.notify(paneID: pane.id, title: title ?? fallback, body: detail)
+    }
+
+    /// Notification-Klick: App nach vorn, Pane fokussieren und (im Grid) zoomen —
+    /// der Nutzer will JETZT mit genau dieser Session sprechen.
+    private func activatePane(id: UUID) {
+        guard let pane = panes.first(where: { $0.id == id }) else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        window?.makeKeyAndOrderFront(nil)
+        if panes.count > 1 {
+            setZoomedPane(pane)
+            updateFocusBorders()
+            relayout(animated: true)
+        }
+        window?.makeFirstResponder(pane.view)
+        updateTitlebarHUD()
     }
 
     /// Klick auf einen Session-Punkt: Kachel fokussieren. Ist gerade eine ANDERE
@@ -1033,7 +1262,7 @@ private final class PaneDotView: NSView {
     /// + nicht-opaker View ⇒ AppKit deutet mouseDown als „Fenster anfassen".
     override var mouseDownCanMoveWindow: Bool { false }
 
-    init(color: NSColor, focused: Bool, onClick: @escaping () -> Void) {
+    init(color: NSColor, focused: Bool, pulsing: Bool, onClick: @escaping () -> Void) {
         self.onClick = onClick
         super.init(frame: NSRect(x: 0, y: 0, width: 18, height: 18))
         wantsLayer = true
@@ -1044,6 +1273,17 @@ private final class PaneDotView: NSView {
         circle.borderWidth = focused ? 1.5 : 0
         circle.borderColor = NSColor.white.withAlphaComponent(0.8).cgColor
         layer?.addSublayer(circle)
+        // Live-Status v1 (#25): dezenter Atem-Puls, solange die Session arbeitet.
+        if pulsing {
+            let pulse = CABasicAnimation(keyPath: "opacity")
+            pulse.fromValue = 1.0
+            pulse.toValue = 0.35
+            pulse.duration = 0.9
+            pulse.autoreverses = true
+            pulse.repeatCount = .infinity
+            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+            circle.add(pulse, forKey: "sessionPulse")
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }

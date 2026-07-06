@@ -70,6 +70,9 @@ final class LatexTerminalView: LocalProcessTerminalView {
     var onZoomRequested: (() -> Void)?
     /// Fokus-Änderung an den Kachel-Controller melden.
     var onFocusChanged: ((Bool) -> Void)?
+    /// BEL (\a) vom Kindprozess — Claude Codes Standard-Notification-Kanal
+    /// (`preferredNotifChannel: terminal_bell`), präziser Sofort-Auslöser für #30.
+    var onBell: (() -> Void)?
 
     /// Zuletzt via AX gesetzter Text (für read-back durch Dictation-Apps wie SuperWhisper).
     /// Siehe Accessibility-Block weiter unten.
@@ -100,6 +103,12 @@ final class LatexTerminalView: LocalProcessTerminalView {
     override func rangeChanged(source: TerminalView, startY: Int, endY: Int) {
         super.rangeChanged(source: source, startY: startY, endY: endY)
         onRangeChanged?(startY, endY)
+    }
+
+    /// Kommt vom Parse-Pfad — für UI-Konsumenten auf den Main-Runloop heben.
+    override func bell(source: Terminal) {
+        super.bell(source: source)
+        DispatchQueue.main.async { [weak self] in self?.onBell?() }
     }
 
     // MARK: - Link-Öffnen (Cmd-Klick)
