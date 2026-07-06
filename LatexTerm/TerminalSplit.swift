@@ -754,7 +754,11 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         if !(FileManager.default.fileExists(atPath: dir, isDirectory: &isDir) && isDir.boolValue) {
             dir = home
         }
-        view.startProcess(executable: shell, execName: shellIdiom, currentDirectory: dir)
+        // Pane-Identität für Kindprozesse (#28): Claude-Code-Hooks/-Scripts und das
+        // `latexterm`-CLI ordnen sich darüber der richtigen Kachel zu.
+        var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
+        env.append("LATEXTERM_PANE_ID=\(id.uuidString)")
+        view.startProcess(executable: shell, environment: env, execName: shellIdiom, currentDirectory: dir)
     }
 
     // MARK: - LocalProcessTerminalViewDelegate
@@ -893,6 +897,9 @@ final class TerminalSplitView: NSView {
 
         // Session-Restore legt die Panes VOR dem Fenster-Attach an — HUD nachziehen.
         updateTitlebarHUD()
+
+        // Steuerkanal (#28): dieses Fenster als Ziel für `latexterm`-Kommandos.
+        ControlServer.shared.register(self)
     }
 
     override var isFlipped: Bool { true }   // Reihe 0 oben
@@ -1249,6 +1256,81 @@ final class TerminalSplitView: NSView {
             for (pane, frame) in zip(panes, frames) { pane.container.frame = frame }
         }
         isFirstLayout = false
+    }
+}
+
+// MARK: - Steuerkanal (#28)
+
+/// Ausführung der `latexterm`-CLI-Kommandos. Lebt in DIESER Datei, damit die
+/// Pane-Verwaltung (`panes`, `toggleZoom`, …) privat bleiben kann. Der
+/// `ControlServer` ruft `handleControl` synchron auf dem Main-Thread.
+extension TerminalSplitView: ControlCommandHandler {
+
+    func handleControl(_ request: ControlRequest) -> ControlResponse {
+        switch request.cmd {
+        case "list-panes":
+            return ControlResponse(ok: true, panes: panes.map { info(for: $0) })
+
+        case "new-pane":
+            let pane = addPane(startingIn: request.cwd)
+            if let exec = request.exec, !exec.isEmpty {
+                // Sofort in die PTY — der Kernel puffert, die Shell liest das
+                // Kommando, sobald sie bereit ist (kein Delay/Poll nötig).
+                pane.view.send(txt: exec + "\r")
+            }
+            return ControlResponse(ok: true, pane: info(for: pane))
+
+        case "send", "zoom", "focus":
+            guard let pane = resolvePane(request.pane ?? request.paneID) else {
+                return .failure("Kachel nicht gefunden: „\(request.pane ?? request.paneID ?? "kein Ziel angegeben")“ — `latexterm list-panes` zeigt Index und ID")
+            }
+            switch request.cmd {
+            case "send":
+                guard let text = request.text, !text.isEmpty else {
+                    return .failure("send braucht einen Text")
+                }
+                pane.view.send(txt: text + ((request.enter ?? true) ? "\r" : ""))
+            case "zoom":
+                toggleZoom(pane)
+            default:
+                focusPane(pane)
+            }
+            return ControlResponse(ok: true, pane: info(for: pane))
+
+        default:
+            return .failure("Unbekanntes Kommando „\(request.cmd)“")
+        }
+    }
+
+    private func info(for pane: TerminalPane) -> PaneInfo {
+        let state: String
+        switch pane.sessionState {
+        case .none: state = "none"
+        case .working: state = "working"
+        case .awaitingInput: state = "awaitingInput"
+        }
+        return PaneInfo(id: pane.id.uuidString,
+                        index: (panes.firstIndex(where: { $0 === pane }) ?? 0) + 1,
+                        cwd: pane.currentDirectory,
+                        focused: isFocused(pane),
+                        zoomed: pane === zoomedPane,
+                        state: state)
+    }
+
+    /// Löst den Ziel-Selektor des CLI auf eine Kachel auf. Semantik: reine Ziffern
+    /// sind IMMER der 1-basierte Index aus `list-panes` (nie UUID-Präfix — vorhersagbar
+    /// schlägt bequem); alles andere matcht case-insensitiv als UUID-Präfix, aber nur
+    /// bei GENAU einem Treffer. Mehrdeutig = nil: `send` in die falsche Shell wäre
+    /// Command-Execution, da ist ein Fehler die sichere Antwort.
+    private func resolvePane(_ selector: String?) -> TerminalPane? {
+        guard let selector, !selector.isEmpty else { return nil }
+        if let index = Int(selector) {
+            guard (1...panes.count).contains(index) else { return nil }
+            return panes[index - 1]
+        }
+        let prefix = selector.uppercased()
+        let matches = panes.filter { $0.id.uuidString.hasPrefix(prefix) }
+        return matches.count == 1 ? matches[0] : nil
     }
 }
 
