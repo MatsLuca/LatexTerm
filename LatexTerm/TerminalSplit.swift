@@ -276,6 +276,39 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             } else if let color = NSColor(srgbHex: String(parts[1])) {
                 accentOverride = color
             }
+        case "status":
+            applyHookStatus(String(parts[1]))
+        default:
+            break
+        }
+    }
+
+    /// Hook-getriebener Session-Status (#27 Vollausbau): `status=<working|input|done>[;detail]`
+    /// über den 5522-Kanal — präzise Events aus Claude-Code-Hooks statt Grid-Heuristik.
+    /// Setzt den Zustand OHNE Hysterese (der Hook weiß es sicher); die passive
+    /// Erkennung läuft weiter und bestätigt ihn beim nächsten Scan von selbst.
+    /// Notifications laufen über den bestehenden `onAttentionSignal`-Pfad
+    /// (unbeobachtet-Check + 5-s-Cooldown sitzen dort). `done` setzt bewusst
+    /// `.none`: der anschließend sichtbaren Eingabe-Box darf die passive
+    /// Erkennung NICHT „working→awaitingInput" unterstellen (ihr Notification-
+    /// Trigger verlangt old == .working, .none → .awaitingInput bleibt stumm).
+    private func applyHookStatus(_ value: String) {
+        let pieces = value.split(separator: ";", maxSplits: 1)
+        guard let state = pieces.first else { return }
+        let detail = pieces.count > 1 ? String(pieces[1].prefix(200)) : nil
+        pendingSessionScans = 0
+#if DEBUG
+        Self.statusLog("HOOK status=\(state) detail=\(detail ?? "-")")
+#endif
+        switch state {
+        case "working":
+            sessionState = .working
+        case "input":
+            sessionState = .awaitingInput
+            onAttentionSignal?(self, "Claude braucht Input", detail)
+        case "done":
+            sessionState = .none
+            onAttentionSignal?(self, "Claude ist fertig", detail)
         default:
             break
         }
@@ -758,6 +791,12 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         // `latexterm`-CLI ordnen sich darüber der richtigen Kachel zu.
         var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         env.append("LATEXTERM_PANE_ID=\(id.uuidString)")
+        // OSC-7-CWD-Meldung: /etc/zshrc lädt /etc/zshrc_$TERM_PROGRAM — als
+        // "Apple_Terminal" bekommt jede zsh Apples update_terminal_cwd-Hook
+        // (Basis für ⌘T-CWD-Erbe #8 und `list-panes`-CWD #28) ohne Eingriff in
+        // die User-Config. Apples Session-Save-Teil bleibt aus, solange wir
+        // KEIN TERM_SESSION_ID setzen — nicht hinzufügen.
+        env.append("TERM_PROGRAM=Apple_Terminal")
         view.startProcess(executable: shell, environment: env, execName: shellIdiom, currentDirectory: dir)
     }
 

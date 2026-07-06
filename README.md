@@ -114,11 +114,16 @@ printf '\e]5522;accent=reset\a'     # back to the global/adaptive accent
 
 The override wins over the global and adaptive accent for that pane until reset or pane close (not persisted). The payload format is `key=value`; unknown keys are ignored (the channel is meant to grow — see the Claude-Code-integration tracking issue #29). Security notes in [SECURITY.md](SECURITY.md).
 
-### Session notifications ("Claude braucht Input")
+The same channel carries the pane's **session status** (`status=working`, `status=input`, `status=done`, each with an optional `;detail` suffix shown as the notification body) — see the next section.
 
-Each pane passively detects whether the Claude Code session inside it is **working** (spinner line in the live bottom rows) or **waiting for input** (input box visible, no spinner) — read straight from the buffer grid, no hooks or configuration. When an *unwatched* pane (app in background, or another pane focused) transitions from working to waiting, a macOS notification appears; clicking it brings the app forward, focuses and zooms that pane. While a session works, its titlebar dot pulses gently.
+### Session notifications ("Claude ist fertig" / "Claude braucht Input")
 
-Native channels are wired up too and trigger instantly: the terminal bell (`\a`, Claude Code's `terminal_bell` notification channel) and OSC 777 (`printf '\e]777;notify;Title;Body\a'`). A short per-pane cooldown keeps the native and passive paths from double-reporting.
+Two sources feed each pane's session state, precise one first:
+
+- **Hook-driven (precise):** Claude Code hooks (`UserPromptSubmit` / `Stop` / `Notification`) write `\e]5522;status=…\a` to the pane's tty — the app learns *directly* when a turn starts, finishes, or needs input, no heuristics. Hooks run detached from the tty, so the one-liner resolves it via the parent process: `t=$(ps -o tty= -p $PPID | tr -d ' ') && printf '\033]5522;status=done\007' > "/dev/$t"` (guarded by `$LATEXTERM_PANE_ID`, silently inert outside LatexTerm). `status=done` triggers "Claude ist fertig", `status=input` triggers "Claude braucht Input".
+- **Passive (fallback):** each pane also detects the state straight from the buffer grid — **working** (spinner line in the live bottom rows) vs **waiting for input** (input box visible, no spinner). Works with zero configuration; a hook-set state is simply confirmed by the next scans.
+
+Notifications only fire for an *unwatched* pane (app in background, or another pane focused); clicking one brings the app forward, focuses and zooms that pane. While a session works, its titlebar dot pulses gently. Native channels trigger instantly as well: the terminal bell (`\a`) and OSC 777 (`printf '\e]777;notify;Title;Body\a'`). A short per-pane cooldown keeps all paths from double-reporting.
 
 ## Testing formulas
 
