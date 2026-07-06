@@ -1,0 +1,22 @@
+{
+  "name": "latexterm-demo-video",
+  "private": true,
+  "description": "Remotion source for the README demo video/GIF — fully scripted, no screen recording needed.",
+  "scripts": {
+    "studio": "remotion studio",
+    "render": "remotion render Demo out/demo.mp4",
+    "render:gif": "remotion render Demo out/demo.gif --codec=gif --every-nth-frame=2 --scale=0.75"
+  },
+  "dependencies": {
+    "@remotion/cli": "^4.0.0",
+    "katex": "^0.16.11",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "remotion": "^4.0.0"
+  },
+  "devDependencies": {
+    "@types/katex": "^0.16.7",
+    "@types/react": "^19.0.0",
+    "typescript": "^5.5.0"
+  }
+}

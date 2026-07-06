@@ -6,7 +6,7 @@
 
 Native macOS terminal that renders LaTeX formulas live as KaTeX overlays — positioned directly over the source characters between `$...$`, `$$...$$`, `\(...\)` and `\[...\]`. No OCR: a vendored SwiftTerm fork gives us the real cell grid, so formulas sit exactly on their source text.
 
-![LatexTerm rendering LaTeX live across a 4-pane split terminal](docs/demo.gif)
+![LatexTerm demo: a Claude Code agent orchestrates panes via the latexterm CLI, then LaTeX renders live over a Claude explanation](docs/demo.webp)
 
 ## Why
 
@@ -139,11 +139,10 @@ EOF
 
 ## Recording a demo
 
-The README shows a GIF of formulas rendering live as you type. To regenerate it:
-
-1. Launch LatexTerm and paste a few formulas (see [Testing formulas](#testing-formulas)).
-2. Record the window with macOS screen capture (`⇧⌘5`) or [Gifski](https://gif.ski) / `ffmpeg`.
-3. Save it as `docs/demo.gif` and it will appear at the top of this README automatically.
+The demo at the top of this README is rendered programmatically with
+[Remotion](https://remotion.dev) — see [`demo-video/`](demo-video/) for the sources, the
+storyboard, and the render commands (`npx remotion render Polished` → MP4 → animated WebP
+via `img2webp`). Change the code, re-render, done — no screen recording needed.
 
 ## Project layout
 

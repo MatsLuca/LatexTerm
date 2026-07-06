@@ -34,3 +34,9 @@ image.png
 
 # Local demo content for GIF recording (not published)
 demo-showcase*.md
+
+# demo-video: raw takes + render outputs stay local (only docs/demo.webp ships)
+demo-video/node_modules/
+demo-video/recordings/
+demo-video/out/
+demo-video/public/take1.mp4
