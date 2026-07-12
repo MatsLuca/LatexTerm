@@ -1,224 +1,135 @@
 # LatexTerm
 
-[![Platform: macOS 14+](https://img.shields.io/badge/platform-macOS%2014%2B-black)](#requirements)
+[![Platform: macOS 14+](https://img.shields.io/badge/platform-macOS%2014%2B-black)](#install)
 [![Language: Swift](https://img.shields.io/badge/Swift-5.9-orange)](https://swift.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-Native macOS terminal that renders LaTeX formulas live as KaTeX overlays — positioned directly over the source characters between `$...$`, `$$...$$`, `\(...\)` and `\[...\]`. No OCR: a vendored SwiftTerm fork gives us the real cell grid, so formulas sit exactly on their source text.
-
-It has also grown into a comfortable cockpit for **Claude Code** sessions: every pane knows whether its agent is working, finished, or waiting for input — and notifies you when attention is needed. Agents can even drive the terminal themselves through the bundled `latexterm` CLI: open panes, start sessions, send prompts — Claude orchestrating Claude. See [Claude Code integration](#claude-code-integration).
+A native macOS terminal that renders LaTeX live over the text — and doubles as a cockpit for **Claude Code** sessions.
 
 ![LatexTerm demo: a Claude Code agent orchestrates panes via the latexterm CLI, then LaTeX renders live over a Claude explanation](docs/demo.webp)
 
+## Highlights
+
+- **Live LaTeX overlays** — formulas between `$…$`, `$$…$$`, `\(…\)`, `\[…\]` render as KaTeX exactly on their source characters. No OCR: a vendored SwiftTerm fork exposes the real cell grid.
+- **Hover, pin & export** — hover shows a formula full-size; a click pins it with copy buttons: **LaTeX**, **readable Unicode** (`(-b ± √(b²-4ac))/(2a)`), **PNG**, **vector PDF**, **Markdown**.
+- **Edit loop** — ✎ opens the formula in an inline editor with live preview; Enter types the result into your prompt.
+- **Auto-tiling panes** — ⌘T splits into a balanced grid, ⌘⏎ zooms one pane, layout + working dirs survive a relaunch.
+- **Claude Code cockpit** — every pane knows whether its agent is working, done, or waiting for input, notifies you, and picks up the session's `/color` as its accent. Agents drive the terminal themselves via the `latexterm` CLI.
+- Plus: ⌘F search, KaTeX errors underlined instead of swallowed, overlays that follow the scroll, a native settings window (⌘,).
+
 ## Why
 
-The predecessor project [LatexTerminalLive](https://github.com/MatsLuca/LatexTerminalLive) used ScreenCaptureKit + Vision OCR to read Ghostty's output. Worked, but OCR was unreliable (greek glyphs, fractions, subtle artifacts). This project is a full terminal emulator instead — we own the text stream, the grid model, and the render pipeline, so formula positions come from the cell grid directly. No OCR.
+The predecessor ([LatexTerminalLive](https://github.com/MatsLuca/LatexTerminalLive)) read another terminal's screen with OCR — too flaky for greek glyphs and fractions. LatexTerm *is* the terminal, so formula positions come straight from the cell grid. Owning the grid paid off twice: the same buffer access now powers the Claude Code session detection.
 
-Owning the grid has paid off twice: the same buffer access that positions formulas is what powers the Claude Code integration — session state is read straight from the live screen rows, no log parsing, no screen capture.
-
-## How the LaTeX overlay works
+<details>
+<summary><b>How the LaTeX overlay works</b></summary>
 
 ```
-PTY (zsh) → SwiftTerm VT parser → Buffer grid
-                                    ↓
-                          OverlayController scans visible rows
-                                    ↓
-                          LaTeXDetector finds delimited formulas
-                                    ↓
-                          One FormulaLayer (single WKWebView + KaTeX)
-                          renders every formula as a positioned <div>,
-                          grid coords → pixel coords
+PTY (login shell) → SwiftTerm VT parser → buffer grid
+      → OverlayController scans visible rows
+      → LaTeXDetector finds delimited formulas
+      → one shared WKWebView + KaTeX renders each as a positioned <div>
 ```
 
-- **Terminal**: vendored fork of [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT) at `SwiftTermLocal/`. Fork adds a public `extraLineSpacing` property on `TerminalView` so we can introduce vertical gaps between rows without modifying glyph rendering.
-- **Detection**: per-row buffer text scan after every SwiftTerm `rangeChanged` update. Inline segments (`$..$`, `\(..\)`) and single-line `$$..$$` / `\[..\]` are found line by line; **multi-line display blocks** (`$$` / `\[` … `\]` with each delimiter alone on its own line) are detected across rows by `LaTeXDetector.findBlocks`. Requiring the delimiters to stand alone keeps prose `$$` (or the shell PID `$$`) from forming false blocks. **Soft-wrapped inline formulas** that run across a line break are also detected: consecutive `isWrapped` rows are reconstructed into one logical line (`LaTeXDetector.findWrapped`), scanned as a whole, and each hit projected back onto grid coordinates.
-- **Rendering**: a single `FormulaLayer` (one `WKWebView`) hosts *all* formulas — KaTeX is loaded offline once (CSS + JS + woff2 fonts bundled) and each formula is an absolutely-positioned `<div>`. Inline formulas get a tight 1-cell background box over the raw `$..$` text and scale (`transform: scale()`) to fit entirely within that single row so they never bleed into neighbouring lines. **Display formulas render with true `displayMode`** and are centred in both axes: single-line `$$..$$` is fit into its row, while a multi-line block spans its full source row range (the rows are already reserved by the source text) so the formula gets real vertical room. **KaTeX parse errors are surfaced, not silently swallowed**: the offending formula gets a red wavy underline and the hover/pin preview shows the raw source plus the actual KaTeX message (e.g. *"Undefined control sequence: \fra"*).
-- **Hover preview**: large formulas shrink to fit their row, so a hover "view mode" (`FormulaPreview`) blows the formula back up at full size when the pointer rests over it. Hitboxes start as the source-text box and are tightened to the real rendered bounds reported back from the WebView; hover tracking is mouse-move only, so plain selection/scroll still pass through to the terminal.
-- **Click to pin + copy**: clicking a formula pins the preview and reveals three buttons — **LaTeX** copies the raw expression, **Lesbar** copies a readable Unicode-math form (e.g. `(-b ± √(b²-4ac))/(2a)`, via `LaTeXReadable`) — including 2D matrices/`cases` with real bracket glyphs, Unicode accents (`x⃗`, `x̂`) and Greek sub/superscripts (the 2D layout assumes a monospace, left-aligned paste target), and **Bild** copies the formula as a PNG image — a dark rounded "chip" composed from a `takeSnapshot` of the (already-painted) preview WebView at retina resolution via `FormulaImageRenderer`. Clicking away, `Esc`, scrolling, or new output dismisses it. Two local `NSEvent` monitors drive pinning/dismissal; `OverlayHost.hitTest` lets clicks land *inside* the pinned panel (the buttons) while staying click-through everywhere else.
-- **Overlay lifecycle**: keyed by `(absoluteBufferRow, startCol, body)` where `absoluteBufferRow = viewportRow + buffer.yDisp`. On rescan the desired state is sent to the layer as JSON and reconciled in JS (`sync()`): new keys create a `<div>`, missing keys are removed, surviving keys are only repositioned (no KaTeX re-render). Binding the key to the absolute scrollback row means scrolling repositions overlays instead of destroying and rebuilding them. Font-size and settings changes trigger `clearAll()` so KaTeX re-renders at the new size/colors.
-- **Split-screen tiling**: `⌘T` adds a pane, each with its own login shell and its own `OverlayController` (independent formula overlays). `TerminalSplitView` lays panes out by direct frame math (no `NSSplitView`), choosing the grid shape from the *window's* width **and** height: it picks the row count whose resulting cell aspect ratio is closest to a target (`idealCellAspect ≈ 0.82`), so a wide window stays single-row longer (up to ~3 across) and wraps into a balanced grid as it fills (4 → 2×2, then toward 3×3). Rows are equal height and each row divides its width independently (top-heavy masonry: e.g. 5 panes → 3 over 2). An 8px strut between cells is semi-transparent (`alpha: 0.35`) to let window vibrancy peek through. `⌘W` closes the focused pane, `⌘1…9` grows to N panes. Transitions when adding or removing panes are smoothly animated over 0.22s.
-- **Premium Visuals & Window Design**: The terminal window features a frameless blending design (`fullSizeContentView`, transparent titlebar, hidden title, and window-wide dragging). It embeds a native `NSVisualEffectView` behind the terminal panes (`.underWindowBackground`, `.behindWindow` blend modes) for a premium translucent macOS feel.
-- **Scroll-following overlays**: scrolling is a rapid sequence of static states, and repositioning the out-of-process WebView per step flickers — while hiding the overlays makes formulas vanish mid-scroll. The terminal scrolls uniformly by `Δrows × cellHeight`, so SwiftTerm's `scrolled` event drives a separate path (`onScrolled` → `scheduleReposition`) that translates the **whole formula container as one block** via CSS `translateY` inside the WebView (GPU-composited, no per-div re-sync) — formulas stay glued to their text. Content-rescans are suppressed while scrolling (the per-step `rangeChanged` would otherwise fight the translation); ~150 ms after the last event a single settle `rescan()` emits the new absolute positions **and** resets the translation in the *same* JS call (one WebView frame), so surviving formulas sit pixel-identical with no jump and no hide/reveal. The 30 ms `scheduleRescan` debounce now only serves terminal output, resize, and settings changes.
+- One WebView hosts *all* formulas; KaTeX loads once, offline (bundled CSS/JS/fonts).
+- Overlays are keyed to the absolute scrollback row — scrolling repositions them (one GPU-composited translate) instead of rebuilding.
+- Detection handles soft-wrapped inline formulas and multi-line `$$ … $$` blocks; inline hits scale to fit their row.
+- Clicks on empty space pass through to normal terminal selection; only formula hitboxes are interactive.
+
+The deep-dive lives in the source — start at `LatexTerm/Latex/OverlayController.swift`.
+
+</details>
 
 ## Claude Code integration
 
-LatexTerm is used daily as a cockpit for [Claude Code](https://claude.com/claude-code) sessions and has grown a set of features for exactly that. All of them are plain terminal mechanisms — escape sequences, an env var, a Unix socket — so nothing is hardwired to Claude: any agent, TUI, or script can use the same channels.
+Everything here is a plain terminal mechanism — escape sequences, an env var, a Unix socket. Nothing is hardwired to Claude; any agent or script can use the same channels.
 
-### Session status & notifications ("Claude ist fertig" / "Claude braucht Input")
+### Status & notifications
 
-Two sources feed each pane's session state, precise one first:
+Each pane tracks its session: **working** (titlebar dot pulses) → **done** / **needs input** (macOS notification if the pane is unwatched; clicking it focuses and zooms the pane).
 
-- **Hook-driven (precise):** Claude Code hooks (`UserPromptSubmit` / `Stop` / `Notification`) write `\e]5522;status=…\a` to the pane's tty — the app learns *directly* when a turn starts, finishes, or needs input, no heuristics. Hooks run detached from the tty, so the one-liner resolves it via the parent process: `t=$(ps -o tty= -p $PPID | tr -d ' ') && printf '\033]5522;status=done\007' > "/dev/$t"` (guarded by `$LATEXTERM_PANE_ID`, silently inert outside LatexTerm). `status=done` triggers "Claude ist fertig", `status=input` triggers "Claude braucht Input".
-- **Passive (fallback):** each pane also detects the state straight from the buffer grid — **working** (spinner line in the live bottom rows) vs **waiting for input** (input box visible, no spinner). Works with zero configuration; a hook-set state is simply confirmed by the next scans.
+- **Precise:** Claude Code hooks write `\e]5522;status=working|input|done\a` to the pane's tty.
+- **Zero-config fallback:** the pane detects spinner vs. input box straight from the buffer grid.
+- Terminal bell (`\a`) and OSC 777 (`\e]777;notify;Title;Body\a`) notify instantly too.
 
-Notifications only fire for an *unwatched* pane (app in background, or another pane focused); clicking one brings the app forward, focuses and zooms that pane. While a session works, its titlebar dot pulses gently. Native channels trigger instantly as well: the terminal bell (`\a`) and OSC 777 (`printf '\e]777;notify;Title;Body\a'`). A short per-pane cooldown keeps all paths from double-reporting.
+### Per-pane accent color
 
-### Per-pane accent color via escape sequence (OSC 5522)
-
-Any program running in a pane can set that pane's accent color (caret, focus border, zoom badge) in-band — no sockets, no config, works through SSH:
+The pane accent (caret, border, titlebar dot) follows the session — passively from Claude Code's `/color` frame, or explicitly, even through SSH:
 
 ```sh
 printf '\e]5522;accent=#e85e3e\a'   # set this pane's accent
-printf '\e]5522;accent=reset\a'     # back to the global/adaptive accent
+printf '\e]5522;accent=reset\a'     # back to global/adaptive
 ```
 
-The override wins over the global and adaptive accent for that pane until reset or pane close (not persisted). The payload format is `key=value`; unknown keys are ignored (the channel is meant to grow — see tracking issue #29). The same channel carries the session status above (`status=working|input|done[;detail]`). On top of the explicit channel, LatexTerm also *passively* picks up Claude Code's `/color` frame color from the buffer and adopts it as the pane accent — each session's chosen color shows up on its tile automatically. Security notes in [SECURITY.md](SECURITY.md).
+### The `latexterm` CLI
 
-### Driving the terminal: the `latexterm` CLI
-
-Every pane's shell gets a `LATEXTERM_PANE_ID` env var, and the app listens on a per-user Unix socket (`~/Library/Application Support/LatexTerm/control.sock`, mode 0600 + peer-uid check — see [SECURITY.md](SECURITY.md)). The bundled `latexterm` CLI speaks it:
+Agents (or you) can drive the terminal from any shell — the app listens on a per-user socket (0600 + peer check, see [SECURITY.md](SECURITY.md)):
 
 ```sh
-latexterm list-panes [--json]                       # index, UUID, CWD, session state per pane
-latexterm new-pane [--cwd DIR] [--exec CMD]         # open a pane, optionally run a command
-latexterm send [--pane SEL] [--no-enter] TEXT...    # type into a pane (Enter appended by default)
-latexterm zoom  [--pane SEL]                        # toggle pane zoom
-latexterm focus [--pane SEL]                        # focus a pane
+latexterm list-panes [--json]                     # index, UUID, CWD, session state
+latexterm new-pane [--cwd DIR] [--exec CMD]
+latexterm send [--pane SEL] [--no-enter] TEXT...  # type into a pane (Enter by default)
+latexterm zoom [--pane SEL]
+latexterm focus [--pane SEL]
 ```
 
-Without `--pane`, commands target the calling shell's own pane via `$LATEXTERM_PANE_ID` — handy from hooks. A purely numeric selector is the 1-based index from `list-panes`; anything else matches as a case-insensitive UUID prefix and must be unambiguous (sending keystrokes to the wrong shell would be command execution). Exit codes: `0` ok · `1` app error · `2` usage · `3` app not reachable.
-
-The binary ships inside the app bundle — put it on your `PATH` once:
+Without `--pane`, the calling shell's own pane is targeted (via `$LATEXTERM_PANE_ID`). Put the bundled binary on your PATH once:
 
 ```sh
 ln -s /Applications/LatexTerm.app/Contents/Helpers/latexterm /opt/homebrew/bin/latexterm
 ```
 
-This is the piece that closes the loop: a Claude Code session can open two panes, start a fresh Claude in each, prompt them, and watch their status — Claude orchestrating Claude, inside a native window.
+That closes the loop: a Claude Code session can open panes, start fresh Claudes in them, prompt them, and watch their status — Claude orchestrating Claude.
 
 ## Install
 
-Grab the latest `LatexTerm.app` from the [**Releases**](https://github.com/MatsLuca/LatexTerm/releases) page, unzip, and drop it into `/Applications`.
+Grab `LatexTerm.app` from [**Releases**](https://github.com/MatsLuca/LatexTerm/releases), unzip, drop into `/Applications`. The build is unsigned — right-click → **Open** on first launch, or:
 
-The build is currently unsigned, so on first launch macOS Gatekeeper will block it. Right‑click the app → **Open** → **Open**, or clear the quarantine flag:
-
-```bash
+```sh
 xattr -dr com.apple.quarantine /Applications/LatexTerm.app
 ```
 
-Prefer building it yourself? See [Build from source](#build-from-source).
+<details>
+<summary><b>Build from source</b></summary>
 
-## Requirements
+Needs Xcode 26+ with the Metal Toolchain (`xcodebuild -downloadComponent MetalToolchain`).
 
-- **To run:** macOS 14+
-- **To build:** Xcode 26+ with the Metal Toolchain installed (`xcodebuild -downloadComponent MetalToolchain` — SwiftTerm ships Metal shaders even when the CPU renderer is used)
-
-## Build from source
-
-Open in Xcode:
-
-```bash
-open LatexTerm.xcodeproj
+```sh
+open LatexTerm.xcodeproj    # then Cmd+R  (App Sandbox is off on purpose: PTY rights)
 ```
 
-`Cmd+R` to run. App Sandbox is intentionally disabled — the terminal needs free PTY/process spawn rights.
-
-Or build from CLI:
-
-```bash
+```sh
+# CLI build + tests
 xcodebuild -project LatexTerm.xcodeproj -scheme LatexTerm -configuration Release \
   -derivedDataPath .build CODE_SIGNING_ALLOWED=NO build
-open .build/Build/Products/Release/LatexTerm.app
-```
-
-Run the tests (`Cmd+U` in Xcode, or from the CLI):
-
-```bash
 xcodebuild test -project LatexTerm.xcodeproj -scheme LatexTerm \
   -destination 'platform=macOS' CODE_SIGNING_ALLOWED=NO
 ```
 
-`LatexTermTests` is a logic-only unit-test bundle (no test host) covering `LaTeXDetector` and `LaTeXReadable`.
+</details>
 
-## Keyboard shortcuts
+## Shortcuts
 
-| Shortcut | Action |
+| | |
 |---|---|
-| `⌘T` | New terminal pane (auto-tiled into the grid) |
-| `⌘W` | Close the focused pane (closes the window if it was the last) |
-| `⌘1` … `⌘9` | Grow the grid to N panes (grow-only — never closes panes) |
-| `⌘⏎` | Zoom the focused pane over the whole window (toggle; a titlebar badge shows the zoomed state, any grid change un-zooms first) |
-| `⌘+` / `⌘=` | Increase font size by 1pt (all panes) |
-| `⌘-` | Decrease font size by 1pt (all panes) |
-| `⌘0` | Reset font size to 13pt (default, all panes) |
-| `⌘L` | Toggle formula overlays on/off |
-| `⌘⌥⌃A` | Toggle automatic adaptive accent color |
-| `⌘⇧+` / `⌘⇧-` | Increase/decrease line spacing by 2px |
-| `⌘⇧0` | Reset line spacing to default (8px) |
-| `⌥⌘+` / `⌥⌘-` | Increase/decrease formula render scale by 0.1× |
-| `⌥⌘0` | Reset formula scale to 1.0× |
-| `⌘,` | Open the Settings window (all of the above as sliders/color pickers) |
+| `⌘T` / `⌘W` | new pane / close pane |
+| `⌘1…9` | grow the grid to N panes |
+| `⌘⏎` | zoom the focused pane (toggle) |
+| `⌘F` | find in the focused pane |
+| `⌘+` `⌘-` `⌘0` | font size (all panes, persisted) |
+| `⌘L` | toggle formula overlays |
+| `⌘⇧+` `⌘⇧-` `⌘⇧0` | line spacing |
+| `⌥⌘+` `⌥⌘-` `⌥⌘0` | formula render scale |
+| `⌘,` | settings window (everything above as sliders) |
 
-Font size is persisted in `UserDefaults` under `LatexTerm.fontSize` (range 6–48pt) and restored on next launch. It is **global**: changing it in one pane updates all panes (broadcast via the `LatexTerminalView.fontDidChange` notification).
-
-All formula settings (**color**, **enabled**, **line spacing**, **scale**) are also persisted and restored via `FormulaSettings` in `UserDefaults`. Everything is adjustable in one place via the native **Settings window** (`⌘,`) — it writes through the same paths as the menu shortcuts, so menu and window never disagree.
-
-## Testing formulas
-
-`echo` in zsh interprets escapes like `\f` and breaks LaTeX in output. Use `printf` or a here-doc instead:
-
-```sh
-printf '%s\n' '$E=mc^2$ und $\int_0^\infty e^{-x^2}dx$'
-cat <<'EOF'
-Bruch: $\frac{n(n+1)(2n+1)}{6}$
-Tief: $\frac{x+1}{\frac{a+b}{c-d}}$
-EOF
-```
-
-## Recording a demo
-
-The demo at the top of this README is rendered programmatically with
-[Remotion](https://remotion.dev) — see [`demo-video/`](demo-video/) for the sources, the
-storyboard, and the render commands (`npx remotion render Polished` → MP4 → animated WebP
-via `img2webp`). Change the code, re-render, done — no screen recording needed.
-
-## Project layout
-
-```
-LatexTerm.xcodeproj/         App project (SwiftUI lifecycle)
-LatexTerm/
-  LatexTermApp.swift         @main App definition + "Terminal" CommandMenu + Settings scene
-  SettingsView.swift         Native Settings window (⌘,) — sliders/color pickers for all options
-  TerminalContainer.swift    NSViewRepresentable wrapping the split container
-  TerminalSplit.swift        TerminalPane (shell + overlays per tile) + PaneContainerView (tile
-                              chrome: inset, focus ring, corner rules) +
-                              TerminalSplitView (animated, vibrancy-integrated auto-tiling grid layout)
-  SessionStore.swift         Session snapshot (pane CWDs) for restore on relaunch
-  SessionNotifier.swift      macOS notifications for session state (click → focus + zoom pane)
-  FormulaSettings.swift      Settings singleton (UserDefaults + NotificationCenter)
-  Control/
-    ControlProtocol.swift    Wire format of the control channel (shared by app and CLI)
-    ControlServer.swift      Unix-socket server (control.sock, 0600 + peer-uid check)
-  Latex/
-    LatexTerminalView.swift  LocalProcessTerminalView subclass: overlay host,
-                              font/split/close/grid shortcuts, range-change forwarding
-    OverlayController.swift  Per-rescan diff of detected formulas → JSON sync
-    LaTeXDetector.swift      Delimiter-based formula extraction
-    LaTeXReadable.swift      LaTeX → readable Unicode-math converter (copy "Lesbar")
-    FormulaImageRenderer.swift  Composes a formula snapshot into a PNG chip (copy "Bild")
-    MathOverlayView.swift    FormulaLayer: shared WKWebView + FormulaPreview (pin/copy)
-  katex/                     Bundled KaTeX assets (CSS, JS, woff2)
-  Assets.xcassets/
-  Info.plist
-LatexTermCLI/
-  main.swift                 The `latexterm` CLI (embedded into the app at Contents/Helpers/)
-SwiftTermLocal/              Vendored SwiftTerm fork (adds extraLineSpacing)
-  Sources/SwiftTerm/...
-  Package.swift              Library-only manifest (no executables, no tests)
-```
+**Tip — testing formulas:** zsh `echo` mangles backslashes; use `printf '%s\n' '$E=mc^2$'` or a quoted here-doc.
 
 ## Known limitations
 
-- **Wrapped-inline detection — first iteration.** Inline formulas that soft-wrap across a line break *are* detected (logical-line reconstruction via `isWrapped`), rendered in whichever row-segment has the most room with the other segment masked. Two edge cases are out of scope: a formula whose opening delimiter is scrolled off **above** the viewport, and one that wraps off the **bottom** of the viewport (no closer visible). Multi-line *display* blocks (`$$` / `\[` … `\]`) are supported only in canonical form with each delimiter alone on its own line — a block whose delimiters share a line with other content is not detected.
-- **Display mode `$$..$$` / `\[..\]` is rendered** with true KaTeX `displayMode`. Single-line display formulas are scaled into their row (so they stay one line tall); multi-line blocks span their source row range.
-- **Greedy `$`-pairing in prose.** Inline `$..$` detection is brace-aware (an inner `$` inside `{..}`, e.g. `$\text{cost: $5}$`, no longer closes the formula early), but two bare shell-style `$` on one line (`echo $PATH and $HOME`) are still paired greedily into a false formula. A safe heuristic can't be found without breaking legitimate math (`$(a+b)$`, `$n$th`, `$X$ … $Y$`), so math correctness wins.
-- **No theme sync after launch.** Background color is captured per rescan into the layer config. Changing the terminal background at runtime updates formula backgrounds on the next rescan, but is not pushed live. Formula foreground color is user-controlled via the "Formeln" menu.
+- A formula whose opener is scrolled off above the viewport (or that wraps past the bottom) isn't detected; multi-line `$$` blocks need each delimiter alone on its line.
+- Two bare `$` in prose (`echo $PATH and $HOME`) still pair into a false formula — every safe heuristic broke legit math, so math correctness wins.
+- No live theme sync; colors are captured per rescan.
 
 ## License
 
-LatexTerm is released under the [MIT License](LICENSE) — Copyright (c) 2026 Mats Luca Dagott.
-
-It bundles third-party software, each under its own license (see [`NOTICE`](NOTICE)):
-
-- **SwiftTerm** — MIT, Copyright (c) 2019–2022 Miguel de Icaza and contributors. Vendored fork at [`SwiftTermLocal/`](SwiftTermLocal/LICENSE). Upstream: https://github.com/migueldeicaza/SwiftTerm
-- **KaTeX** v0.16.9 — MIT, Copyright (c) 2013–2020 Khan Academy and contributors. Bundled at [`LatexTerm/katex/`](LatexTerm/katex/LICENSE). The KaTeX fonts are under the SIL Open Font License 1.1.
+MIT — © 2026 Mats Luca Dagott. Bundles [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT, vendored fork at `SwiftTermLocal/`) and [KaTeX](https://katex.org) 0.16.9 (MIT; fonts under SIL OFL 1.1) — see [`NOTICE`](NOTICE). The demo above is rendered programmatically with [Remotion](https://remotion.dev) (`demo-video/`).
