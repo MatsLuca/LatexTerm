@@ -10,6 +10,25 @@ final class PaneContainerView: NSView {
     static let contentInset: CGFloat = 4
     override var isFlipped: Bool { true }
 
+    /// Schwebende Live-Status-Pille (#25 v2) oben rechts — liegt ÜBER dem
+    /// Terminal-Inhalt (zPosition) und ist vom Innen-Layout ausgenommen:
+    /// die Fill-Loops unten würden sie sonst auf Kachelgröße aufblasen.
+    let statusBadge = PaneStatusBadgeView()
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        addSubview(statusBadge)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    /// Pille oben rechts verankern (flipped: y wächst nach unten).
+    func layoutStatusBadge() {
+        statusBadge.frame.origin = NSPoint(
+            x: bounds.width - statusBadge.frame.width - Self.contentInset - 6,
+            y: Self.contentInset + 6)
+    }
+
     /// Ziel einer laufenden (animierten) Umsortierung. Solange gesetzt, ignorieren
     /// die per Animations-Tick eintrudelnden Zwischengrößen die Subviews.
     private var pinnedTargetSize: NSSize?
@@ -26,11 +45,13 @@ final class PaneContainerView: NSView {
             .insetBy(dx: Self.contentInset, dy: Self.contentInset)
         guard inner.width > 0, inner.height > 0 else { pinnedTargetSize = nil; return }
         pinnedTargetSize = target
-        for sub in subviews { sub.frame = inner }
+        for sub in subviews where !(sub is PaneStatusBadgeView) { sub.frame = inner }
     }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
+        // Die Pille folgt jeder Zwischengröße (gleitet in der Animation mit).
+        layoutStatusBadge()
         if let target = pinnedTargetSize {
             // Zwischengröße der Animation → Inhalt steht schon auf dem Ziel.
             // Ziel erreicht → Pin lösen (jede Umsortierung pinnt ohnehin neu).
@@ -41,7 +62,7 @@ final class PaneContainerView: NSView {
         // synchron mitziehen, damit der Inhalt der Hülle nie einen Tick hinterherläuft.
         let inner = bounds.insetBy(dx: Self.contentInset, dy: Self.contentInset)
         guard inner.width > 0, inner.height > 0 else { return }
-        for sub in subviews { sub.frame = inner }
+        for sub in subviews where !(sub is PaneStatusBadgeView) { sub.frame = inner }
     }
 }
 
@@ -107,7 +128,32 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Bestätigter Session-Zustand (#30) — Schreibzugriff nur über
     /// `registerSessionScan` (Hysterese). UI (HUD-Puls) liest hier.
     private(set) var sessionState: SessionState = .none {
-        didSet { if sessionState != oldValue { onStyleChanged?() } }
+        didSet {
+            guard sessionState != oldValue else { return }
+            // Session vorbei/unbekannt → kein veralteter Tool-Name beim nächsten Start.
+            if sessionState == .none { statusDetail = nil }
+            updateStatusBadge()
+            onStyleChanged?()
+        }
+    }
+    /// Live-Status-Detail aus dem Hook-Kanal (#25 v2), z. B. der Tool-Name aus
+    /// dem PreToolUse-Hook. Nur die Hooks liefern es — die passive Erkennung
+    /// kennt keins (Badge zeigt dann den generischen Zustandstext).
+    private var statusDetail: String? {
+        didSet { if statusDetail != oldValue { updateStatusBadge() } }
+    }
+
+    /// Text der Kachel-Pille aus Zustand + Detail ableiten. nil = Pille weg.
+    private func updateStatusBadge() {
+        let text: String?
+        switch sessionState {
+        case .none: text = nil
+        case .working: text = statusDetail ?? "arbeitet…"
+        case .awaitingInput: text = statusDetail ?? "braucht Input"
+        }
+        container.statusBadge.update(text: text, accent: effectiveAccent,
+                                     pulsing: sessionState == .working)
+        container.layoutStatusBadge()
     }
     /// Feuert bei BESTÄTIGTEM Übergang working→awaitingInput — der Moment,
     /// in dem eine unbeobachtete Session Aufmerksamkeit braucht (#27 v1).
@@ -295,22 +341,34 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private func applyHookStatus(_ value: String) {
         let pieces = value.split(separator: ";", maxSplits: 1)
         guard let state = pieces.first else { return }
-        let detail = pieces.count > 1 ? String(pieces[1].prefix(200)) : nil
+        // Detail kommt aus untrusted Programm-Output und landet als Klartext in
+        // Badge + Notification: Steuerzeichen raus, Länge gedeckelt, leer = nil.
+        var detail = pieces.count > 1
+            ? String(pieces[1].prefix(200)).filter { ch in
+                !ch.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F }
+            }
+            : nil
+        if detail?.isEmpty == true { detail = nil }
         pendingSessionScans = 0
 #if DEBUG
         Self.statusLog("HOOK status=\(state) detail=\(detail ?? "-")")
 #endif
         switch state {
         case "working":
+            lastHookStatusAt = Date()
             sessionState = .working
+            statusDetail = detail          // nil (z. B. UserPromptSubmit) löscht bewusst
         case "input":
+            lastHookStatusAt = Date()
             sessionState = .awaitingInput
+            statusDetail = detail
             onAttentionSignal?(self, "Claude braucht Input", detail)
         case "done":
-            sessionState = .none
+            lastHookStatusAt = Date()
+            sessionState = .none           // räumt statusDetail im didSet mit ab
             onAttentionSignal?(self, "Claude ist fertig", detail)
         default:
-            break
+            break                          // unbekannter/kaputter Status erneuert NICHT
         }
     }
 
@@ -325,6 +383,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         let bg = view.nativeBackgroundColor
         let hull = paneAccent.flatMap { bg.blended(withFraction: 0.12, of: $0) } ?? bg
         container.layer?.backgroundColor = hull.cgColor
+        updateStatusBadge()   // Pille trägt die Akzentfarbe mit (#25 v2)
         onStyleChanged?()
     }
 
@@ -540,6 +599,17 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private var pendingSessionState: SessionState = .none
     private var pendingSessionScans = 0
 
+    /// Hook-Vorfahrt (#25 v2): Zeitpunkt des letzten gültigen Hook-Status.
+    /// Solange er frisch ist, hat die Session nachweislich Hooks → die passive
+    /// Erkennung schweigt komplett (sie funkte sonst dazwischen: Statuslines
+    /// mit Box-Zeichen sehen für sie wie der Eingabe-Kasten aus, und Claudes
+    /// Zwischenzustände wie „nichts"). Ablaufzeit statt „für immer": bricht
+    /// eine Session hart ab (Ctrl+C/Absturz — da feuert kein Stop-Hook),
+    /// übernimmt der Rater nach Ablauf wieder und räumt die Pille ab.
+    /// Jedes Hook-Signal (auch jeder PreToolUse) erneuert die Frist.
+    private var lastHookStatusAt: Date?
+    private static let hookStatusLease: TimeInterval = 600
+
 #if DEBUG
     /// Status-Debug-Log analog zum Accent-Log (Verifikations-Workflow, CLAUDE.md).
     private static let statusLogHandle: FileHandle? = {
@@ -584,6 +654,12 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             Self.statusLog("RAW \(raw) (committed=\(sessionState), pending=\(pendingSessionScans))\n" + bottomRowsDump())
         }
 #endif
+        // Hook-Vorfahrt: frisches Hook-Signal = die Hooks sind die Wahrheit,
+        // der Rater hält still (sonst Pillen-Flackern, siehe lastHookStatusAt).
+        if let hookAt = lastHookStatusAt, Date().timeIntervalSince(hookAt) < Self.hookStatusLease {
+            pendingSessionScans = 0
+            return
+        }
         guard raw != sessionState else {
             // Beobachtung bestätigt den Ist-Zustand → angefangenen Übergang verwerfen.
             pendingSessionScans = 0
@@ -1370,6 +1446,73 @@ extension TerminalSplitView: ControlCommandHandler {
         let prefix = selector.uppercased()
         let matches = panes.filter { $0.id.uuidString.hasPrefix(prefix) }
         return matches.count == 1 ? matches[0] : nil
+    }
+}
+
+/// Live-Status-Pille (#25 v2): schwebt oben rechts über dem Terminal-Inhalt
+/// einer Kachel und zeigt, was die Claude-Session dort gerade tut (Tool-Name
+/// aus dem PreToolUse-Hook bzw. generisch „arbeitet…"/„braucht Input").
+/// Rein visuell: `hitTest` = nil, Klicks/Selektion gehen ans Terminal durch.
+final class PaneStatusBadgeView: NSView {
+    private let label = NSTextField(labelWithString: "")
+    private var lastText: String?
+
+    init() {
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.zPosition = 10          // über dem später hinzugefügten Terminal-View
+        layer?.borderWidth = 1
+        label.font = .monospacedSystemFont(ofSize: 10.5, weight: .semibold)
+        label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 1
+        addSubview(label)
+        isHidden = true
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    /// nil blendet aus. Größe passt sich dem Text an (Deckel 240px, dann „…");
+    /// der Aufrufer positioniert danach via `layoutStatusBadge()` neu.
+    func update(text: String?, accent: NSColor, pulsing: Bool) {
+        defer { lastText = text }
+        guard let text else {
+            isHidden = true
+            layer?.removeAnimation(forKey: "badgePulse")
+            return
+        }
+        isHidden = false
+        // Dunkler, fast opaker Grund: die Pille liegt über Terminal-Text und
+        // muss lesbar bleiben (das 0.16-Alpha der Zoom-Pille reicht hier nicht).
+        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
+        layer?.borderColor = accent.withAlphaComponent(0.55).cgColor
+        label.textColor = accent
+
+        if text != lastText {
+            label.stringValue = text
+            label.sizeToFit()
+            label.frame.size.width = min(label.frame.width, 240)
+            setFrameSize(NSSize(width: label.frame.width + 16, height: label.frame.height + 6))
+            label.frame.origin = NSPoint(x: 8, y: 3)
+            layer?.cornerRadius = frame.height / 2
+        }
+
+        // Dezenter Atem-Puls solange gearbeitet wird (Optik wie der HUD-Punkt).
+        if pulsing {
+            if layer?.animation(forKey: "badgePulse") == nil {
+                let pulse = CABasicAnimation(keyPath: "opacity")
+                pulse.fromValue = 1.0
+                pulse.toValue = 0.55
+                pulse.duration = 0.9
+                pulse.autoreverses = true
+                pulse.repeatCount = .infinity
+                pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                layer?.add(pulse, forKey: "badgePulse")
+            }
+        } else {
+            layer?.removeAnimation(forKey: "badgePulse")
+        }
     }
 }
 

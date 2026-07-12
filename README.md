@@ -46,10 +46,10 @@ Everything here is a plain terminal mechanism — escape sequences, an env var, 
 
 ### Status & notifications
 
-Each pane tracks its session: **working** (titlebar dot pulses) → **done** / **needs input** (macOS notification if the pane is unwatched; clicking it focuses and zooms the pane).
+Each pane tracks its session: **working** (titlebar dot pulses, a floating pill in the pane shows the current tool live) → **done** / **needs input** (macOS notification if the pane is unwatched; clicking it focuses and zooms the pane).
 
-- **Precise:** Claude Code hooks write `\e]5522;status=working|input|done\a` to the pane's tty.
-- **Zero-config fallback:** the pane detects spinner vs. input box straight from the buffer grid.
+- **Precise:** Claude Code hooks write `\e]5522;status=working|input|done[;detail]\a` to the pane's tty — `detail` (e.g. the tool name from a `PreToolUse` hook) becomes the pill text.
+- **Zero-config fallback:** the pane detects spinner vs. input box straight from the buffer grid; a fresh hook signal silences it for 10 minutes (hooks win, the fallback self-heals crashed sessions).
 - Terminal bell (`\a`) and OSC 777 (`\e]777;notify;Title;Body\a`) notify instantly too.
 
 ### Per-pane accent color
