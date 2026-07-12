@@ -163,15 +163,6 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// title/body sind nur beim OSC-777-Pfad gefüllt.
     var onAttentionSignal: ((TerminalPane, _ title: String?, _ body: String?) -> Void)?
 
-    /// Pane-Farbe als `#RRGGBB` für den Session-Snapshot (#11).
-    var accentHex: String? { paneAccent?.srgbHexString }
-    /// Restore aus dem Snapshot: verhält sich wie eine ERKANNTE Farbe — die
-    /// laufende Detektion darf sie bestätigen, ersetzen oder wieder ausräumen.
-    func restoreAccent(hex: String?) {
-        guard let hex, let color = NSColor(srgbHex: hex) else { return }
-        borderAccent = color
-    }
-
     /// Shell-Prozess beendet → diese Pane soll entfernt werden.
     var onClosed: ((TerminalPane) -> Void)?
     /// Cmd+T in dieser Pane → neue Pane anlegen.
@@ -958,11 +949,7 @@ final class TerminalSplitView: NSView {
         // Session-Restore (#11): letztes Layout (Pane-Anzahl + CWDs) wiederherstellen;
         // ohne/mit korruptem Snapshot startet wie bisher eine Kachel im Home.
         if let snap = SessionStore.load() {
-            let accents = snap.paneAccents ?? []
-            for (i, dir) in snap.paneDirectories.enumerated() {
-                let pane = addPane(startingIn: dir)
-                if i < accents.count { pane.restoreAccent(hex: accents[i]) }
-            }
+            for dir in snap.paneDirectories { addPane(startingIn: dir) }
         } else {
             addPane()
         }
@@ -985,8 +972,7 @@ final class TerminalSplitView: NSView {
 
     private func saveSession() {
         guard !panes.isEmpty else { return }
-        SessionStore.save(SessionSnapshot(paneDirectories: panes.map { $0.currentDirectory },
-                                          paneAccents: panes.map { $0.accentHex }))
+        SessionStore.save(SessionSnapshot(paneDirectories: panes.map { $0.currentDirectory }))
     }
 
     override func viewDidMoveToWindow() {
