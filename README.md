@@ -6,13 +6,17 @@
 
 Native macOS terminal that renders LaTeX formulas live as KaTeX overlays — positioned directly over the source characters between `$...$`, `$$...$$`, `\(...\)` and `\[...\]`. No OCR: a vendored SwiftTerm fork gives us the real cell grid, so formulas sit exactly on their source text.
 
+It has also grown into a comfortable cockpit for **Claude Code** sessions: every pane knows whether its agent is working, finished, or waiting for input — and notifies you when attention is needed. Agents can even drive the terminal themselves through the bundled `latexterm` CLI: open panes, start sessions, send prompts — Claude orchestrating Claude. See [Claude Code integration](#claude-code-integration).
+
 ![LatexTerm demo: a Claude Code agent orchestrates panes via the latexterm CLI, then LaTeX renders live over a Claude explanation](docs/demo.webp)
 
 ## Why
 
 The predecessor project [LatexTerminalLive](https://github.com/MatsLuca/LatexTerminalLive) used ScreenCaptureKit + Vision OCR to read Ghostty's output. Worked, but OCR was unreliable (greek glyphs, fractions, subtle artifacts). This project is a full terminal emulator instead — we own the text stream, the grid model, and the render pipeline, so formula positions come from the cell grid directly. No OCR.
 
-## How it works
+Owning the grid has paid off twice: the same buffer access that positions formulas is what powers the Claude Code integration — session state is read straight from the live screen rows, no log parsing, no screen capture.
+
+## How the LaTeX overlay works
 
 ```
 PTY (zsh) → SwiftTerm VT parser → Buffer grid
@@ -35,6 +39,52 @@ PTY (zsh) → SwiftTerm VT parser → Buffer grid
 - **Split-screen tiling**: `⌘T` adds a pane, each with its own login shell and its own `OverlayController` (independent formula overlays). `TerminalSplitView` lays panes out by direct frame math (no `NSSplitView`), choosing the grid shape from the *window's* width **and** height: it picks the row count whose resulting cell aspect ratio is closest to a target (`idealCellAspect ≈ 0.82`), so a wide window stays single-row longer (up to ~3 across) and wraps into a balanced grid as it fills (4 → 2×2, then toward 3×3). Rows are equal height and each row divides its width independently (top-heavy masonry: e.g. 5 panes → 3 over 2). An 8px strut between cells is semi-transparent (`alpha: 0.35`) to let window vibrancy peek through. `⌘W` closes the focused pane, `⌘1…9` grows to N panes. Transitions when adding or removing panes are smoothly animated over 0.22s.
 - **Premium Visuals & Window Design**: The terminal window features a frameless blending design (`fullSizeContentView`, transparent titlebar, hidden title, and window-wide dragging). It embeds a native `NSVisualEffectView` behind the terminal panes (`.underWindowBackground`, `.behindWindow` blend modes) for a premium translucent macOS feel.
 - **Scroll-following overlays**: scrolling is a rapid sequence of static states, and repositioning the out-of-process WebView per step flickers — while hiding the overlays makes formulas vanish mid-scroll. The terminal scrolls uniformly by `Δrows × cellHeight`, so SwiftTerm's `scrolled` event drives a separate path (`onScrolled` → `scheduleReposition`) that translates the **whole formula container as one block** via CSS `translateY` inside the WebView (GPU-composited, no per-div re-sync) — formulas stay glued to their text. Content-rescans are suppressed while scrolling (the per-step `rangeChanged` would otherwise fight the translation); ~150 ms after the last event a single settle `rescan()` emits the new absolute positions **and** resets the translation in the *same* JS call (one WebView frame), so surviving formulas sit pixel-identical with no jump and no hide/reveal. The 30 ms `scheduleRescan` debounce now only serves terminal output, resize, and settings changes.
+
+## Claude Code integration
+
+LatexTerm is used daily as a cockpit for [Claude Code](https://claude.com/claude-code) sessions and has grown a set of features for exactly that. All of them are plain terminal mechanisms — escape sequences, an env var, a Unix socket — so nothing is hardwired to Claude: any agent, TUI, or script can use the same channels.
+
+### Session status & notifications ("Claude ist fertig" / "Claude braucht Input")
+
+Two sources feed each pane's session state, precise one first:
+
+- **Hook-driven (precise):** Claude Code hooks (`UserPromptSubmit` / `Stop` / `Notification`) write `\e]5522;status=…\a` to the pane's tty — the app learns *directly* when a turn starts, finishes, or needs input, no heuristics. Hooks run detached from the tty, so the one-liner resolves it via the parent process: `t=$(ps -o tty= -p $PPID | tr -d ' ') && printf '\033]5522;status=done\007' > "/dev/$t"` (guarded by `$LATEXTERM_PANE_ID`, silently inert outside LatexTerm). `status=done` triggers "Claude ist fertig", `status=input` triggers "Claude braucht Input".
+- **Passive (fallback):** each pane also detects the state straight from the buffer grid — **working** (spinner line in the live bottom rows) vs **waiting for input** (input box visible, no spinner). Works with zero configuration; a hook-set state is simply confirmed by the next scans.
+
+Notifications only fire for an *unwatched* pane (app in background, or another pane focused); clicking one brings the app forward, focuses and zooms that pane. While a session works, its titlebar dot pulses gently. Native channels trigger instantly as well: the terminal bell (`\a`) and OSC 777 (`printf '\e]777;notify;Title;Body\a'`). A short per-pane cooldown keeps all paths from double-reporting.
+
+### Per-pane accent color via escape sequence (OSC 5522)
+
+Any program running in a pane can set that pane's accent color (caret, focus border, zoom badge) in-band — no sockets, no config, works through SSH:
+
+```sh
+printf '\e]5522;accent=#e85e3e\a'   # set this pane's accent
+printf '\e]5522;accent=reset\a'     # back to the global/adaptive accent
+```
+
+The override wins over the global and adaptive accent for that pane until reset or pane close (not persisted). The payload format is `key=value`; unknown keys are ignored (the channel is meant to grow — see tracking issue #29). The same channel carries the session status above (`status=working|input|done[;detail]`). On top of the explicit channel, LatexTerm also *passively* picks up Claude Code's `/color` frame color from the buffer and adopts it as the pane accent — each session's chosen color shows up on its tile automatically. Security notes in [SECURITY.md](SECURITY.md).
+
+### Driving the terminal: the `latexterm` CLI
+
+Every pane's shell gets a `LATEXTERM_PANE_ID` env var, and the app listens on a per-user Unix socket (`~/Library/Application Support/LatexTerm/control.sock`, mode 0600 + peer-uid check — see [SECURITY.md](SECURITY.md)). The bundled `latexterm` CLI speaks it:
+
+```sh
+latexterm list-panes [--json]                       # index, UUID, CWD, session state per pane
+latexterm new-pane [--cwd DIR] [--exec CMD]         # open a pane, optionally run a command
+latexterm send [--pane SEL] [--no-enter] TEXT...    # type into a pane (Enter appended by default)
+latexterm zoom  [--pane SEL]                        # toggle pane zoom
+latexterm focus [--pane SEL]                        # focus a pane
+```
+
+Without `--pane`, commands target the calling shell's own pane via `$LATEXTERM_PANE_ID` — handy from hooks. A purely numeric selector is the 1-based index from `list-panes`; anything else matches as a case-insensitive UUID prefix and must be unambiguous (sending keystrokes to the wrong shell would be command execution). Exit codes: `0` ok · `1` app error · `2` usage · `3` app not reachable.
+
+The binary ships inside the app bundle — put it on your `PATH` once:
+
+```sh
+ln -s /Applications/LatexTerm.app/Contents/Helpers/latexterm /opt/homebrew/bin/latexterm
+```
+
+This is the piece that closes the loop: a Claude Code session can open two panes, start a fresh Claude in each, prompt them, and watch their status — Claude orchestrating Claude, inside a native window.
 
 ## Install
 
@@ -103,28 +153,6 @@ Font size is persisted in `UserDefaults` under `LatexTerm.fontSize` (range 6–4
 
 All formula settings (**color**, **enabled**, **line spacing**, **scale**) are also persisted and restored via `FormulaSettings` in `UserDefaults`. Everything is adjustable in one place via the native **Settings window** (`⌘,`) — it writes through the same paths as the menu shortcuts, so menu and window never disagree.
 
-### Per-pane accent color via escape sequence (OSC 5522)
-
-Any program running in a pane can set that pane's accent color (caret, focus border, zoom badge) in-band — no sockets, no config, works through SSH:
-
-```sh
-printf '\e]5522;accent=#e85e3e\a'   # set this pane's accent
-printf '\e]5522;accent=reset\a'     # back to the global/adaptive accent
-```
-
-The override wins over the global and adaptive accent for that pane until reset or pane close (not persisted). The payload format is `key=value`; unknown keys are ignored (the channel is meant to grow — see the Claude-Code-integration tracking issue #29). Security notes in [SECURITY.md](SECURITY.md).
-
-The same channel carries the pane's **session status** (`status=working`, `status=input`, `status=done`, each with an optional `;detail` suffix shown as the notification body) — see the next section.
-
-### Session notifications ("Claude ist fertig" / "Claude braucht Input")
-
-Two sources feed each pane's session state, precise one first:
-
-- **Hook-driven (precise):** Claude Code hooks (`UserPromptSubmit` / `Stop` / `Notification`) write `\e]5522;status=…\a` to the pane's tty — the app learns *directly* when a turn starts, finishes, or needs input, no heuristics. Hooks run detached from the tty, so the one-liner resolves it via the parent process: `t=$(ps -o tty= -p $PPID | tr -d ' ') && printf '\033]5522;status=done\007' > "/dev/$t"` (guarded by `$LATEXTERM_PANE_ID`, silently inert outside LatexTerm). `status=done` triggers "Claude ist fertig", `status=input` triggers "Claude braucht Input".
-- **Passive (fallback):** each pane also detects the state straight from the buffer grid — **working** (spinner line in the live bottom rows) vs **waiting for input** (input box visible, no spinner). Works with zero configuration; a hook-set state is simply confirmed by the next scans.
-
-Notifications only fire for an *unwatched* pane (app in background, or another pane focused); clicking one brings the app forward, focuses and zooms that pane. While a session works, its titlebar dot pulses gently. Native channels trigger instantly as well: the terminal bell (`\a`) and OSC 777 (`printf '\e]777;notify;Title;Body\a'`). A short per-pane cooldown keeps all paths from double-reporting.
-
 ## Testing formulas
 
 `echo` in zsh interprets escapes like `\f` and breaks LaTeX in output. Use `printf` or a here-doc instead:
@@ -158,6 +186,9 @@ LatexTerm/
   SessionStore.swift         Session snapshot (pane CWDs) for restore on relaunch
   SessionNotifier.swift      macOS notifications for session state (click → focus + zoom pane)
   FormulaSettings.swift      Settings singleton (UserDefaults + NotificationCenter)
+  Control/
+    ControlProtocol.swift    Wire format of the control channel (shared by app and CLI)
+    ControlServer.swift      Unix-socket server (control.sock, 0600 + peer-uid check)
   Latex/
     LatexTerminalView.swift  LocalProcessTerminalView subclass: overlay host,
                               font/split/close/grid shortcuts, range-change forwarding
@@ -169,6 +200,8 @@ LatexTerm/
   katex/                     Bundled KaTeX assets (CSS, JS, woff2)
   Assets.xcassets/
   Info.plist
+LatexTermCLI/
+  main.swift                 The `latexterm` CLI (embedded into the app at Contents/Helpers/)
 SwiftTermLocal/              Vendored SwiftTerm fork (adds extraLineSpacing)
   Sources/SwiftTerm/...
   Package.swift              Library-only manifest (no executables, no tests)
