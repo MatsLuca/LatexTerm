@@ -18,6 +18,14 @@ struct LatexTermApp: App {
             .preferredColorScheme(.dark)
         }
         .commands {
+            // ⌘N: Home-Kachel (Projekt-Launcher) statt SwiftUIs „Neues Fenster".
+            // ⌘T (nackte Shell, CWD-Erbe) bleibt in LatexTerminalView.performKeyEquivalent.
+            CommandGroup(replacing: .newItem) {
+                Button("Neue Home-Kachel") {
+                    NotificationCenter.default.post(name: .latexTermNewHomePane, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: .command)
+            }
             CommandMenu("Terminal") {
 
                 // MARK: LaTeX-Optionen

@@ -174,6 +174,53 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Cmd+⏎ in dieser Pane → Zoom-Toggle (#26).
     var onZoomRequested: ((TerminalPane) -> Void)?
 
+    // MARK: Home-Kachel (Projekt-Launcher)
+
+    /// Liegt über dem noch nicht gestarteten Terminal; `launch` ersetzt sie durch die Shell.
+    private(set) var homeView: HomePaneView?
+    /// Erst `start()` spawnt die Shell — eine Home-Kachel hat keinen Prozess.
+    private(set) var isStarted = false
+    var isHome: Bool { homeView != nil }
+    /// Was den Tastaturfokus dieser Kachel trägt: Terminal oder Home-Ansicht.
+    var focusTarget: NSView { homeView ?? view }
+
+    /// Kachel als Home-Kachel zeigen (statt Shell). `otherPanes` liefert die Kopfzeile
+    /// mit dem Status der übrigen Kacheln.
+    func showHome(otherPanes: @escaping () -> [(String, String)]) {
+        guard !isStarted, homeView == nil else { return }
+        let home = HomePaneView(frame: container.bounds)
+        home.autoresizingMask = [.width, .height]
+        home.otherPanes = otherPanes
+        home.onLaunch = { [weak self] dir, cmd in self?.launch(in: dir, command: cmd) }
+        home.onClose = { [weak self] in
+            guard let self else { return }
+            self.onCloseRequested?(self)
+        }
+        home.onFocusChanged = { [weak self] focused in
+            guard let self else { return }
+            self.hasFocus = focused
+            self.applyFocusStyle(animated: true)
+            if focused { self.view.window?.title = "LatexTerm — Projekte" }
+        }
+        container.addSubview(home)
+        homeView = home
+    }
+
+    /// Home → Terminal: Shell in `directory` starten und `command` tippen (Kernel puffert,
+    /// die Shell liest es nach dem Prompt — gleicher Pfad wie `new-pane --exec`).
+    func launch(in directory: String, command: String?) {
+        homeView?.removeFromSuperview()
+        homeView = nil
+        start(in: directory)
+        if let command, !command.isEmpty {
+            view.send(txt: command + "\r")
+        }
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.view.window?.makeFirstResponder(self.view)
+        }
+    }
+
     override init() {
         let settings = FormulaSettings.shared
         let term = LatexTerminalView(frame: .zero)
@@ -408,8 +455,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     /// Ist diese Kachel gerade fokussiert (First Responder im oder unterm Terminal-View)?
     private var isFocused: Bool {
-        let fr = view.window?.firstResponder
-        return (fr === view) || ((fr as? NSView)?.isDescendant(of: view) ?? false)
+        let fr = container.window?.firstResponder
+        return (fr === view) || ((fr as? NSView)?.isDescendant(of: container) ?? false)
     }
 
     /// 0,3-s-Sammelticker für alle billigen Grid-Scans (Rahmenfarbe #24,
@@ -835,6 +882,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Beendet die Shell (SIGTERM). Das Prozess-Ende läuft über `processTerminated`
     /// → `onClosed` und entfernt die Kachel auf demselben Pfad wie ein `exit`.
     func terminate() {
+        guard isStarted else { return }   // Home-Kachel hat keinen Prozess
         view.terminate()
     }
 
@@ -864,6 +912,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         // die User-Config. Apples Session-Save-Teil bleibt aus, solange wir
         // KEIN TERM_SESSION_ID setzen — nicht hinzufügen.
         env.append("TERM_PROGRAM=Apple_Terminal")
+        isStarted = true
         view.startProcess(executable: shell, environment: env, execName: shellIdiom, currentDirectory: dir)
     }
 
@@ -923,6 +972,7 @@ final class TerminalSplitView: NSView {
     private let vibrancyView = NSVisualEffectView()
     private var isFirstLayout = true
     private var terminateObserver: NSObjectProtocol?
+    private var newHomeObserver: NSObjectProtocol?
 
     /// Lücke (Steg) zwischen den Kacheln in Punkten.
     private static let gap: CGFloat = 8
@@ -951,7 +1001,15 @@ final class TerminalSplitView: NSView {
         if let snap = SessionStore.load() {
             for dir in snap.paneDirectories { addPane(startingIn: dir) }
         } else {
-            addPane()
+            addPane(home: true)   // erste Kachel = Projekt-Launcher
+        }
+
+        // ⌘N (Menü „Neue Home-Kachel"): nur das Key-Fenster reagiert.
+        newHomeObserver = NotificationCenter.default.addObserver(
+            forName: .latexTermNewHomePane, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.window?.isKeyWindow == true else { return }
+            self.addPane(home: true)
         }
 
         // Beim Beenden den aktuellen Stand sichern (CWDs werden live ausgelesen).
@@ -968,11 +1026,29 @@ final class TerminalSplitView: NSView {
 
     deinit {
         if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
+        if let newHomeObserver { NotificationCenter.default.removeObserver(newHomeObserver) }
     }
 
+    /// Home-Kacheln sind flüchtig: nur gestartete Shells landen im Snapshot. Sind es
+    /// keine, wird nichts gespeichert → nächster Start beginnt wieder mit Home.
     private func saveSession() {
-        guard !panes.isEmpty else { return }
-        SessionStore.save(SessionSnapshot(paneDirectories: panes.map { $0.currentDirectory }))
+        let started = panes.filter { $0.isStarted }
+        SessionStore.save(SessionSnapshot(paneDirectories: started.map { $0.currentDirectory }))
+    }
+
+    /// Kopfzeile der Home-Kachel: alle ANDEREN Kacheln mit Index, Ordnername und Claude-Status.
+    private func paneSummary(excluding me: TerminalPane) -> [(String, String)] {
+        panes.enumerated().compactMap { i, p in
+            guard p !== me else { return nil }
+            let name = p.isHome ? "Home" : ((p.currentDirectory as NSString?)?.lastPathComponent ?? "Shell")
+            let status: String
+            switch p.sessionState {
+            case .working: status = "● arbeitet"
+            case .awaitingInput: status = "○ braucht Input"
+            case .none: status = ""
+            }
+            return ("\(i + 1) \(name)", status)
+        }
     }
 
     override func viewDidMoveToWindow() {
@@ -1012,7 +1088,7 @@ final class TerminalSplitView: NSView {
     }
 
     @discardableResult
-    func addPane(startingIn directory: String? = nil) -> TerminalPane {
+    func addPane(startingIn directory: String? = nil, home: Bool = false) -> TerminalPane {
         let pane = TerminalPane()
         pane.onClosed = { [weak self] p in self?.removePane(p) }
         // ⌘T: die anfordernde Kachel ist die fokussierte → ihr CWD vererben (#8).
@@ -1033,11 +1109,18 @@ final class TerminalSplitView: NSView {
         panes.append(pane)
         updateTitlebarHUD()
         addSubview(pane.container)
-        pane.start(in: directory)
+        if home {
+            pane.showHome(otherPanes: { [weak self, weak pane] in
+                guard let self, let pane else { return [] }
+                return self.paneSummary(excluding: pane)
+            })
+        } else {
+            pane.start(in: directory)
+        }
         updateFocusBorders()
         relayout(animated: true)
         // Fokus erst im nächsten Runloop – der frisch hinzugefügte View ist dann bereit.
-        DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(pane.view) }
+        DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(pane.focusTarget) }
         return pane
     }
 
@@ -1065,7 +1148,7 @@ final class TerminalSplitView: NSView {
         guard !panes.isEmpty else { window?.close(); return }
         updateFocusBorders()
         relayout(animated: true)
-        window?.makeFirstResponder(panes[min(idx, panes.count - 1)].view)
+        window?.makeFirstResponder(panes[min(idx, panes.count - 1)].focusTarget)
     }
 
     /// Rahmen-Regeln: Fokus-Abstufung nur im sichtbaren Grid (≥2 Kacheln, kein
@@ -1095,7 +1178,7 @@ final class TerminalSplitView: NSView {
         updateFocusBorders()
         updateTitlebarHUD()
         relayout(animated: true)
-        window?.makeFirstResponder(pane.view)
+        window?.makeFirstResponder(pane.focusTarget)
     }
 
     // MARK: - Titlebar-HUD (Session-Punkte + Zoom-Badge)
@@ -1185,7 +1268,7 @@ final class TerminalSplitView: NSView {
     /// Ist diese Kachel gerade fokussiert (First Responder im/unterm Terminal-View)?
     private func isFocused(_ pane: TerminalPane) -> Bool {
         let fr = window?.firstResponder
-        return (fr === pane.view) || ((fr as? NSView)?.isDescendant(of: pane.view) ?? false)
+        return (fr === pane.view) || ((fr as? NSView)?.isDescendant(of: pane.container) ?? false)
     }
 
     // MARK: - Session-Status → Notification (#30)
@@ -1227,7 +1310,7 @@ final class TerminalSplitView: NSView {
             updateFocusBorders()
             relayout(animated: true)
         }
-        window?.makeFirstResponder(pane.view)
+        window?.makeFirstResponder(pane.focusTarget)
         updateTitlebarHUD()
     }
 
@@ -1240,7 +1323,7 @@ final class TerminalSplitView: NSView {
             updateFocusBorders()
             relayout(animated: true)
         }
-        window?.makeFirstResponder(pane.view)
+        window?.makeFirstResponder(pane.focusTarget)
         updateTitlebarHUD()
     }
 

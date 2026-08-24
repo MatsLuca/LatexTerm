@@ -44,6 +44,12 @@ The deep-dive lives in the source — start at `LatexTerm/Latex/OverlayControlle
 
 Everything here is a plain terminal mechanism — escape sequences, an env var, a Unix socket. Nothing is hardwired to Claude; any agent or script can use the same channels.
 
+### Home pane — project launcher (`⌘N`)
+
+The first pane on launch (and every `⌘N`) is a **home pane** instead of a shell: a list of your projects sorted by last Claude Code activity, with recent sessions (titles from Claude Code's own `ai-title` entries), git state, aliases, and the live status of the other panes. `⏎` starts Claude in the project, `←→` + `⏎` resumes a specific session, `⇧⏎` resumes the last one, `⌥⏎` gives a plain shell, typing filters, `⌘⇧N` creates a new project folder and hands it to `/neues-projekt`. The pane turns into a normal terminal on selection. `⌘T` stays a plain shell inheriting the focused pane's CWD.
+
+The data comes from an external CLI — `projekte --json` (run through your login shell; override with `defaults write com.… LatexTerm.projekteCommand "…"`). Without it the pane shows a hint and nothing else breaks. The contract (JSON shape) lives with the CLI, not in the app.
+
 ### Status & notifications
 
 Each pane tracks its session: **working** (titlebar dot pulses, a floating pill in the pane shows the current tool live) → **done** / **needs input** (macOS notification if the pane is unwatched; clicking it focuses and zooms the pane).
@@ -112,7 +118,8 @@ xcodebuild test -project LatexTerm.xcodeproj -scheme LatexTerm \
 
 | | |
 |---|---|
-| `⌘T` / `⌘W` | new pane / close pane |
+| `⌘N` | new **home pane** (project launcher) |
+| `⌘T` / `⌘W` | new shell pane (inherits CWD) / close pane |
 | `⌘1…9` | grow the grid to N panes |
 | `⌘⏎` | zoom the focused pane (toggle) |
 | `⌘F` | find in the focused pane |
