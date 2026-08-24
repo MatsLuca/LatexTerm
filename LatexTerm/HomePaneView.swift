@@ -20,6 +20,7 @@ struct ProjekteData: Decodable {
         var lastAt: String?
         var turns: Int
         var title: String?
+        var titleSource: String?   // manual | ai | first-prompt | none
         var pinned: Bool?
         var context: Context?
     }
@@ -68,6 +69,7 @@ struct ProjekteData: Decodable {
         var compact: ActionTemplate?
         var pin: ActionTemplate?
         var unpin: ActionTemplate?
+        var rename: ActionTemplate?
         var byLevel: [String: [ActionTemplate]]
     }
     var root: String
@@ -181,6 +183,7 @@ final class HomePaneView: NSView {
         case run(ProjekteData.ActionTemplate, path: String)   // Zeile aus den Höhen-Templates
         case compact(ProjekteData.Session, path: String)      // Weiter + /compact
         case togglePin(ProjekteData.Session, pinned: Bool)
+        case rename(ProjekteData.Session)                     // eigener Titel (⌘E)
         case header(String)
         var isHeader: Bool { if case .header = self { return true }; return false }
     }
@@ -199,6 +202,7 @@ final class HomePaneView: NSView {
         var out: [Action] = [.resume(s, path: item.p.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt), project: nil)]
         if templates.compact != nil { out.append(.compact(s, path: item.p.path)) }
         if templates.unpin != nil { out.append(.togglePin(s, pinned: true)) }
+        if templates.rename != nil { out.append(.rename(s)) }
         actions = out
         list.reloadData()
         list.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
@@ -244,7 +248,7 @@ final class HomePaneView: NSView {
     private static let fallbackActions = ProjekteData.Actions(
         resume: .init(glyph: "↻", label: "Weiter", hint: nil, command: "claude --resume {session}", aliasCommand: nil, followUp: nil),
         newProject: .init(glyph: "✚", label: "Neues Projekt", hint: nil, command: "claude", aliasCommand: nil, followUp: nil),
-        compact: nil, pin: nil, unpin: nil,
+        compact: nil, pin: nil, unpin: nil, rename: nil,
         byLevel: ["ordner": [.init(glyph: "+", label: "Neue Session", hint: nil, command: "claude", aliasCommand: nil, followUp: nil),
                              .init(glyph: "$", label: "Nur Shell", hint: nil, command: nil, aliasCommand: nil, followUp: nil)]])
     private var templates: ProjekteData.Actions { data?.actions ?? Self.fallbackActions }
@@ -399,7 +403,7 @@ final class HomePaneView: NSView {
         b.toolTip = "⌘⇧N — Ordner unter dem gewählten anlegen, dann /neues-projekt"
         b.focusRingType = .none
         footer.addArrangedSubview(b)
-        let help = NSTextField(labelWithString: "⇥ Spalte   ⇧⇥ Pins   ⌘P anpinnen   ⏎ ausführen   tippen sucht")
+        let help = NSTextField(labelWithString: "⇥ Spalte   ⇧⇥ Pins   ⌘P anpinnen   ⌘E umbenennen   ⏎ ausführen   tippen sucht")
         help.font = Self.mono(-2)
         help.textColor = Self.faint
         footer.addArrangedSubview(help)
@@ -716,6 +720,7 @@ final class HomePaneView: NSView {
         if let (q, s) = candidates.first {
             if let ctx = s.context, ctx.advice != "ok", templates.compact != nil { out.append(.compact(s, path: q.path)) }
             if templates.pin != nil { out.append(.togglePin(s, pinned: s.pinned ?? false)) }
+            if templates.rename != nil { out.append(.rename(s)) }
         }
         let rest = candidates.dropFirst()
         if !rest.isEmpty {
@@ -742,17 +747,40 @@ final class HomePaneView: NSView {
             onLaunch?(LaunchRequest(path: path, command: t.command, label: "\((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp))
         case .togglePin(let s, let pinned):
             setPin(s.id, pinned: !pinned)
+        case .rename(let s):
+            renameSession(s)
         case .header: break
         }
     }
 
     /// Pin über die Datenschicht setzen (`projekte pin|unpin <id>`), dann neu laden.
     private func setPin(_ id: String, pinned: Bool) {
+        runProjekte([pinned ? "pin" : "unpin", id])
+    }
+
+    /// Eigener Session-Titel (`projekte rename <id> [Titel]`); leer = zurück zum automatischen Titel.
+    private func renameSession(_ s: ProjekteData.Session) {
+        let alert = NSAlert()
+        alert.messageText = "Session umbenennen"
+        alert.informativeText = "Leer lassen = wieder der automatische Titel."
+        alert.addButton(withTitle: "Umbenennen")
+        alert.addButton(withTitle: "Abbrechen")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 340, height: 22))
+        field.stringValue = s.title ?? ""
+        field.placeholderString = "Titel"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        runProjekte(["rename", s.id, field.stringValue.trimmingCharacters(in: .whitespaces)])
+    }
+
+    /// `projekte <args…>` über die Login-Shell (PATH), Argumente unverändert durchgereicht; danach neu laden.
+    private func runProjekte(_ args: [String]) {
         let keepPin = pinMode
         DispatchQueue.global(qos: .userInitiated).async {
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            proc.arguments = ["-lc", "projekte \(pinned ? "pin" : "unpin") \(id)"]
+            proc.arguments = ["-lc", "projekte \"$@\"", "projekte"] + args
             try? proc.run(); proc.waitUntilExit()
             DispatchQueue.main.async { [weak self] in
                 self?.pinMode = keepPin
@@ -782,6 +810,17 @@ final class HomePaneView: NSView {
         case .togglePin(let s, let pinned): setPin(s.id, pinned: !pinned); return true
         default: return true
         }
+    }
+
+    /// ⌘E: markierte Session-Zeile (oder die „Weiter"-Session) umbenennen.
+    private func renameSelectedFromList() -> Bool {
+        let r = list.selectedRow
+        let candidate: Action? = (r >= 0 && r < actions.count) ? actions[r] : actions.first
+        switch candidate {
+        case .resume(let s, _, _, _, _), .compact(let s, _), .togglePin(let s, _), .rename(let s): renameSession(s)
+        default: break
+        }
+        return true
     }
 
     @objc private func runSelectedAction() {
@@ -910,6 +949,7 @@ final class HomePaneView: NSView {
         if mods == .command, a == "r" { reload(); return true }
         if mods == [.command, .shift], a.lowercased() == "n" { newProject(); return true }
         if mods == .command, a == "p" { return pinSelectedFromList() }
+        if mods == .command, a == "e" { return renameSelectedFromList() }
         return super.performKeyEquivalent(with: event)
     }
 
@@ -1029,6 +1069,9 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
         case .togglePin(_, let pinned):
             let t = (pinned ? templates.unpin : templates.pin)!
             cell.set(glyph: t.glyph, text: t.label, detail: pinned ? "im Pin-Screen (⇧⇥)" : "wichtig — in den Pin-Screen (⇧⇥)", meta: "", header: false, accent: Self.yellow)
+        case .rename(let s):
+            let t = templates.rename!
+            cell.set(glyph: t.glyph, text: t.label, detail: s.title ?? (t.hint ?? ""), meta: s.titleSource == "manual" ? "✎" : "", header: false, accent: Self.blue)
         }
         return cell
     }

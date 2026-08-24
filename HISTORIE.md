@@ -27,6 +27,11 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 10 — Sessions umbenennen:** `projekte rename <id> [Titel]` schreibt nach
+  `~/.config/projekte/namen.json`; der eigene Titel überstimmt den ai-title (`titleSource: manual`), leer
+  = zurück auf automatisch. Home-Kachel: Template `rename` → ✎-Zeile bei der Weiter-Session und im
+  Pin-Screen, ⌘E auf jeder Session-Zeile, NSAlert mit vorbelegtem Titel. `setPin` zu `runProjekte(args)`
+  verallgemeinert — Argumente gehen als `"$@"` durch die Login-Shell, nie in den Befehlsstring interpoliert.
 - **Runde 9 — Fokus aus einem Guss:** Klick in die andere Spalte änderte zwar den First Responder, die
   Dimmung/der Akzentbalken hingen aber am `becomeFirstResponder`-Hook + async-Nachprüfung und liefen
   bei Maus-Wechseln auseinander. Jetzt eine Wahrheit: KVO auf `window.firstResponder` → `focusDidChange()`
