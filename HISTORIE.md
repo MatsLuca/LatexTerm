@@ -27,6 +27,13 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 5 (24.08. abends) — Höhen-Einstiege aus `projekte`:** Mats' Frage „schreiben wir auf dieser
+  Höhe Skills vor?" → Antwort: der Launcher erzwingt nur *Neues Projekt* (immer `/neues-projekt`), sonst
+  bietet er höhentypische Einstiege als Zeilen an (Router/Bereich: „⌂ Wartungsgang" = `/claude-md .`;
+  ohne CLAUDE.md: „✎ Zum Projekt machen" = `/neues-projekt --nachruesten`). Weil LatexTerm öffentlich
+  ist, stehen diese Commands **nicht** in Swift: `projekte --json` liefert `actions` (resume/newProject/
+  byLevel-Templates mit `{session}`/`{alias}`), die App rendert nur; ohne Templates Fallback Neu+Shell.
+  Fußzeile = klickbare Buttons (Neues Projekt, Neu laden, Zoom, Schließen) statt Tastenlegende.
 - **UX-Runde 4 (24.08. abends):** „einfarbig, unübersichtlich; soll aussehen wie Terminal + Statusline".
   → Home-Kachel nutzt jetzt die Terminal-Monospace in der persistierten Größe (`LatexTerminalView.storedFontSize`,
   jetzt intern sichtbar) und die xterm-256-Palette der `statusline-command.sh` (51 cyan Projekt/Neu, 77 grün

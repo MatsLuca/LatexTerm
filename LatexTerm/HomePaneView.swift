@@ -34,9 +34,23 @@ struct ProjekteData: Decodable {
     }
     struct ClaudeMd: Decodable { var exists: Bool; var header: String? }
     struct Area: Decodable { var id: String }
+    /// Einstieg je Höhe — kommt aus `projekte` (Verfassungs-Logik lebt dort, nicht in der App).
+    struct ActionTemplate: Decodable {
+        var glyph: String
+        var label: String
+        var hint: String?
+        var command: String?      // nil = nur Shell
+        var aliasCommand: String? // nur newProject: "hier {alias}"
+    }
+    struct Actions: Decodable {
+        var resume: ActionTemplate
+        var newProject: ActionTemplate
+        var byLevel: [String: [ActionTemplate]]
+    }
     var root: String
     var projects: [Project]
     var areas: [Area]
+    var actions: Actions?
 }
 
 /// Lädt die Projektliste über das externe CLI `projekte` (Werkstatt-Datenschicht).
@@ -132,11 +146,18 @@ final class HomePaneView: NSView {
 
     private enum Action {
         case resume(ProjekteData.Session, path: String, title: String, age: String, project: String?)
-        case new(path: String)
-        case shell(path: String)
+        case run(ProjekteData.ActionTemplate, path: String)   // Zeile aus den Höhen-Templates
         case header(String)
         var isHeader: Bool { if case .header = self { return true }; return false }
     }
+
+    /// Fallback, falls `projekte` (noch) keine Templates liefert: nur Neu + Shell.
+    private static let fallbackActions = ProjekteData.Actions(
+        resume: .init(glyph: "↻", label: "Weiter", hint: nil, command: "claude --resume {session}", aliasCommand: nil),
+        newProject: .init(glyph: "✚", label: "Neues Projekt", hint: nil, command: "claude", aliasCommand: nil),
+        byLevel: ["ordner": [.init(glyph: "+", label: "Neue Session", hint: nil, command: "claude", aliasCommand: nil),
+                             .init(glyph: "$", label: "Nur Shell", hint: nil, command: nil, aliasCommand: nil)]])
+    private var templates: ProjekteData.Actions { data?.actions ?? Self.fallbackActions }
 
     private var data: ProjekteData?
     private var byPath: [String: ProjekteData.Project] = [:]
@@ -156,7 +177,7 @@ final class HomePaneView: NSView {
     private let subtitle = NSTextField(labelWithString: "")
     private let list = HomeTable()
     private let listScroll = NSScrollView()
-    private let footer = NSTextField(labelWithString: "")
+    private let footer = NSStackView()
     private let divider = NSView()
 
     // Aus einem Guss mit Terminal und Statusline: dieselbe Monospace-Schrift in derselben Größe,
@@ -213,9 +234,28 @@ final class HomePaneView: NSView {
         subtitle.font = Self.mono(-1)
         subtitle.textColor = Self.dim
         subtitle.lineBreakMode = .byTruncatingTail
-        footer.font = Self.mono(-2)
-        footer.textColor = Self.faint
-        footer.stringValue = "⏎ ausführen · →← Baum/Aktionen · tippen filtert · ⌘⇧N neues Projekt · ⌘⏎ zoom"
+        footer.orientation = .horizontal
+        footer.spacing = 8
+        let specs: [(String, String, Selector)] = [
+            ("✚ Neues Projekt", "⌘⇧N — Ordner unter dem gewählten anlegen, dann /neues-projekt", #selector(newProject)),
+            ("⟳ Neu laden", "⌘R", #selector(reload)),
+            ("⤢ Zoom", "⌘⏎", #selector(zoomTapped)),
+            ("▭ Kachel schließen", "⌘W", #selector(closeTapped)),
+        ]
+        for (label, tip, sel) in specs {
+            let b = NSButton(title: label, target: self, action: sel)
+            b.bezelStyle = .accessoryBarAction
+            b.controlSize = .small
+            b.font = Self.mono(-2)
+            b.contentTintColor = Self.dim
+            b.toolTip = tip
+            b.focusRingType = .none
+            footer.addArrangedSubview(b)
+        }
+        let help = NSTextField(labelWithString: "⏎ ausführen · →← Baum/Aktionen · tippen filtert")
+        help.font = Self.mono(-2)
+        help.textColor = Self.faint
+        footer.addArrangedSubview(help)
         divider.wantsLayer = true
         divider.layer?.backgroundColor = Self.fg.withAlphaComponent(0.08).cgColor
 
@@ -445,8 +485,10 @@ final class HomePaneView: NSView {
             out.append(.resume(s, path: q.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt),
                                project: q.path == node.path ? nil : q.name))
         }
-        out.append(.new(path: node.path))
-        out.append(.shell(path: node.path))
+        let level = p?.level ?? "ordner"
+        for t in templates.byLevel[level] ?? templates.byLevel["ordner"] ?? [] {
+            out.append(.run(t, path: node.path))
+        }
 
         // Weitere Projekte unterhalb, nach Aktivität (Root: „Zuletzt überall"); das „Weiter"-Projekt nicht doppelt
         let rest = candidates.dropFirst().filter { $0.0.path != node.path }
@@ -467,16 +509,18 @@ final class HomePaneView: NSView {
         list.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
     }
 
-    private static let claude = "claude --dangerously-skip-permissions"
-
     private func run(_ a: Action) {
         switch a {
-        case .resume(let s, let path, _, _, _): onLaunch?(path, "\(Self.claude) --resume \(s.id)")
-        case .new(let path): onLaunch?(path, Self.claude)
-        case .shell(let path): onLaunch?(path, nil)
+        case .resume(let s, let path, _, _, _):
+            onLaunch?(path, (templates.resume.command ?? "").replacingOccurrences(of: "{session}", with: s.id))
+        case .run(let t, let path):
+            onLaunch?(path, t.command)
         case .header: break
         }
     }
+
+    @objc private func zoomTapped() { onZoom?() }
+    @objc private func closeTapped() { onClose?() }
 
     @objc private func runSelectedAction() {
         let r = list.selectedRow
@@ -524,11 +568,13 @@ final class HomePaneView: NSView {
         if FileManager.default.fileExists(atPath: dir) {
             let a = NSAlert(); a.messageText = "Gibt es schon"; a.informativeText = dir; a.runModal(); return
         }
+        let t = templates.newProject
         var cmd = "mkdir -p \(Self.q(dir)) && cd \(Self.q(dir))"
-        if !alias.isEmpty, alias.range(of: "^[A-Za-z0-9_.-]+$", options: .regularExpression) != nil {
-            cmd += " && hier \(alias)"   // zsh-Funktion aus der .zshrc
+        if !alias.isEmpty, alias.range(of: "^[A-Za-z0-9_.-]+$", options: .regularExpression) != nil,
+           let ac = t.aliasCommand {
+            cmd += " && " + ac.replacingOccurrences(of: "{alias}", with: alias)
         }
-        cmd += " && \(Self.claude) '/neues-projekt'"
+        if let c = t.command { cmd += " && " + c }
         onLaunch?(parentNode.path, cmd)
     }
 
@@ -668,9 +714,11 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
         case .header(let t):
             cell.set(glyph: "", text: t, detail: "", meta: "", header: true, accent: Self.faint)
         case .resume(_, _, let t, let age, let project):
-            cell.set(glyph: "↻", text: project.map { "Weiter · \($0)" } ?? "Weiter", detail: t, meta: age, header: false, accent: Self.green)
-        case .new:   cell.set(glyph: "+", text: "Neue Session", detail: "", meta: "", header: false, accent: Self.cyan)
-        case .shell: cell.set(glyph: "$", text: "Nur Shell", detail: "", meta: "", header: false, accent: Self.blue)
+            let r = templates.resume
+            cell.set(glyph: r.glyph, text: project.map { "\(r.label) · \($0)" } ?? r.label, detail: t, meta: age, header: false, accent: Self.green)
+        case .run(let t, _):
+            let color: NSColor = t.command == nil ? Self.blue : (t.glyph == "+" ? Self.cyan : Self.violet)
+            cell.set(glyph: t.glyph, text: t.label, detail: t.hint ?? "", meta: "", header: false, accent: color)
         }
         return cell
     }
