@@ -1035,18 +1035,16 @@ final class TerminalSplitView: NSView {
         SessionStore.save(SessionSnapshot(paneDirectories: started.map { $0.currentDirectory }))
     }
 
-    /// Kopfzeile der Home-Kachel: alle ANDEREN Kacheln mit Index, Ordnername und Claude-Status.
+    /// Für die Home-Kachel: (CWD, Claude-Status) aller ANDEREN gestarteten Kacheln — der Baum
+    /// markiert Ordner, in denen gerade eine Session läuft.
     private func paneSummary(excluding me: TerminalPane) -> [(String, String)] {
-        panes.enumerated().compactMap { i, p in
-            guard p !== me else { return nil }
-            let name = p.isHome ? "Home" : ((p.currentDirectory as NSString?)?.lastPathComponent ?? "Shell")
-            let status: String
+        panes.compactMap { p in
+            guard p !== me, p.isStarted, let cwd = p.currentDirectory else { return nil }
             switch p.sessionState {
-            case .working: status = "● arbeitet"
-            case .awaitingInput: status = "○ braucht Input"
-            case .none: status = ""
+            case .working: return (cwd, "working")
+            case .awaitingInput: return (cwd, "awaitingInput")
+            case .none: return (cwd, "none")
             }
-            return ("\(i + 1) \(name)", status)
         }
     }
 

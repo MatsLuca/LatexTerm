@@ -27,6 +27,11 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **UX-Runde 3 (24.08. abends):** Mats' Kritik an Fassung 2: „Wo weiter?" zu wortreich, Zeit-Sortierung
+  allein reicht nicht — man will auch *strukturell* navigieren. Erst Modus-Umschalter (⇥ Zuletzt/Struktur),
+  dann erkannt: Modus = Denklast. Fassung 3 = Finder-Muster: Baum links, Aktionen des gewählten Ordners
+  rechts; Root zeigt „Zuletzt überall". Enter = „Weiter" statt „Neu" — wer vor 20 min hier war, will
+  weitermachen. Fußzeile fast weg (nur ⌘⇧N); Modifier-Tasten (⇧⏎/⌥⏎) durch sichtbare Zeilen ersetzt.
 - **Fokus-Bug (Mats, 24.08. abends):** in der ⌘N-Home-Kachel gingen Tasten ins Nachbar-Terminal, ⌘W/⇥
   griffen nicht. Ursache: `HomePaneView.becomeFirstResponder` rief verschachtelt `makeFirstResponder(table)`
   und gab `false` zurück → AppKit stellte den alten Responder wieder her. **Regel:** Fokusziel direkt
