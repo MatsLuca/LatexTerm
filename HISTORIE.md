@@ -27,6 +27,10 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 11 — Neue Session ist Standard:** Mats' häufigster Griff ist „Alias tippen, ⏎, neue Session" —
+  darum steht ＋ Neue Session jetzt an erster Stelle (⏎ und Doppelklick im Baum), ↻ Weiter an zweiter,
+  Shell & Co. danach. Reihenfolge wird in `renderActions` aus den Templates abgeleitet (Templates mit
+  Befehl vor Weiter, ohne Befehl danach) — die Werkstatt bleibt Herr über die Einträge.
 - **Runde 10 — Sessions umbenennen:** `projekte rename <id> [Titel]` schreibt nach
   `~/.config/projekte/namen.json`; der eigene Titel überstimmt den ai-title (`titleSource: manual`), leer
   = zurück auf automatisch. Home-Kachel: Template `rename` → ✎-Zeile bei der Weiter-Session und im

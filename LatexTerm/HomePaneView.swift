@@ -141,7 +141,7 @@ extension Notification.Name {
 /// Startbildschirm einer Kachel (⌘N / erste Kachel): links der Ordnerbaum unter `root`
 /// (Finder-Logik, lazy aus dem Dateisystem, Projekte/Sessions aus `projekte` angeheftet, ● wo
 /// gerade eine Claude-Kachel läuft), rechts die Aktionen des gewählten Ordners:
-/// „↻ Weiter" (letzte Session), „＋ Neue Session", „› Nur Shell", darunter „Zuletzt hier"
+/// „＋ Neue Session" (Standard, ⏎), „↻ Weiter" (letzte Session), „› Nur Shell", darunter „Zuletzt hier"
 /// (eigene Sessions + letzte Session jedes Unterprojekts, EINE Zeitliste).
 /// Tasten: ↑↓ · → in den Ordner / zu den Aktionen · ← zu / zurück · ⏎ ausführen · Tippen filtert
 /// den Baum · Esc leert · ⌘⇧N neues Projekt im gewählten Ordner · ⌘R neu laden.
@@ -708,14 +708,16 @@ final class HomePaneView: NSView {
         let below = d.projects.filter { $0.path != node.path && $0.path.hasPrefix(node.path + "/") && !$0.sessions.isEmpty }
         for q in below { if let s = q.sessions.first { candidates.append((q, s)) } }
         candidates.sort { ($0.1.lastAt ?? "") > ($1.1.lastAt ?? "") }
+        // Reihenfolge: erst die Start-Templates der Höhe (＋ Neue Session zuerst — das ist der
+        // häufigste Griff: Alias tippen, ⏎), dann ↻ Weiter, dann Shell & Co. (Templates ohne Befehl).
+        let level = p?.level ?? "ordner"
+        let byLevel = templates.byLevel[level] ?? templates.byLevel["ordner"] ?? []
+        for t in byLevel where t.command != nil { out.append(.run(t, path: node.path)) }
         if let (q, s) = candidates.first {
             out.append(.resume(s, path: q.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt),
                                project: q.path == node.path ? nil : q.name))
         }
-        let level = p?.level ?? "ordner"
-        for t in templates.byLevel[level] ?? templates.byLevel["ordner"] ?? [] {
-            out.append(.run(t, path: node.path))
-        }
+        for t in byLevel where t.command == nil { out.append(.run(t, path: node.path)) }
         // Für die „Weiter"-Session: anpinnen/loslösen + Kompakten, wenn der Kontext voll wird
         if let (q, s) = candidates.first {
             if let ctx = s.context, ctx.advice != "ok", templates.compact != nil { out.append(.compact(s, path: q.path)) }
