@@ -27,6 +27,12 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 9 — Fokus aus einem Guss:** Klick in die andere Spalte änderte zwar den First Responder, die
+  Dimmung/der Akzentbalken hingen aber am `becomeFirstResponder`-Hook + async-Nachprüfung und liefen
+  bei Maus-Wechseln auseinander. Jetzt eine Wahrheit: KVO auf `window.firstResponder` → `focusDidChange()`
+  (synchron, idempotent), die Tabellen machen sich im `mouseDown` explizit zum First Responder, und ein
+  Klick ins Leere der Kachel fokussiert die Spalte unter der Maus (rechts nur, wenn es Aktionen gibt).
+  Lehre: Fokus-Optik nie aus den Übergangs-Hooks ableiten, sondern aus dem Endzustand des Fensters.
 - **Runde 8 — Aufklapp-Zustand + Suche von rechts:** Der gespeicherte Aufklapp-Zustand ging verloren, weil
   `reloadData()` (Statuswechsel alle 2 s, Filter) Collapse-Events feuert, die `saveExpansion` als Nutzer-
   aktion nahm. Jetzt: eigene `expandedPaths`-Menge als Wahrheit, Delegate-Events nur ohne

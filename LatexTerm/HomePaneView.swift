@@ -307,15 +307,24 @@ final class HomePaneView: NSView {
     var keyView: NSView { tree }
     override var acceptsFirstResponder: Bool { false }
     override func mouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(tree)
+        // Klick ins Leere: die Spalte unter der Maus bekommt den Fokus (rechts nur, wenn es Aktionen gibt).
+        let p = convert(event.locationInWindow, from: nil)
+        if listScroll.frame.contains(p), !actions.isEmpty { focusList() } else { window?.makeFirstResponder(tree) }
         super.mouseDown(with: event)
     }
 
+    /// Eine Wahrheit für „wo ist der Fokus": der First Responder des Fensters, per KVO beobachtet.
+    /// So stimmen Dimmung und Akzentbalken bei ⇥, Klick, → / ←, Overlay und Kachelwechsel gleichermaßen.
+    private var firstResponderObservation: NSKeyValueObservation?
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         refreshTimer?.invalidate()
-        guard window != nil else { return }
+        firstResponderObservation = nil
+        guard let window else { return }
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshRunning() }
+        firstResponderObservation = window.observe(\.firstResponder, options: [.initial, .new]) { [weak self] _, _ in
+            self?.focusDidChange()
+        }
     }
     deinit { refreshTimer?.invalidate() }
 
@@ -421,7 +430,7 @@ final class HomePaneView: NSView {
         tree.target = self
         tree.doubleAction = #selector(treeDoubleClick)
         tree.onKey = { [weak self] ev in self?.treeKey(ev) ?? false }
-        tree.onFocus = { [weak self] f in self?.focusChanged(f) }
+        tree.onFocus = { [weak self] in self?.focusDidChange() }
         treeScroll.documentView = tree
         treeScroll.hasVerticalScroller = true
         treeScroll.autohidesScrollers = true
@@ -445,7 +454,7 @@ final class HomePaneView: NSView {
         list.target = self
         list.doubleAction = #selector(runSelectedAction)
         list.onKey = { [weak self] ev in self?.listKey(ev) ?? false }
-        list.onFocus = { [weak self] f in self?.focusChanged(f) }
+        list.onFocus = { [weak self] in self?.focusDidChange() }
         listScroll.documentView = list
         listScroll.hasVerticalScroller = true
         listScroll.autohidesScrollers = true
@@ -486,34 +495,21 @@ final class HomePaneView: NSView {
     }
 
     private var focusInside = false
-    private func focusChanged(_ f: Bool) {
-        updateColumnEmphasis()
-        if f { if !focusInside { focusInside = true; onFocusChanged?(true) }; return }
-        // Wechsel Baum ↔ Aktionen: erst prüfen, ob der Fokus die Kachel wirklich verlässt.
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let fr = self.window?.firstResponder as? NSView
-            let inside = fr.map { $0 === self || $0.isDescendant(of: self) } ?? false
-            if !inside && self.focusInside { self.focusInside = false; self.onFocusChanged?(false) }
-        }
-    }
-
-    /// Die Spalte mit Tastaturfokus ist voll sichtbar, die andere leicht abgedimmt — so ist
-    /// immer klar, wo ↑↓⏎ gerade wirken. Zusätzlich zeichnet nur die fokussierte Spalte den Akzentbalken.
-    private func updateColumnEmphasis() {
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let fr = self.window?.firstResponder as? NSView
-            let inTree = fr === self.tree || (fr?.isDescendant(of: self.tree) ?? false)
-            let inList = fr === self.list || (fr?.isDescendant(of: self.list) ?? false)
-            self.treeScroll.animator().alphaValue = inList ? 0.55 : 1
-            self.listScroll.animator().alphaValue = inTree ? 0.55 : 1
-            self.title.animator().alphaValue = inTree ? 0.55 : 1
-            self.subtitle.animator().alphaValue = inTree ? 0.55 : 1
-            self.tree.needsDisplay = true; self.list.needsDisplay = true
-            self.tree.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
-            self.list.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
-        }
+    /// Wird vom KVO auf `window.firstResponder` und von den Tabellen selbst gerufen — idempotent.
+    private func focusDidChange() {
+        let fr = window?.firstResponder as? NSView
+        let inTree = fr.map { $0 === tree || $0.isDescendant(of: tree) } ?? false
+        let inList = fr.map { $0 === list || $0.isDescendant(of: list) } ?? false
+        let inside = fr.map { $0 === self || $0.isDescendant(of: self) } ?? false
+        // Die Spalte mit Tastaturfokus ist voll sichtbar, die andere leicht abgedimmt — so ist
+        // immer klar, wo ↑↓⏎ gerade wirken. Nur die fokussierte Spalte zeichnet den Akzentbalken.
+        treeScroll.animator().alphaValue = inList ? 0.55 : 1
+        listScroll.animator().alphaValue = inTree ? 0.55 : 1
+        title.animator().alphaValue = inTree ? 0.55 : 1
+        subtitle.animator().alphaValue = inTree ? 0.55 : 1
+        tree.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
+        list.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
+        if inside != focusInside { focusInside = inside; onFocusChanged?(inside) }
     }
 
     // MARK: Daten
@@ -1138,15 +1134,23 @@ final class HomeRowBackground: NSTableRowView {
 /// Tabellen/Outline, die Tasten und Fokuswechsel an die Home-Kachel melden.
 final class HomeTable: NSTableView {
     var onKey: ((NSEvent) -> Bool)?
-    var onFocus: ((Bool) -> Void)?
-    override func becomeFirstResponder() -> Bool { let ok = super.becomeFirstResponder(); if ok { onFocus?(true) }; return ok }
-    override func resignFirstResponder() -> Bool { let ok = super.resignFirstResponder(); if ok { onFocus?(false) }; return ok }
+    var onFocus: (() -> Void)?
+    override func becomeFirstResponder() -> Bool { let ok = super.becomeFirstResponder(); if ok { onFocus?() }; return ok }
+    override func resignFirstResponder() -> Bool { let ok = super.resignFirstResponder(); if ok { onFocus?() }; return ok }
+    override func mouseDown(with event: NSEvent) {
+        if window?.firstResponder !== self { window?.makeFirstResponder(self) }   // Klick = Fokus, wie ⇥
+        super.mouseDown(with: event)
+    }
     override func keyDown(with event: NSEvent) { if onKey?(event) == true { return }; super.keyDown(with: event) }
 }
 final class HomeOutline: NSOutlineView {
     var onKey: ((NSEvent) -> Bool)?
-    var onFocus: ((Bool) -> Void)?
-    override func becomeFirstResponder() -> Bool { let ok = super.becomeFirstResponder(); if ok { onFocus?(true) }; return ok }
-    override func resignFirstResponder() -> Bool { let ok = super.resignFirstResponder(); if ok { onFocus?(false) }; return ok }
+    var onFocus: (() -> Void)?
+    override func becomeFirstResponder() -> Bool { let ok = super.becomeFirstResponder(); if ok { onFocus?() }; return ok }
+    override func resignFirstResponder() -> Bool { let ok = super.resignFirstResponder(); if ok { onFocus?() }; return ok }
+    override func mouseDown(with event: NSEvent) {
+        if window?.firstResponder !== self { window?.makeFirstResponder(self) }
+        super.mouseDown(with: event)
+    }
     override func keyDown(with event: NSEvent) { if onKey?(event) == true { return }; super.keyDown(with: event) }
 }
