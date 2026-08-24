@@ -166,7 +166,7 @@ final class HomePaneView: NSView {
     static let dim = fg.withAlphaComponent(0.45)
     static let faint = fg.withAlphaComponent(0.22)
     static let cyan   = NSColor(red: 0x5f/255.0, green: 0xd7/255.0, blue: 0xff/255.0, alpha: 1)
-    static let green  = NSColor(red: 0x5f/255.0, green: 0xd7/255.0, blue: 0x5f/255.0, alpha: 1)
+    static let green  = NSColor(red: 0x87/255.0, green: 0xd7/255.0, blue: 0x87/255.0, alpha: 1)   // 114, gedämpfter als 77
     static let blue   = NSColor(red: 0x87/255.0, green: 0xaf/255.0, blue: 0xff/255.0, alpha: 1)
     static let violet = NSColor(red: 0xd7/255.0, green: 0x5f/255.0, blue: 0xff/255.0, alpha: 1)
     static let orange = NSColor(red: 0xff/255.0, green: 0xaf/255.0, blue: 0x00/255.0, alpha: 1)
@@ -434,20 +434,26 @@ final class HomePaneView: NSView {
         subtitle.stringValue = sub.joined(separator: "   ·   ")
 
         var out: [Action] = []
-        if let s = p?.sessions.first {
-            out.append(.resume(s, path: node.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt), project: nil))
+        // „Weiter" = die neueste Session im GESAMTEN Teilbaum (eigene + alle Unterordner) —
+        // ein Bereich zeigt so das zuletzt bearbeitete Projekt darunter, nicht seine eigene alte Session.
+        var candidates: [(ProjekteData.Project, ProjekteData.Session)] = []
+        if let p, let s = p.sessions.first { candidates.append((p, s)) }
+        let below = d.projects.filter { $0.path != node.path && $0.path.hasPrefix(node.path + "/") && !$0.sessions.isEmpty }
+        for q in below { if let s = q.sessions.first { candidates.append((q, s)) } }
+        candidates.sort { ($0.1.lastAt ?? "") > ($1.1.lastAt ?? "") }
+        if let (q, s) = candidates.first {
+            out.append(.resume(s, path: q.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt),
+                               project: q.path == node.path ? nil : q.name))
         }
         out.append(.new(path: node.path))
         out.append(.shell(path: node.path))
 
-        // Projekte unterhalb, nach Aktivität (Root: „Zuletzt überall")
-        let below = d.projects.filter { $0.path != node.path && $0.path.hasPrefix(node.path + "/") && !$0.sessions.isEmpty }
-        if !below.isEmpty {
+        // Weitere Projekte unterhalb, nach Aktivität (Root: „Zuletzt überall"); das „Weiter"-Projekt nicht doppelt
+        let rest = candidates.dropFirst().filter { $0.0.path != node.path }
+        if !rest.isEmpty {
             out.append(.header(isRoot ? "Zuletzt überall" : "Zuletzt hier"))
-            for q in below.prefix(12) {
-                if let s = q.sessions.first {
-                    out.append(.resume(s, path: q.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt), project: q.name))
-                }
+            for (q, s) in rest.prefix(12) {
+                out.append(.resume(s, path: q.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt), project: q.name))
             }
         }
         if let p, p.sessions.count > 1 {
@@ -662,7 +668,7 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
         case .header(let t):
             cell.set(glyph: "", text: t, detail: "", meta: "", header: true, accent: Self.faint)
         case .resume(_, _, let t, let age, let project):
-            cell.set(glyph: "↻", text: project ?? "Weiter", detail: t, meta: age, header: false, accent: Self.green)
+            cell.set(glyph: "↻", text: project.map { "Weiter · \($0)" } ?? "Weiter", detail: t, meta: age, header: false, accent: Self.green)
         case .new:   cell.set(glyph: "+", text: "Neue Session", detail: "", meta: "", header: false, accent: Self.cyan)
         case .shell: cell.set(glyph: "$", text: "Nur Shell", detail: "", meta: "", header: false, accent: Self.blue)
         }
@@ -743,7 +749,7 @@ final class ActionCell: NSView {
         glyph.font = HomePaneView.mono(0, .bold)
         text.stringValue = header ? "── \(t) " : t
         text.font = header ? HomePaneView.mono(-2) : HomePaneView.mono(0, .semibold)
-        text.textColor = header ? HomePaneView.faint : (accent == HomePaneView.faint ? fg : accent)
+        text.textColor = header ? HomePaneView.faint : fg
         detail.stringValue = d; detail.textColor = fg.withAlphaComponent(0.6)
         detail.font = HomePaneView.mono()
         meta.stringValue = m; meta.textColor = HomePaneView.blue.withAlphaComponent(0.8)
