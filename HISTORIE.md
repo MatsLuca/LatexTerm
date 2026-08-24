@@ -27,6 +27,11 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 13 — Projekte anpinnen:** Pin-Screen (⇧⇥) hat jetzt zwei Blöcke, „Projekte“ oben und „Sessions“
+  darunter (`PinGroup`, nicht wählbar, immer offen). Ein angepinntes Projekt zeigt rechts ＋ Neue Session,
+  ↻ Weiter (letzte Session), › Nur Shell, ☆ Loslösen — der Griff „Projekt → neue Session“ ohne Baum.
+  ⌘⇧P pinnt den gewählten Ordner (auch ohne CLAUDE.md), die ★-Zeile liegt hinter „▸ Mehr“; Daten aus
+  `projekte pin-projekt|unpin-projekt` + `pinnedProjects` (Werkstatt).
 - **Runde 12 — Aufgeräumte Aktionsspalte:** „zu unübersichtlich, nicht alles sofort einblenden“. Rechts
   stehen jetzt nur ＋ Neue Session, ↻ Weiter, › Nur Shell (+ Kompakt-Rat als Warnung) und eine Klapp-
   zeile „▸ Sessions (n ältere · anpinnen · umbenennen)“. → / ⏎ klappt auf (Pin, Umbenennen, Zuletzt

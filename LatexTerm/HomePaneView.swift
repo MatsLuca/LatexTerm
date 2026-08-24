@@ -35,6 +35,16 @@ struct ProjekteData: Decodable {
         var path: String
         var session: Session { Session(id: id, lastAt: lastAt, turns: turns, title: title, pinned: true, context: context) }
     }
+    /// Angepinntes Projekt / Ordner (Top-Level-Liste `pinnedProjects`).
+    struct PinnedProject: Decodable {
+        var id: String
+        var name: String
+        var path: String
+        var level: String
+        var aliases: [String]
+        var lastActivity: String?
+        var lastSession: Session?
+    }
     struct Project: Decodable {
         var id: String
         var path: String
@@ -45,6 +55,7 @@ struct ProjekteData: Decodable {
         var lastActivity: String?
         var git: Git?
         var sessions: [Session]
+        var pinned: Bool?
         var claudeMd: ClaudeMd?
         /// Kopfzeile der CLAUDE.md ohne „# " — als Untertitel in der Struktur-Ansicht.
         var claudeMdHeader: String? {
@@ -69,6 +80,8 @@ struct ProjekteData: Decodable {
         var compact: ActionTemplate?
         var pin: ActionTemplate?
         var unpin: ActionTemplate?
+        var pinProject: ActionTemplate?
+        var unpinProject: ActionTemplate?
         var rename: ActionTemplate?
         var byLevel: [String: [ActionTemplate]]
     }
@@ -77,6 +90,7 @@ struct ProjekteData: Decodable {
     var areas: [Area]
     var actions: Actions?
     var pinned: [Pinned]?
+    var pinnedProjects: [PinnedProject]?
 }
 
 /// Was die Kachel beim Ausführen einer Aktion an TerminalPane übergibt.
@@ -184,41 +198,69 @@ final class HomePaneView: NSView {
         case compact(ProjekteData.Session, path: String)      // Weiter + /compact
         case togglePin(ProjekteData.Session, pinned: Bool)
         case rename(ProjekteData.Session)                     // eigener Titel (⌘E)
+        case togglePinProject(path: String, name: String, pinned: Bool)
         case more(count: Int, expanded: Bool)                 // „▸ Sessions (n)" — klappt den Rest auf
         case header(String)
         var isHeader: Bool { if case .header = self { return true }; return false }
     }
 
     /// Fallback, falls `projekte` (noch) keine Templates liefert: nur Neu + Shell.
-    /// Pin-Screen: rechts die Aktionen der gewählten angepinnten Session.
+    /// Pin-Screen: rechts die Aktionen des gewählten Pins (Projekt: Neu/Weiter/Shell — Session: Weiter …).
     private func renderPinActions() {
-        guard let item = tree.item(atRow: tree.selectedRow) as? PinItem else {
+        let item = tree.item(atRow: tree.selectedRow)
+        if let pp = (item as? PinProjectItem)?.p {
+            title.stringValue = pp.name
+            var sub: [String] = []
+            if !pp.aliases.isEmpty { sub.append(pp.aliases.joined(separator: ", ")) }
+            sub.append(Self.rootRelative(pp.path))
+            subtitle.stringValue = sub.joined(separator: "   ·   ")
+            var out: [Action] = []
+            let byLevel = templates.byLevel[pp.level] ?? templates.byLevel["ordner"] ?? []
+            for t in byLevel where t.command != nil { out.append(.run(t, path: pp.path)) }
+            if let s = pp.lastSession {
+                out.append(.resume(s, path: pp.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt), project: nil))
+            }
+            for t in byLevel where t.command == nil { out.append(.run(t, path: pp.path)) }
+            if templates.unpinProject != nil { out.append(.togglePinProject(path: pp.path, name: pp.name, pinned: true)) }
+            actions = out
+        } else if let pi = (item as? PinItem)?.p {
+            let s = pi.session
+            title.stringValue = pi.project
+            subtitle.stringValue = (s.title ?? "(ohne Titel)") + (s.context.map { "   ·   " + Self.contextLine($0) } ?? "")
+            var out: [Action] = [.resume(s, path: pi.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt), project: nil)]
+            if templates.compact != nil { out.append(.compact(s, path: pi.path)) }
+            if templates.unpin != nil { out.append(.togglePin(s, pinned: true)) }
+            if templates.rename != nil { out.append(.rename(s)) }
+            actions = out
+        } else {
             title.stringValue = "Angepinnt"
-            subtitle.stringValue = pinItems.isEmpty ? "Noch nichts angepinnt — in den Aktionen einer Session ★ wählen oder p drücken." : ""
+            subtitle.stringValue = pinGroups.isEmpty ? "Noch nichts angepinnt — ⌘P pinnt eine Session, ⌘⇧P ein Projekt." : ""
             actions = []; list.reloadData(); return
         }
-        let s = item.p.session
-        title.stringValue = item.p.project
-        subtitle.stringValue = (s.title ?? "(ohne Titel)") + (s.context.map { "   ·   " + Self.contextLine($0) } ?? "")
-        var out: [Action] = [.resume(s, path: item.p.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt), project: nil)]
-        if templates.compact != nil { out.append(.compact(s, path: item.p.path)) }
-        if templates.unpin != nil { out.append(.togglePin(s, pinned: true)) }
-        if templates.rename != nil { out.append(.rename(s)) }
-        actions = out
         list.reloadData()
         list.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+    }
+
+    private static func rootRelative(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
     }
 
     private func togglePinMode() {
         pinMode.toggle()
         filter = ""
         pinItems = (data?.pinned ?? []).map(PinItem.init)
+        let pinProjects = (data?.pinnedProjects ?? []).map(PinProjectItem.init)
+        pinGroups = []
+        if !pinProjects.isEmpty { pinGroups.append(PinGroup("Projekte", pinProjects)) }
+        if !pinItems.isEmpty { pinGroups.append(PinGroup("Sessions", pinItems)) }
         suppressExpansionSave = true
         tree.reloadData()
         if let root, !pinMode { tree.expandItem(root) }
+        if pinMode { for g in pinGroups { tree.expandItem(g) } }
         suppressExpansionSave = false
         if pinMode {
-            if !pinItems.isEmpty { tree.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
+            if !pinGroups.isEmpty { tree.selectRowIndexes(IndexSet(integer: 1), byExtendingSelection: false) }
         } else {
             restoreExpansion()
             if let first = data?.projects.first, let n = node(for: first.path) { reveal(n) }
@@ -249,17 +291,22 @@ final class HomePaneView: NSView {
     private static let fallbackActions = ProjekteData.Actions(
         resume: .init(glyph: "↻", label: "Weiter", hint: nil, command: "claude --resume {session}", aliasCommand: nil, followUp: nil),
         newProject: .init(glyph: "✚", label: "Neues Projekt", hint: nil, command: "claude", aliasCommand: nil, followUp: nil),
-        compact: nil, pin: nil, unpin: nil, rename: nil,
+        compact: nil, pin: nil, unpin: nil, pinProject: nil, unpinProject: nil, rename: nil,
         byLevel: ["ordner": [.init(glyph: "+", label: "Neue Session", hint: nil, command: "claude", aliasCommand: nil, followUp: nil),
                              .init(glyph: "$", label: "Nur Shell", hint: nil, command: nil, aliasCommand: nil, followUp: nil)]])
     private var templates: ProjekteData.Actions { data?.actions ?? Self.fallbackActions }
+    private var pinnedProjectPaths: Set<String> { Set((data?.pinnedProjects ?? []).map(\.path)) }
 
     private var data: ProjekteData?
     private var byPath: [String: ProjekteData.Project] = [:]
     /// ⇧⇥: Pin-Screen — links die angepinnten Sessions statt des Baums.
     private var pinMode = false
     final class PinItem { let p: ProjekteData.Pinned; init(_ p: ProjekteData.Pinned) { self.p = p } }
+    final class PinProjectItem { let p: ProjekteData.PinnedProject; init(_ p: ProjekteData.PinnedProject) { self.p = p } }
+    /// Block im Pin-Screen („Projekte" / „Sessions") — nicht wählbar, immer aufgeklappt.
+    final class PinGroup { let title: String; let items: [AnyObject]; init(_ t: String, _ i: [AnyObject]) { title = t; items = i } }
     private var pinItems: [PinItem] = []
+    private var pinGroups: [PinGroup] = []
     private var root: Node?
     private var filter = "" { didSet { applyFilter() } }
     private var filtered: [Node] = []
@@ -404,7 +451,7 @@ final class HomePaneView: NSView {
         b.toolTip = "⌘⇧N — Ordner unter dem gewählten anlegen, dann /neues-projekt"
         b.focusRingType = .none
         footer.addArrangedSubview(b)
-        let help = NSTextField(labelWithString: "⇥ Spalte   ⇧⇥ Pins   ⌘P anpinnen   ⌘E umbenennen   ⏎ ausführen   tippen sucht")
+        let help = NSTextField(labelWithString: "⇥ Spalte   ⇧⇥ Pins   ⌘P Session anpinnen   ⌘⇧P Projekt anpinnen   ⌘E umbenennen   ⏎ ausführen   tippen sucht")
         help.font = Self.mono(-2)
         help.textColor = Self.faint
         footer.addArrangedSubview(help)
@@ -725,9 +772,15 @@ final class HomePaneView: NSView {
             out.append(.compact(s, path: q.path))
         }
         let rest = candidates.dropFirst()
+        if candidates.isEmpty, templates.pinProject != nil, !isRoot {
+            out.append(.togglePinProject(path: node.path, name: node.name, pinned: p?.pinned ?? pinnedProjectPaths.contains(node.path)))
+        }
         if let (_, s) = candidates.first {
             out.append(.more(count: rest.count, expanded: showMore))
             if showMore {
+                if templates.pinProject != nil, !isRoot {
+                    out.append(.togglePinProject(path: node.path, name: node.name, pinned: p?.pinned ?? pinnedProjectPaths.contains(node.path)))
+                }
                 if templates.pin != nil { out.append(.togglePin(s, pinned: s.pinned ?? false)) }
                 if templates.rename != nil { out.append(.rename(s)) }
                 if !rest.isEmpty {
@@ -758,6 +811,8 @@ final class HomePaneView: NSView {
             setPin(s.id, pinned: !pinned)
         case .rename(let s):
             renameSession(s)
+        case .togglePinProject(let path, _, let pinned):
+            runProjekte([pinned ? "unpin-projekt" : "pin-projekt", path])
         case .more(_, let expanded):
             setMore(!expanded)
         case .header: break
@@ -850,6 +905,18 @@ final class HomePaneView: NSView {
     /// ⌘P: Pin der markierten Session-Zeile (oder der „Weiter"-Session) umschalten.
     private func pinSelectedFromList() -> Bool {
         if let s = sessionInFocus { setPin(s.id, pinned: !(s.pinned ?? false)) }
+        return true
+    }
+
+    /// ⌘⇧P: gewählten Ordner/Projekt anpinnen bzw. loslösen (im Pin-Screen: das markierte Projekt).
+    private func pinSelectedProject() -> Bool {
+        if pinMode {
+            if let pp = (tree.item(atRow: tree.selectedRow) as? PinProjectItem)?.p { runProjekte(["unpin-projekt", pp.path]) }
+            return true
+        }
+        guard let n = selectedNode, n.path != data?.root else { return true }
+        let pinned = byPath[n.path]?.pinned ?? pinnedProjectPaths.contains(n.path)
+        runProjekte([pinned ? "unpin-projekt" : "pin-projekt", n.path])
         return true
     }
 
@@ -990,6 +1057,7 @@ final class HomePaneView: NSView {
         if mods == [.command, .shift], a.lowercased() == "n" { newProject(); return true }
         if mods == .command, a == "p" { return pinSelectedFromList() }
         if mods == .command, a == "e" { return renameSelectedFromList() }
+        if mods == [.command, .shift], a.lowercased() == "p" { return pinSelectedProject() }
         return super.performKeyEquivalent(with: event)
     }
 
@@ -1020,23 +1088,47 @@ final class HomePaneView: NSView {
 
 extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
-        if pinMode { return item == nil ? pinItems.count : 0 }
+        if pinMode { return item == nil ? pinGroups.count : ((item as? PinGroup)?.items.count ?? 0) }
         if !filter.isEmpty { return item == nil ? filtered.count : 0 }
         if item == nil { return root == nil ? 0 : 1 }
         return (item as? Node)?.children(Self.treeExcludes).count ?? 0
     }
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
-        if pinMode { return pinItems[index] }
+        if pinMode { return item == nil ? pinGroups[index] : (item as! PinGroup).items[index] }
         if !filter.isEmpty { return filtered[index] }
         if item == nil { return root! }
         return (item as! Node).children(Self.treeExcludes)[index]
     }
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        !pinMode && filter.isEmpty && ((item as? Node)?.hasChildren ?? false)
+        if pinMode { return item is PinGroup }
+        return filter.isEmpty && ((item as? Node)?.hasChildren ?? false)
     }
+    func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool { !(item is PinGroup) }
+    func outlineView(_ outlineView: NSOutlineView, shouldCollapseItem item: Any) -> Bool { !(item is PinGroup) }
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
         let id = NSUserInterfaceItemIdentifier("treeCell")
         let cell = (outlineView.makeView(withIdentifier: id, owner: nil) as? TreeCell) ?? { let c = TreeCell(); c.identifier = id; return c }()
+        if let g = item as? PinGroup {
+            cell.set(glyph: "", glyphColor: Self.faint, text: "── \(g.title) ", color: Self.faint, dot: nil)
+            cell.toolTip = nil
+            return cell
+        }
+        if let pp = (item as? PinProjectItem)?.p {
+            let glyph: String, gc: NSColor
+            switch pp.level {
+            case "projekt", "unter-projekt": glyph = "▣"; gc = Self.cyan
+            case "router", "bereich": glyph = "▤"; gc = Self.violet
+            case "ohne-claude-md": glyph = "◇"; gc = Self.yellow
+            default: glyph = "·"; gc = Self.faint
+            }
+            var dot: NSColor? = nil
+            if let st = running.first(where: { $0.key == pp.path || $0.key.hasPrefix(pp.path + "/") })?.value {
+                dot = st == "awaitingInput" ? Self.orange : Self.green
+            }
+            cell.set(glyph: glyph, glyphColor: gc, text: pp.name + (pp.aliases.first.map { "  \($0)" } ?? ""), color: Self.fg, dot: dot)
+            cell.toolTip = Self.rootRelative(pp.path)
+            return cell
+        }
         if let pi = item as? PinItem {
             let s = pi.p
             let badge = Self.contextBadge(s.context)
@@ -1110,8 +1202,11 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
             let t = (pinned ? templates.unpin : templates.pin)!
             cell.set(glyph: t.glyph, text: t.label, detail: pinned ? "im Pin-Screen (⇧⇥)" : "wichtig — in den Pin-Screen (⇧⇥)", meta: "", header: false, accent: Self.yellow)
         case .more(let n, let expanded):
-            cell.set(glyph: expanded ? "▾" : "▸", text: "Sessions", detail: n == 0 ? "anpinnen · umbenennen" : "\(n) ältere · anpinnen · umbenennen",
+            cell.set(glyph: expanded ? "▾" : "▸", text: "Mehr", detail: (n == 0 ? "" : "\(n) ältere Sessions · ") + "anpinnen · umbenennen",
                      meta: "", header: false, accent: Self.faint)
+        case .togglePinProject(_, let name, let pinned):
+            let t = (pinned ? templates.unpinProject : templates.pinProject)!
+            cell.set(glyph: t.glyph, text: t.label, detail: pinned ? "\(name) — im Pin-Screen (⇧⇥)" : "\(name) — oben im Pin-Screen (⇧⇥), ⌘⇧P", meta: "", header: false, accent: Self.yellow)
         case .rename(let s):
             let t = templates.rename!
             cell.set(glyph: t.glyph, text: t.label, detail: s.title ?? (t.hint ?? ""), meta: s.titleSource == "manual" ? "✎" : "", header: false, accent: Self.blue)
