@@ -27,6 +27,11 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 8 — Aufklapp-Zustand + Suche von rechts:** Der gespeicherte Aufklapp-Zustand ging verloren, weil
+  `reloadData()` (Statuswechsel alle 2 s, Filter) Collapse-Events feuert, die `saveExpansion` als Nutzer-
+  aktion nahm. Jetzt: eigene `expandedPaths`-Menge als Wahrheit, Delegate-Events nur ohne
+  `suppressExpansionSave`, Statuswechsel zeichnen Zeilen per `reloadData(forRowIndexes:)` nach. Tippen in
+  der Aktionsspalte springt in die Baum-Suche; Pin-Toggle deshalb von `p` auf ⌘P.
 - **Runde 7 (24.08. spät) — Pins, Kontext, Kompakten:** `projekte` liefert je Session `pinned` und
   `context` (letzte `usage` aus dem Transkript → Tokens, Prozent vom Modellfenster, advice ok/compact/
   critical) plus Top-Level `pinned` und die Templates `compact` (mit `followUp: "/compact"`), `pin`,

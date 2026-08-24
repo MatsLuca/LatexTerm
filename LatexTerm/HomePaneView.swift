@@ -208,11 +208,13 @@ final class HomePaneView: NSView {
         pinMode.toggle()
         filter = ""
         pinItems = (data?.pinned ?? []).map(PinItem.init)
+        suppressExpansionSave = true
         tree.reloadData()
+        if let root, !pinMode { tree.expandItem(root) }
+        suppressExpansionSave = false
         if pinMode {
             if !pinItems.isEmpty { tree.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
         } else {
-            if let root { tree.expandItem(root) }
             restoreExpansion()
             if let first = data?.projects.first, let n = node(for: first.path) { reveal(n) }
         }
@@ -388,7 +390,7 @@ final class HomePaneView: NSView {
         b.toolTip = "⌘⇧N — Ordner unter dem gewählten anlegen, dann /neues-projekt"
         b.focusRingType = .none
         footer.addArrangedSubview(b)
-        let help = NSTextField(labelWithString: "⇥ Spalte   ⇧⇥ Pins   p anpinnen   ⏎ ausführen   tippen sucht")
+        let help = NSTextField(labelWithString: "⇥ Spalte   ⇧⇥ Pins   ⌘P anpinnen   ⏎ ausführen   tippen sucht")
         help.font = Self.mono(-2)
         help.textColor = Self.faint
         footer.addArrangedSubview(help)
@@ -528,8 +530,11 @@ final class HomePaneView: NSView {
                 self.root = root
                 self.allFolders = []
                 self.index(root, depth: 0)
+                self.loadExpansion()
+                self.suppressExpansionSave = true
                 self.tree.reloadData()
                 self.tree.expandItem(root)
+                self.suppressExpansionSave = false
                 self.restoreExpansion()
                 self.refreshRunning()
                 self.selectInitial()
@@ -543,34 +548,44 @@ final class HomePaneView: NSView {
         }
     }
 
-    // Aufklapp-Zustand über Sessions/Kacheln hinweg (relative Pfade in UserDefaults).
+    // Aufklapp-Zustand über Sessions/Kacheln hinweg: EIGENE Menge relativer Pfade (Wahrheit),
+    // nicht der Outline-Zustand — `reloadData()` (Statuswechsel, Filter) feuert Collapse-Events,
+    // die sonst den gespeicherten Zustand überschreiben. Programmatische Umbauten laufen mit
+    // `suppressExpansionSave`, nur Nutzer-Klicks/Tasten ändern die Menge.
     private static let expandedKey = "LatexTerm.homeExpanded"
+    private var expandedPaths: Set<String> = []
     private var suppressExpansionSave = false
+
+    private func relPath(_ n: Node) -> String {
+        guard let root else { return n.path }
+        return n.path == root.path ? "" : String(n.path.dropFirst(root.path.count + 1))
+    }
+    private func loadExpansion() {
+        expandedPaths = Set(UserDefaults.standard.stringArray(forKey: Self.expandedKey) ?? [""])
+        expandedPaths.insert("")
+    }
     private func restoreExpansion() {
         guard let root else { return }
         suppressExpansionSave = true
-        for rel in UserDefaults.standard.stringArray(forKey: Self.expandedKey) ?? [] {
-            if let n = node(for: rel.isEmpty ? root.path : (root.path as NSString).appendingPathComponent(rel)) {
-                var chain: [Node] = []; var p: Node? = n
-                while let q = p { chain.insert(q, at: 0); p = q.parent }
-                for a in chain { tree.expandItem(a) }
-            }
+        for rel in expandedPaths.sorted(by: { $0.count < $1.count }) {
+            let path = rel.isEmpty ? root.path : (root.path as NSString).appendingPathComponent(rel)
+            if let n = node(for: path) { tree.expandItem(n) }
         }
         suppressExpansionSave = false
     }
-    private func saveExpansion() {
-        guard !suppressExpansionSave, filter.isEmpty, let root else { return }
-        var out: [String] = []
-        func walk(_ n: Node) {
-            guard tree.isItemExpanded(n) else { return }
-            out.append(n.path == root.path ? "" : String(n.path.dropFirst(root.path.count + 1)))
-            for c in n.children(Self.treeExcludes) { walk(c) }
-        }
-        walk(root)
-        UserDefaults.standard.set(out, forKey: Self.expandedKey)
+    private func persistExpansion() {
+        UserDefaults.standard.set(Array(expandedPaths).sorted(), forKey: Self.expandedKey)
     }
-    func outlineViewItemDidExpand(_ notification: Notification) { saveExpansion() }
-    func outlineViewItemDidCollapse(_ notification: Notification) { saveExpansion() }
+    func outlineViewItemDidExpand(_ notification: Notification) {
+        guard !suppressExpansionSave, filter.isEmpty, !pinMode, let n = notification.userInfo?["NSObject"] as? Node else { return }
+        expandedPaths.insert(relPath(n)); persistExpansion()
+    }
+    func outlineViewItemDidCollapse(_ notification: Notification) {
+        guard !suppressExpansionSave, filter.isEmpty, !pinMode, let n = notification.userInfo?["NSObject"] as? Node else { return }
+        let r = relPath(n)
+        expandedPaths = expandedPaths.filter { $0 != r && !$0.hasPrefix(r + "/") }
+        persistExpansion()
+    }
 
     private func index(_ node: Node, depth: Int) {
         allFolders.append(node)
@@ -617,8 +632,7 @@ final class HomePaneView: NSView {
         for (cwd, st) in otherPanes?() ?? [] { m[cwd] = st }
         if m != running {
             running = m
-            tree.reloadData()
-            if let n = selectedNode { let r = tree.row(forItem: n); if r >= 0 { tree.selectRowIndexes(IndexSet(integer: r), byExtendingSelection: false) } }
+            tree.reloadData(forRowIndexes: IndexSet(integersIn: 0..<tree.numberOfRows), columnIndexes: IndexSet(integer: 0))
         }
     }
 
@@ -643,13 +657,17 @@ final class HomePaneView: NSView {
         let q = filter.lowercased()
         if q.isEmpty {
             filtered = []
+            suppressExpansionSave = true
             tree.reloadData()
             if let root { tree.expandItem(root) }
+            suppressExpansionSave = false
             restoreExpansion()
             if let sel = selectedNodeBeforeFilter, let n = node(for: sel.path) { reveal(n) }
             selectedNodeBeforeFilter = nil
         } else {
             if selectedNodeBeforeFilter == nil { selectedNodeBeforeFilter = selectedNode }
+            suppressExpansionSave = true
+            defer { suppressExpansionSave = false }
             filtered = allFolders.filter { n in
                 n.name.lowercased().contains(q)
                     || (byPath[n.path]?.aliases.contains { $0.lowercased().contains(q) } ?? false)
@@ -759,7 +777,7 @@ final class HomePaneView: NSView {
         return a
     }
 
-    /// `p`: Pin der markierten Session-Zeile (oder der „Weiter"-Session) umschalten.
+    /// ⌘P: Pin der markierten Session-Zeile (oder der „Weiter"-Session) umschalten.
     private func pinSelectedFromList() -> Bool {
         let r = list.selectedRow
         let candidate: Action? = (r >= 0 && r < actions.count) ? actions[r] : actions.first
@@ -856,7 +874,7 @@ final class HomePaneView: NSView {
         case 51: if !filter.isEmpty { filter.removeLast(); lastTypedAt = Date() }; return true
         case 125, 126: return false
         default:
-            if pinMode { return ev.characters == "p" ? pinSelectedFromList() : true }
+            if pinMode { return true }
             if let chars = ev.characters, !chars.isEmpty,
                chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
                 typeToSearch(chars); return true
@@ -874,7 +892,13 @@ final class HomePaneView: NSView {
         case 123, 53, 48: window?.makeFirstResponder(tree); return true   // ← / Esc / ⇥ zurück zum Baum
         case 125, 126: return false
         default:
-            if ev.characters == "p" { return pinSelectedFromList() }
+            // Tippen in der Aktionsspalte = Suche im Baum (schnell woanders hin), Fokus wandert nach links.
+            if !pinMode, let chars = ev.characters, !chars.isEmpty,
+               chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
+                window?.makeFirstResponder(tree)
+                typeToSearch(chars)
+                return true
+            }
             return true
         }
     }
@@ -889,6 +913,7 @@ final class HomePaneView: NSView {
         if mods == .command, a == "\r" { onZoom?(); return true }
         if mods == .command, a == "r" { reload(); return true }
         if mods == [.command, .shift], a.lowercased() == "n" { newProject(); return true }
+        if mods == .command, a == "p" { return pinSelectedFromList() }
         return super.performKeyEquivalent(with: event)
     }
 
