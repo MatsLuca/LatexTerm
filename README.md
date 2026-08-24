@@ -46,7 +46,7 @@ Everything here is a plain terminal mechanism — escape sequences, an env var, 
 
 ### Home pane — project launcher (`⌘N`)
 
-The first pane on launch (and every `⌘N`) is a **home pane** instead of a shell: one list of your projects sorted by last Claude Code activity — name, alias, age, and the title of the last session (from Claude Code's own `ai-title` entries). `⏎` starts Claude in the project, `→` opens that project's sessions as a list (`⏎` resumes, `←` back), `⌥⏎` gives a plain shell, typing filters, `⌘⇧N` creates a new project folder and hands it to `/neues-projekt`. The pane turns into a normal terminal on selection. `⌘T` stays a plain shell inheriting the focused pane's CWD.
+The first pane on launch (and every `⌘N`) is a **home pane** instead of a shell: one list of your projects sorted by last Claude Code activity — name, alias, age, and the title of the last session (from Claude Code's own `ai-title` entries). `⏎` starts Claude in the project, `→` opens that project's sessions as a list (`⏎` resumes, `←` back), `⌥⏎` gives a plain shell, typing filters, `⌘⇧N` creates a new project folder and hands it to `/neues-projekt`. `⇥` switches to **Struktur**: browse the real folder tree (`→` in, `←` up), start Claude in any folder with `⏎`; the last mode is remembered. The pane turns into a normal terminal on selection. `⌘T` stays a plain shell inheriting the focused pane's CWD.
 
 The data comes from an external CLI — `projekte --json` (run through your login shell; override with `defaults write com.… LatexTerm.projekteCommand "…"`). Without it the pane shows a hint and nothing else breaks. The contract (JSON shape) lives with the CLI, not in the app.
 

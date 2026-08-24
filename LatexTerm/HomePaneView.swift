@@ -25,7 +25,14 @@ struct ProjekteData: Decodable {
         var lastActivity: String?
         var git: Git?
         var sessions: [Session]
+        var claudeMd: ClaudeMd?
+        /// Kopfzeile der CLAUDE.md ohne „# " — als Untertitel in der Struktur-Ansicht.
+        var claudeMdHeader: String? {
+            guard let h = claudeMd?.header, !h.isEmpty else { return nil }
+            return h.hasPrefix("# ") ? String(h.dropFirst(2)) : h
+        }
     }
+    struct ClaudeMd: Decodable { var exists: Bool; var header: String? }
     struct Area: Decodable { var id: String }
     var root: String
     var projects: [Project]
@@ -84,9 +91,12 @@ extension Notification.Name {
 // MARK: - Home-Kachel
 
 /// Startbildschirm einer Kachel (⌘N / erste Kachel). Bewusst karg: EINE Liste, zwei Zeilen je
-/// Projekt (Name · Alias · Alter / letzte Session), sortiert nach letzter Claude-Aktivität.
-/// Tippen filtert. `⏎` startet Claude im Projekt, `→` zeigt die Sessions des Projekts als eigene
-/// Liste (`⏎` setzt fort, `←` zurück), `⌥⏎` nur Shell, `⌘⇧N` neues Projekt, `⌘R` neu laden.
+/// Eintrag. Zwei Modi (⇥ wechselt, letzter Modus wird gemerkt):
+/// - **Zuletzt** — Ordner mit Claude-Aktivität nach letzter Session sortiert (Projekte wie
+///   Router/Bereiche); `→` zeigt die Sessions als eigene Liste (`⏎` setzt fort, `←` zurück).
+/// - **Struktur** — durch den echten Ordnerbaum unter `root` navigieren (`→` rein, `←` hoch);
+///   jeder Ordner ist startbar, Einträge aus `projekte` (Alias, Alter, letzte Session) werden angeheftet.
+/// Überall: Tippen filtert, `⏎` startet Claude im Ordner, `⌥⏎` nur Shell, `⌘⇧N` neues Projekt, `⌘R` neu laden.
 /// Bei Auswahl wird die Kachel zur Terminal-Kachel (`TerminalPane.launch`).
 final class HomePaneView: NSView {
 
@@ -98,10 +108,13 @@ final class HomePaneView: NSView {
     /// Reserviert (Kopfzeile mit anderen Kacheln); zurzeit nicht angezeigt — die Titlebar-Punkte reichen.
     var otherPanes: (() -> [(String, String)])?
 
-    private enum Mode { case projects, sessions(ProjekteData.Project) }
-    private var mode: Mode = .projects { didSet { rebuildRows() } }
+    private enum Mode { case recent, sessions(ProjekteData.Project), tree(String) }
+    private var mode: Mode = .recent { didSet { rebuildRows(); persistMode() } }
     private var data: ProjekteData?
+    /// Einträge aus `projekte` nach absolutem Pfad — Anreicherung der Struktur-Ansicht.
+    private var byPath: [String: ProjekteData.Project] = [:]
     private var filter = "" { didSet { rebuildRows() } }
+    private static let treeExcludes: Set<String> = ["node_modules", ".build", "venv", "DerivedData", "7_AppData", "__pycache__"]
 
     /// Eine Zeile der Liste — Projekt oder Session, jeweils mit fertigen Texten.
     private struct Row {
@@ -109,8 +122,10 @@ final class HomePaneView: NSView {
         var meta: String        // rechts oben, dim (Alias · Alter)
         var sub: String         // zweite Zeile, dim
         var warn: Bool = false
+        var path: String        // Startordner für ⏎ / ⌥⏎
         var project: ProjekteData.Project?
         var session: ProjekteData.Session?
+        var hasChildren = false // Struktur: → kann hinein
     }
     private var rows: [Row] = []
 
@@ -201,16 +216,77 @@ final class HomePaneView: NSView {
     }
 
     private func renderChrome() {
+        var crumb = ""
         switch mode {
-        case .projects:
-            headline.stringValue = "Wo weiter?"
-            footer.stringValue = "⏎ Claude    → Sessions    ⌥⏎ Shell    ⌘⇧N neues Projekt"
+        case .recent:
+            setHeadline(active: 0)
+            footer.stringValue = "⏎ Claude    → Sessions    ⌥⏎ Shell    ⇥ Struktur    ⌘⇧N neues Projekt"
         case .sessions(let p):
-            headline.stringValue = p.name
+            headline.attributedStringValue = NSAttributedString(string: p.name, attributes: [
+                .font: NSFont.systemFont(ofSize: 22, weight: .semibold), .foregroundColor: Self.fg])
             footer.stringValue = "⏎ Session fortsetzen    ← zurück    ⌥⏎ Shell"
+        case .tree(let path):
+            setHeadline(active: 1)
+            footer.stringValue = "⏎ Claude hier    → hinein    ← hoch    ⌥⏎ Shell    ⇥ Zuletzt    ⌘⇧N neues Projekt"
+            if let root = data?.root {
+                let relParts = path.hasPrefix(root) ? String(path.dropFirst(root.count)).split(separator: "/").map(String.init) : []
+                crumb = ([(root as NSString).lastPathComponent] + relParts).joined(separator: " › ")
+            }
         }
-        hint.stringValue = filter.isEmpty ? "" : "⌕ " + filter
+        var h = crumb
+        if !filter.isEmpty { h += (h.isEmpty ? "" : "    ") + "⌕ " + filter }
+        hint.stringValue = h
         hint.textColor = filter.isEmpty ? Self.dim : accent
+    }
+
+    /// „Zuletzt · Struktur" — der aktive Modus hell, der andere dim.
+    private func setHeadline(active: Int) {
+        let a = NSMutableAttributedString()
+        for (i, name) in ["Zuletzt", "Struktur"].enumerated() {
+            if i > 0 { a.append(NSAttributedString(string: "   ·   ", attributes: [
+                .font: NSFont.systemFont(ofSize: 22, weight: .regular), .foregroundColor: Self.dim.withAlphaComponent(0.25)])) }
+            a.append(NSAttributedString(string: name, attributes: [
+                .font: NSFont.systemFont(ofSize: 22, weight: i == active ? .semibold : .regular),
+                .foregroundColor: i == active ? Self.fg : Self.dim]))
+        }
+        headline.attributedStringValue = a
+    }
+
+    // MARK: Modus merken
+
+    private func persistMode() {
+        let d = UserDefaults.standard
+        switch mode {
+        case .recent: d.set("recent", forKey: "LatexTerm.homeMode")
+        case .tree(let p): d.set("tree", forKey: "LatexTerm.homeMode"); d.set(p, forKey: "LatexTerm.homeTreePath")
+        case .sessions: break
+        }
+    }
+
+    private func restoreMode() {
+        let d = UserDefaults.standard
+        guard let root = data?.root else { mode = .recent; return }
+        if d.string(forKey: "LatexTerm.homeMode") == "tree" {
+            var p = d.string(forKey: "LatexTerm.homeTreePath") ?? root
+            var isDir: ObjCBool = false
+            if !(p.hasPrefix(root) && FileManager.default.fileExists(atPath: p, isDirectory: &isDir) && isDir.boolValue) { p = root }
+            mode = .tree(p)
+        } else {
+            mode = .recent
+        }
+    }
+
+    private func toggleMode() {
+        switch mode {
+        case .recent:
+            let root = data?.root ?? NSHomeDirectory()
+            let saved = UserDefaults.standard.string(forKey: "LatexTerm.homeTreePath") ?? root
+            filter = ""
+            mode = .tree(saved.hasPrefix(root) && FileManager.default.fileExists(atPath: saved) ? saved : root)
+        case .tree, .sessions:
+            filter = ""
+            mode = .recent
+        }
     }
 
     // MARK: Daten
@@ -222,10 +298,11 @@ final class HomePaneView: NSView {
             switch result {
             case .success(let d):
                 self.data = d
-                self.mode = .projects
+                self.byPath = Dictionary(d.projects.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
+                self.restoreMode()
             case .failure(let err):
                 self.data = nil
-                self.rows = [Row(title: "projekte nicht erreichbar", meta: "", sub: err.message, warn: true)]
+                self.rows = [Row(title: "projekte nicht erreichbar", meta: "", sub: err.message, warn: true, path: NSHomeDirectory())]
                 self.table.reloadData()
             }
             self.renderChrome()
@@ -236,27 +313,39 @@ final class HomePaneView: NSView {
         let keep = table.selectedRow
         let q = filter.lowercased()
         switch mode {
-        case .projects:
+        case .recent:
             let list = (data?.projects ?? []).filter { p in
                 q.isEmpty || p.name.lowercased().contains(q) || p.group.lowercased().contains(q)
                     || p.aliases.contains { $0.lowercased().contains(q) }
             }
             rows = list.map { p in
-                var meta = p.aliases.first.map { "\($0)   " } ?? ""
-                meta += Self.age(p.lastActivity)
-                var sub = p.group.replacingOccurrences(of: "4_Projekte/", with: "")
-                if let t = p.sessions.first?.title, !t.isEmpty { sub += "  ·  " + t }
+                var sub = p.group.isEmpty ? "" : p.group
+                if let t = p.sessions.first?.title, !t.isEmpty { sub += (sub.isEmpty ? "" : "  ·  ") + t }
                 if let g = p.git, let d = g.dirty, d > 0 { sub += "  ·  ✎\(d)" }
-                return Row(title: (p.level == "unter-projekt" ? "↳ " : "") + p.name, meta: meta, sub: sub,
-                           warn: p.level == "ohne-claude-md", project: p)
+                return Row(title: (p.level == "unter-projekt" ? "↳ " : "") + p.name,
+                           meta: Self.meta(for: p), sub: sub,
+                           warn: p.level == "ohne-claude-md", path: p.path, project: p)
             }
         case .sessions(let p):
             rows = p.sessions.map { s in
                 Row(title: s.title ?? "(ohne Titel)", meta: Self.age(s.lastAt),
-                    sub: "\(s.turns) Nachrichten  ·  \(String(s.id.prefix(8)))", project: p, session: s)
+                    sub: "\(s.turns) Nachrichten  ·  \(String(s.id.prefix(8)))", path: p.path, project: p, session: s)
             }
             if rows.isEmpty {
-                rows = [Row(title: "Noch keine Session", meta: "", sub: "⏎ startet eine neue", project: p)]
+                rows = [Row(title: "Noch keine Session", meta: "", sub: "⏎ startet eine neue", path: p.path, project: p)]
+            }
+        case .tree(let dir):
+            rows = Self.subfolders(of: dir).filter { q.isEmpty || $0.lowercased().contains(q) }.map { name in
+                let path = (dir as NSString).appendingPathComponent(name)
+                let p = byPath[path]
+                var sub = ""
+                if let t = p?.sessions.first?.title, !t.isEmpty { sub = t }
+                else if let h = p?.claudeMdHeader { sub = h }
+                return Row(title: name, meta: p.map(Self.meta(for:)) ?? "", sub: sub,
+                           path: path, project: p, hasChildren: !Self.subfolders(of: path).isEmpty)
+            }
+            if rows.isEmpty {
+                rows = [Row(title: "(keine Unterordner)", meta: "", sub: "⏎ startet Claude in " + (dir as NSString).lastPathComponent, path: dir)]
             }
         }
         table.reloadData()
@@ -271,6 +360,22 @@ final class HomePaneView: NSView {
     private var selected: Row? {
         let r = table.selectedRow
         return (r >= 0 && r < rows.count) ? rows[r] : nil
+    }
+
+    private static func meta(for p: ProjekteData.Project) -> String {
+        let alias = p.aliases.first.map { "\($0)   " } ?? ""
+        return alias + age(p.lastActivity)
+    }
+
+    /// Sichtbare Unterordner, Finder-Reihenfolge (numerische Präfixe natürlich sortiert).
+    private static func subfolders(of dir: String) -> [String] {
+        guard let items = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return [] }
+        var isDir: ObjCBool = false
+        return items.filter { name in
+            !name.hasPrefix(".") && !treeExcludes.contains(name)
+                && FileManager.default.fileExists(atPath: (dir as NSString).appendingPathComponent(name), isDirectory: &isDir)
+                && isDir.boolValue
+        }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
     }
 
     static func age(_ iso: String?) -> String {
@@ -288,25 +393,50 @@ final class HomePaneView: NSView {
     private static let claude = "claude --dangerously-skip-permissions"
 
     @objc private func activate() {
-        guard let row = selected, let p = row.project else { return }
-        if let s = row.session { onLaunch?(p.path, "\(Self.claude) --resume \(s.id)") }
-        else { onLaunch?(p.path, Self.claude) }
+        guard let row = selected else { return }
+        if let s = row.session { onLaunch?(row.path, "\(Self.claude) --resume \(s.id)") }
+        else { onLaunch?(row.path, Self.claude) }
     }
 
     private func shellOnly() {
-        guard let p = selected?.project else { return }
-        onLaunch?(p.path, nil)
+        guard let row = selected else { return }
+        onLaunch?(row.path, nil)
     }
 
-    private func showSessions() {
-        guard case .projects = mode, let p = selected?.project else { return }
-        filter = ""
-        mode = .sessions(p)
+    /// → : Zuletzt → Sessions des Eintrags; Struktur → in den Ordner hinein.
+    private func forward() {
+        switch mode {
+        case .recent:
+            guard let p = selected?.project else { return }
+            filter = ""
+            mode = .sessions(p)
+        case .tree:
+            guard let row = selected, row.hasChildren else { return }
+            filter = ""
+            mode = .tree(row.path)
+        case .sessions:
+            break
+        }
     }
 
+    /// ← : Sessions → Zuletzt; Struktur → eine Ebene hoch (nicht über root hinaus).
     private func back() {
-        guard case .sessions = mode else { return }
-        mode = .projects
+        switch mode {
+        case .sessions:
+            mode = .recent
+        case .tree(let dir):
+            guard let root = data?.root, dir != root else { return }
+            let parent = (dir as NSString).deletingLastPathComponent
+            let child = (dir as NSString).lastPathComponent
+            filter = ""
+            mode = .tree(parent)
+            if let i = rows.firstIndex(where: { $0.title == child }) {
+                table.selectRowIndexes(IndexSet(integer: i), byExtendingSelection: false)
+                table.scrollRowToVisible(i)
+            }
+        case .recent:
+            break
+        }
     }
 
     @objc private func newProject() {
@@ -373,11 +503,13 @@ final class HomePaneView: NSView {
         case 51: // Backspace
             if !filter.isEmpty { filter.removeLast() } else { back() }
             return true
+        case 48: toggleMode(); return true     // ⇥
         case 123: back(); return true          // ←
-        case 124: showSessions(); return true  // →
+        case 124: forward(); return true       // →
         case 125, 126: return false            // ↑↓ → Tabelle
         default:
-            if case .projects = mode, let chars = ev.characters, !chars.isEmpty,
+            if case .sessions = mode { return false }
+            if let chars = ev.characters, !chars.isEmpty,
                chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
                 filter += chars
                 return true
