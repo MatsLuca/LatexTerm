@@ -191,7 +191,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         let home = HomePaneView(frame: container.bounds)
         home.autoresizingMask = [.width, .height]
         home.otherPanes = otherPanes
-        home.onLaunch = { [weak self] dir, cmd, label in self?.launch(in: dir, command: cmd, label: label) }
+        home.onLaunch = { [weak self] req in self?.launch(in: req.path, command: req.command, label: req.label, followUp: req.followUp) }
         home.onClose = { [weak self] in
             guard let self else { return }
             self.onCloseRequested?(self)
@@ -212,7 +212,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     /// Home → Terminal: Shell in `directory` starten und `command` tippen (Kernel puffert,
     /// die Shell liest es nach dem Prompt — gleicher Pfad wie `new-pane --exec`).
-    func launch(in directory: String, command: String?, label: String? = nil) {
+    func launch(in directory: String, command: String?, label: String? = nil, followUp: String? = nil) {
         start(in: directory)
         guard let command, !command.isEmpty, let home = homeView else {
             // Nur Shell: sofort zeigen.
@@ -238,6 +238,14 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             t.invalidate()
             self.launchTimer = nil
             self.revealTerminal()
+            // Folgebefehl (z. B. /compact): Text in die Claude-TUI, Enter separat nach 1 s —
+            // ein mitgesendetes Enter wird beim Paste geschluckt (Regel aus dem latexterm-Skill).
+            if let followUp, !followUp.isEmpty, ready {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+                    self?.view.send(txt: followUp)
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.view.send(txt: "\r") }
+                }
+            }
         }
     }
     private var launchTimer: Timer?

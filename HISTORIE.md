@@ -27,6 +27,15 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 7 (24.08. spät) — Pins, Kontext, Kompakten:** `projekte` liefert je Session `pinned` und
+  `context` (letzte `usage` aus dem Transkript → Tokens, Prozent vom Modellfenster, advice ok/compact/
+  critical) plus Top-Level `pinned` und die Templates `compact` (mit `followUp: "/compact"`), `pin`,
+  `unpin`. Home-Kachel: ⇧⇥ = Pin-Screen (links die angepinnten Sessions statt des Baums, rechts ↻ Weiter /
+  ⇣ Kompakten & weiter / ☆ Loslösen), `p` in beiden Spalten pinnt die markierte Session, Kontext-Badge
+  („55%", orange ab compact, rot ab critical) rechts in jeder Session-Zeile; Kompakten-Zeile erscheint
+  bei „Weiter" nur, wenn die Empfehlung greift. `TerminalPane.launch(followUp:)` tippt den Folgebefehl
+  zweistufig (Text, 1 s später Enter), sobald die Session steht. Pins schreibt die Datenschicht
+  (`projekte pin|unpin`, `~/.config/projekte/pins.json`) — die App kennt keine Dateien.
 - **Runde 6 (24.08. spät) — sechs Befunde von Mats:** (1) Start-Overlay: Home bleibt als Vorhang mit
   Braille-Spinner liegen, bis `sessionState != .none` (passive Erkennung/Hook) oder 12 s — kein sichtbares
   Kommando-Paste, kein Plugin-Sync-Geflacker; nur-Shell zeigt sofort. (2) Tippen sucht mit Wortpause:

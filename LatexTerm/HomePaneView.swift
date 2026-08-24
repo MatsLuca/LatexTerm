@@ -9,11 +9,30 @@ struct ProjekteData: Decodable {
         var ahead: Int?
         var behind: Int?
     }
+    struct Context: Decodable {
+        var tokens: Int
+        var percent: Int?
+        var model: String?
+        var advice: String   // ok | compact | critical
+    }
     struct Session: Decodable {
         var id: String
         var lastAt: String?
         var turns: Int
         var title: String?
+        var pinned: Bool?
+        var context: Context?
+    }
+    /// Angepinnte Session mit Projekt (Top-Level-Liste `pinned`).
+    struct Pinned: Decodable {
+        var id: String
+        var lastAt: String?
+        var turns: Int
+        var title: String?
+        var context: Context?
+        var project: String
+        var path: String
+        var session: Session { Session(id: id, lastAt: lastAt, turns: turns, title: title, pinned: true, context: context) }
     }
     struct Project: Decodable {
         var id: String
@@ -41,16 +60,29 @@ struct ProjekteData: Decodable {
         var hint: String?
         var command: String?      // nil = nur Shell
         var aliasCommand: String? // nur newProject: "hier {alias}"
+        var followUp: String?     // nach dem Start tippen (compact: "/compact")
     }
     struct Actions: Decodable {
         var resume: ActionTemplate
         var newProject: ActionTemplate
+        var compact: ActionTemplate?
+        var pin: ActionTemplate?
+        var unpin: ActionTemplate?
         var byLevel: [String: [ActionTemplate]]
     }
     var root: String
     var projects: [Project]
     var areas: [Area]
     var actions: Actions?
+    var pinned: [Pinned]?
+}
+
+/// Was die Kachel beim Ausführen einer Aktion an TerminalPane übergibt.
+struct LaunchRequest {
+    var path: String
+    var command: String?     // nil = nur Shell
+    var label: String        // fürs Start-Overlay
+    var followUp: String?    // wird getippt, sobald die Session steht (z. B. "/compact")
 }
 
 /// Lädt die Projektliste über das externe CLI `projekte` (Werkstatt-Datenschicht).
@@ -114,7 +146,7 @@ extension Notification.Name {
 final class HomePaneView: NSView {
 
     /// (Pfad, Befehl-oder-nil, Label fürs Start-Overlay) → Kachel wird Terminal in `Pfad`.
-    var onLaunch: ((String, String?, String) -> Void)?
+    var onLaunch: ((LaunchRequest) -> Void)?
     var onClose: (() -> Void)?
     /// ⌘⏎ — Zoom wie bei Terminal-Kacheln (#26).
     var onZoom: (() -> Void)?
@@ -147,20 +179,80 @@ final class HomePaneView: NSView {
     private enum Action {
         case resume(ProjekteData.Session, path: String, title: String, age: String, project: String?)
         case run(ProjekteData.ActionTemplate, path: String)   // Zeile aus den Höhen-Templates
+        case compact(ProjekteData.Session, path: String)      // Weiter + /compact
+        case togglePin(ProjekteData.Session, pinned: Bool)
         case header(String)
         var isHeader: Bool { if case .header = self { return true }; return false }
     }
 
     /// Fallback, falls `projekte` (noch) keine Templates liefert: nur Neu + Shell.
+    /// Pin-Screen: rechts die Aktionen der gewählten angepinnten Session.
+    private func renderPinActions() {
+        guard let item = tree.item(atRow: tree.selectedRow) as? PinItem else {
+            title.stringValue = "Angepinnt"
+            subtitle.stringValue = pinItems.isEmpty ? "Noch nichts angepinnt — in den Aktionen einer Session ★ wählen oder p drücken." : ""
+            actions = []; list.reloadData(); return
+        }
+        let s = item.p.session
+        title.stringValue = item.p.project
+        subtitle.stringValue = (s.title ?? "(ohne Titel)") + (s.context.map { "   ·   " + Self.contextLine($0) } ?? "")
+        var out: [Action] = [.resume(s, path: item.p.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt), project: nil)]
+        if templates.compact != nil { out.append(.compact(s, path: item.p.path)) }
+        if templates.unpin != nil { out.append(.togglePin(s, pinned: true)) }
+        actions = out
+        list.reloadData()
+        list.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+    }
+
+    private func togglePinMode() {
+        pinMode.toggle()
+        filter = ""
+        pinItems = (data?.pinned ?? []).map(PinItem.init)
+        tree.reloadData()
+        if pinMode {
+            if !pinItems.isEmpty { tree.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false) }
+        } else {
+            if let root { tree.expandItem(root) }
+            restoreExpansion()
+            if let first = data?.projects.first, let n = node(for: first.path) { reveal(n) }
+        }
+        window?.makeFirstResponder(tree)
+        renderActions()
+    }
+
+    static func contextLine(_ c: ProjekteData.Context) -> String {
+        let k = c.tokens >= 1000 ? "\(c.tokens / 1000)k" : "\(c.tokens)"
+        var out = c.percent.map { "Kontext \($0) %" } ?? "Kontext"
+        out += " · \(k) Tokens"
+        switch c.advice {
+        case "compact": out += " · kompakten empfohlen"
+        case "critical": out += " · kompakten!"
+        default: break
+        }
+        return out
+    }
+
+    /// Kurzform für die rechte Spalte: „55%" (Farbe nach Empfehlung).
+    static func contextBadge(_ c: ProjekteData.Context?) -> (String, NSColor)? {
+        guard let c, let pct = c.percent else { return nil }
+        let color: NSColor = c.advice == "critical" ? red : (c.advice == "compact" ? orange : faint)
+        return ("\(pct)%", color)
+    }
+
     private static let fallbackActions = ProjekteData.Actions(
-        resume: .init(glyph: "↻", label: "Weiter", hint: nil, command: "claude --resume {session}", aliasCommand: nil),
-        newProject: .init(glyph: "✚", label: "Neues Projekt", hint: nil, command: "claude", aliasCommand: nil),
-        byLevel: ["ordner": [.init(glyph: "+", label: "Neue Session", hint: nil, command: "claude", aliasCommand: nil),
-                             .init(glyph: "$", label: "Nur Shell", hint: nil, command: nil, aliasCommand: nil)]])
+        resume: .init(glyph: "↻", label: "Weiter", hint: nil, command: "claude --resume {session}", aliasCommand: nil, followUp: nil),
+        newProject: .init(glyph: "✚", label: "Neues Projekt", hint: nil, command: "claude", aliasCommand: nil, followUp: nil),
+        compact: nil, pin: nil, unpin: nil,
+        byLevel: ["ordner": [.init(glyph: "+", label: "Neue Session", hint: nil, command: "claude", aliasCommand: nil, followUp: nil),
+                             .init(glyph: "$", label: "Nur Shell", hint: nil, command: nil, aliasCommand: nil, followUp: nil)]])
     private var templates: ProjekteData.Actions { data?.actions ?? Self.fallbackActions }
 
     private var data: ProjekteData?
     private var byPath: [String: ProjekteData.Project] = [:]
+    /// ⇧⇥: Pin-Screen — links die angepinnten Sessions statt des Baums.
+    private var pinMode = false
+    final class PinItem { let p: ProjekteData.Pinned; init(_ p: ProjekteData.Pinned) { self.p = p } }
+    private var pinItems: [PinItem] = []
     private var root: Node?
     private var filter = "" { didSet { applyFilter() } }
     private var filtered: [Node] = []
@@ -296,7 +388,7 @@ final class HomePaneView: NSView {
         b.toolTip = "⌘⇧N — Ordner unter dem gewählten anlegen, dann /neues-projekt"
         b.focusRingType = .none
         footer.addArrangedSubview(b)
-        let help = NSTextField(labelWithString: "⇥ Spalte   ⏎ ausführen   tippen sucht   ⌘⏎ zoom")
+        let help = NSTextField(labelWithString: "⇥ Spalte   ⇧⇥ Pins   p anpinnen   ⏎ ausführen   tippen sucht")
         help.font = Self.mono(-2)
         help.textColor = Self.faint
         footer.addArrangedSubview(help)
@@ -577,6 +669,7 @@ final class HomePaneView: NSView {
     private var selectedNode: Node? { tree.item(atRow: tree.selectedRow) as? Node }
 
     private func renderActions() {
+        if pinMode { renderPinActions(); return }
         guard let node = selectedNode, let d = data else { actions = []; list.reloadData(); return }
         let p = byPath[node.path]
         let isRoot = node.path == d.root
@@ -605,6 +698,11 @@ final class HomePaneView: NSView {
         for t in templates.byLevel[level] ?? templates.byLevel["ordner"] ?? [] {
             out.append(.run(t, path: node.path))
         }
+        // Für die „Weiter"-Session: anpinnen/loslösen + Kompakten, wenn der Kontext voll wird
+        if let (q, s) = candidates.first {
+            if let ctx = s.context, ctx.advice != "ok", templates.compact != nil { out.append(.compact(s, path: q.path)) }
+            if templates.pin != nil { out.append(.togglePin(s, pinned: s.pinned ?? false)) }
+        }
         let rest = candidates.dropFirst()
         if !rest.isEmpty {
             out.append(.header(isRoot ? "Zuletzt überall" : "Zuletzt hier"))
@@ -621,10 +719,31 @@ final class HomePaneView: NSView {
         switch a {
         case .resume(let s, let path, let title, _, let project):
             let cmd = (templates.resume.command ?? "").replacingOccurrences(of: "{session}", with: s.id)
-            onLaunch?(path, cmd, "\(project ?? (path as NSString).lastPathComponent) · \(title)")
+            onLaunch?(LaunchRequest(path: path, command: cmd, label: "\(project ?? (path as NSString).lastPathComponent) · \(title)", followUp: nil))
+        case .compact(let s, let path):
+            guard let t = templates.compact else { return }
+            let cmd = (t.command ?? "").replacingOccurrences(of: "{session}", with: s.id)
+            onLaunch?(LaunchRequest(path: path, command: cmd, label: "\((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp))
         case .run(let t, let path):
-            onLaunch?(path, t.command, "\((path as NSString).lastPathComponent) · \(t.label)")
+            onLaunch?(LaunchRequest(path: path, command: t.command, label: "\((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp))
+        case .togglePin(let s, let pinned):
+            setPin(s.id, pinned: !pinned)
         case .header: break
+        }
+    }
+
+    /// Pin über die Datenschicht setzen (`projekte pin|unpin <id>`), dann neu laden.
+    private func setPin(_ id: String, pinned: Bool) {
+        let keepPin = pinMode
+        DispatchQueue.global(qos: .userInitiated).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            proc.arguments = ["-lc", "projekte \(pinned ? "pin" : "unpin") \(id)"]
+            try? proc.run(); proc.waitUntilExit()
+            DispatchQueue.main.async { [weak self] in
+                self?.pinMode = keepPin
+                self?.reload()
+            }
         }
     }
 
@@ -638,6 +757,17 @@ final class HomePaneView: NSView {
         add("▣", cyan, "Projekt"); add("▤", violet, "Bereich"); add("◇", yellow, "ohne CLAUDE.md")
         add("●", green, "läuft"); add("●", orange, "wartet")
         return a
+    }
+
+    /// `p`: Pin der markierten Session-Zeile (oder der „Weiter"-Session) umschalten.
+    private func pinSelectedFromList() -> Bool {
+        let r = list.selectedRow
+        let candidate: Action? = (r >= 0 && r < actions.count) ? actions[r] : actions.first
+        switch candidate {
+        case .resume(let s, _, _, _, _), .compact(let s, _): setPin(s.id, pinned: !(s.pinned ?? false)); return true
+        case .togglePin(let s, let pinned): setPin(s.id, pinned: !pinned); return true
+        default: return true
+        }
     }
 
     @objc private func runSelectedAction() {
@@ -693,7 +823,7 @@ final class HomePaneView: NSView {
             cmd += " && " + ac.replacingOccurrences(of: "{alias}", with: alias)
         }
         if let c = t.command { cmd += " && " + c }
-        onLaunch?(parentNode.path, cmd, "\(name) · \(t.label)")
+        onLaunch?(LaunchRequest(path: parentNode.path, command: cmd, label: "\(name) · \(t.label)", followUp: nil))
     }
 
     private static func q(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
@@ -707,13 +837,16 @@ final class HomePaneView: NSView {
         case 36, 76:
             if let a = actions.first { run(a) }
             return true
-        case 48: // ⇥ : zu den Aktionen
+        case 48: // ⇥ : zu den Aktionen · ⇧⇥ : Pin-Screen an/aus
+            if mods.contains(.shift) { togglePinMode(); return true }
             endSearchKeepingSelection(); focusList(); return true
         case 124: // → : Suche beenden / aufklappen / sonst zu den Aktionen
+            if pinMode { focusList(); return true }
             if !filter.isEmpty { endSearchKeepingSelection(); return true }
             if let n = selectedNode, n.hasChildren, !tree.isItemExpanded(n) { tree.expandItem(n); return true }
             focusList(); return true
         case 123: // ← : zuklappen, sonst zum Eltern-Ordner
+            if pinMode { return true }
             if !filter.isEmpty { endSearchKeepingSelection(); return true }
             guard let n = selectedNode else { return true }
             if tree.isItemExpanded(n) { tree.collapseItem(n); return true }
@@ -723,6 +856,7 @@ final class HomePaneView: NSView {
         case 51: if !filter.isEmpty { filter.removeLast(); lastTypedAt = Date() }; return true
         case 125, 126: return false
         default:
+            if pinMode { return ev.characters == "p" ? pinSelectedFromList() : true }
             if let chars = ev.characters, !chars.isEmpty,
                chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
                 typeToSearch(chars); return true
@@ -736,9 +870,12 @@ final class HomePaneView: NSView {
         guard !mods.contains(.command), !mods.contains(.control) else { return false }
         switch ev.keyCode {
         case 36, 76: runSelectedAction(); return true
+        case 48 where mods.contains(.shift): togglePinMode(); return true
         case 123, 53, 48: window?.makeFirstResponder(tree); return true   // ← / Esc / ⇥ zurück zum Baum
         case 125, 126: return false
-        default: return true
+        default:
+            if ev.characters == "p" { return pinSelectedFromList() }
+            return true
         }
     }
 
@@ -782,22 +919,32 @@ final class HomePaneView: NSView {
 
 extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
     func outlineView(_ outlineView: NSOutlineView, numberOfChildrenOfItem item: Any?) -> Int {
+        if pinMode { return item == nil ? pinItems.count : 0 }
         if !filter.isEmpty { return item == nil ? filtered.count : 0 }
         if item == nil { return root == nil ? 0 : 1 }
         return (item as? Node)?.children(Self.treeExcludes).count ?? 0
     }
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
+        if pinMode { return pinItems[index] }
         if !filter.isEmpty { return filtered[index] }
         if item == nil { return root! }
         return (item as! Node).children(Self.treeExcludes)[index]
     }
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
-        filter.isEmpty && ((item as? Node)?.hasChildren ?? false)
+        !pinMode && filter.isEmpty && ((item as? Node)?.hasChildren ?? false)
     }
     func outlineView(_ outlineView: NSOutlineView, viewFor tableColumn: NSTableColumn?, item: Any) -> NSView? {
-        guard let n = item as? Node else { return nil }
         let id = NSUserInterfaceItemIdentifier("treeCell")
         let cell = (outlineView.makeView(withIdentifier: id, owner: nil) as? TreeCell) ?? { let c = TreeCell(); c.identifier = id; return c }()
+        if let pi = item as? PinItem {
+            let s = pi.p
+            let badge = Self.contextBadge(s.context)
+            cell.set(glyph: "★", glyphColor: Self.yellow, text: "\(s.project)  \(s.title ?? "(ohne Titel)")", color: Self.fg,
+                     dot: badge.map { $0.1 == Self.faint ? nil : $0.1 } ?? nil)
+            cell.toolTip = (s.context.map(Self.contextLine) ?? "") + " · " + Self.age(s.lastAt)
+            return cell
+        }
+        guard let n = item as? Node else { return nil }
         let p = byPath[n.path]
         let glyph: String, glyphColor: NSColor, color: NSColor
         switch p?.level {
@@ -844,12 +991,23 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
         switch actions[row] {
         case .header(let t):
             cell.set(glyph: "", text: t, detail: "", meta: "", header: true, accent: Self.faint)
-        case .resume(_, _, let t, let age, let project):
+        case .resume(let s, _, let t, let age, let project):
             let r = templates.resume
-            cell.set(glyph: r.glyph, text: project.map { "\(r.label) · \($0)" } ?? r.label, detail: t, meta: age, header: false, accent: Self.green)
+            let star = (s.pinned ?? false) ? "★ " : ""
+            var meta = age
+            var metaColor: NSColor? = nil
+            if let (badge, color) = Self.contextBadge(s.context) { meta = badge + "  " + age; metaColor = color }
+            cell.set(glyph: r.glyph, text: star + (project.map { "\(r.label) · \($0)" } ?? r.label), detail: t, meta: meta, header: false, accent: Self.green, metaColor: metaColor)
         case .run(let t, _):
             let color: NSColor = t.command == nil ? Self.blue : (t.glyph == "+" ? Self.cyan : Self.violet)
             cell.set(glyph: t.glyph, text: t.label, detail: t.hint ?? "", meta: "", header: false, accent: color)
+        case .compact(let s, _):
+            let t = templates.compact!
+            cell.set(glyph: t.glyph, text: t.label, detail: s.context.map(Self.contextLine) ?? (t.hint ?? ""), meta: "", header: false,
+                     accent: s.context?.advice == "critical" ? Self.red : Self.orange)
+        case .togglePin(_, let pinned):
+            let t = (pinned ? templates.unpin : templates.pin)!
+            cell.set(glyph: t.glyph, text: t.label, detail: pinned ? "im Pin-Screen (⇧⇥)" : "wichtig — in den Pin-Screen (⇧⇥)", meta: "", header: false, accent: Self.yellow)
         }
         return cell
     }
@@ -922,7 +1080,7 @@ final class ActionCell: NSView {
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
-    func set(glyph g: String, text t: String, detail d: String, meta m: String, header: Bool, accent: NSColor) {
+    func set(glyph g: String, text t: String, detail d: String, meta m: String, header: Bool, accent: NSColor, metaColor: NSColor? = nil) {
         let fg = HomePaneView.fg
         glyph.stringValue = g; glyph.textColor = accent
         glyph.font = HomePaneView.mono(0, .bold)
@@ -931,7 +1089,7 @@ final class ActionCell: NSView {
         text.textColor = header ? HomePaneView.faint : fg
         detail.stringValue = d; detail.textColor = fg.withAlphaComponent(0.6)
         detail.font = HomePaneView.mono()
-        meta.stringValue = m; meta.textColor = HomePaneView.blue.withAlphaComponent(0.8)
+        meta.stringValue = m; meta.textColor = metaColor ?? HomePaneView.blue.withAlphaComponent(0.8)
         meta.font = HomePaneView.mono(-2)
     }
 }
