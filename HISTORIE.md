@@ -27,6 +27,11 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 12 — Aufgeräumte Aktionsspalte:** „zu unübersichtlich, nicht alles sofort einblenden“. Rechts
+  stehen jetzt nur ＋ Neue Session, ↻ Weiter, › Nur Shell (+ Kompakt-Rat als Warnung) und eine Klapp-
+  zeile „▸ Sessions (n ältere · anpinnen · umbenennen)“. → / ⏎ klappt auf (Pin, Umbenennen, Zuletzt
+  hier/überall), ← klappt zu, Zustand in `LatexTerm.homeShowSessions`. ⌘P/⌘E wirken auf die markierte
+  Session, sonst auf Weiter (`sessionInFocus`). Pin-Screen (⇧⇥) unverändert.
 - **Runde 11 — Neue Session ist Standard:** Mats' häufigster Griff ist „Alias tippen, ⏎, neue Session" —
   darum steht ＋ Neue Session jetzt an erster Stelle (⏎ und Doppelklick im Baum), ↻ Weiter an zweiter,
   Shell & Co. danach. Reihenfolge wird in `renderActions` aus den Templates abgeleitet (Templates mit

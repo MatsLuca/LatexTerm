@@ -184,6 +184,7 @@ final class HomePaneView: NSView {
         case compact(ProjekteData.Session, path: String)      // Weiter + /compact
         case togglePin(ProjekteData.Session, pinned: Bool)
         case rename(ProjekteData.Session)                     // eigener Titel (⌘E)
+        case more(count: Int, expanded: Bool)                 // „▸ Sessions (n)" — klappt den Rest auf
         case header(String)
         var isHeader: Bool { if case .header = self { return true }; return false }
     }
@@ -718,17 +719,23 @@ final class HomePaneView: NSView {
                                project: q.path == node.path ? nil : q.name))
         }
         for t in byLevel where t.command == nil { out.append(.run(t, path: node.path)) }
-        // Für die „Weiter"-Session: anpinnen/loslösen + Kompakten, wenn der Kontext voll wird
-        if let (q, s) = candidates.first {
-            if let ctx = s.context, ctx.advice != "ok", templates.compact != nil { out.append(.compact(s, path: q.path)) }
-            if templates.pin != nil { out.append(.togglePin(s, pinned: s.pinned ?? false)) }
-            if templates.rename != nil { out.append(.rename(s)) }
+        // Kompakt-Rat bleibt sichtbar (Warnung), alles Weitere — Pin, Umbenennen, ältere Sessions —
+        // liegt hinter „▸ Sessions": erreichbar mit einem →, aber nicht dauernd im Bild.
+        if let (q, s) = candidates.first, let ctx = s.context, ctx.advice != "ok", templates.compact != nil {
+            out.append(.compact(s, path: q.path))
         }
         let rest = candidates.dropFirst()
-        if !rest.isEmpty {
-            out.append(.header(isRoot ? "Zuletzt überall" : "Zuletzt hier"))
-            for (q, s) in rest.prefix(20) {
-                out.append(.resume(s, path: q.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt), project: q.name))
+        if let (_, s) = candidates.first {
+            out.append(.more(count: rest.count, expanded: showMore))
+            if showMore {
+                if templates.pin != nil { out.append(.togglePin(s, pinned: s.pinned ?? false)) }
+                if templates.rename != nil { out.append(.rename(s)) }
+                if !rest.isEmpty {
+                    out.append(.header(isRoot ? "Zuletzt überall" : "Zuletzt hier"))
+                    for (q, s) in rest.prefix(20) {
+                        out.append(.resume(s, path: q.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt), project: q.name))
+                    }
+                }
             }
         }
         actions = out
@@ -751,8 +758,31 @@ final class HomePaneView: NSView {
             setPin(s.id, pinned: !pinned)
         case .rename(let s):
             renameSession(s)
+        case .more(_, let expanded):
+            setMore(!expanded)
         case .header: break
         }
+    }
+
+    /// „▸ Sessions" auf-/zuklappen; Auswahl bleibt auf der Zeile. Zustand wird gemerkt.
+    private static let moreKey = "LatexTerm.homeShowSessions"
+    private var showMore = UserDefaults.standard.bool(forKey: HomePaneView.moreKey)
+    private func setMore(_ on: Bool) {
+        guard on != showMore else { return }
+        showMore = on
+        UserDefaults.standard.set(on, forKey: Self.moreKey)
+        renderActions()
+        if let r = actions.firstIndex(where: { if case .more = $0 { return true }; return false }) {
+            list.selectRowIndexes(IndexSet(integer: r), byExtendingSelection: false)
+            list.scrollRowToVisible(r)
+        }
+        window?.makeFirstResponder(list)
+    }
+    /// Ist „▸ Sessions" markiert? → aufgeklappt ja/nein, sonst nil.
+    private var selectedMore: Bool? {
+        let r = list.selectedRow
+        guard r >= 0, r < actions.count, case .more(_, let e) = actions[r] else { return nil }
+        return e
     }
 
     /// Pin über die Datenschicht setzen (`projekte pin|unpin <id>`), dann neu laden.
@@ -803,25 +833,29 @@ final class HomePaneView: NSView {
         return a
     }
 
+    /// Session hinter einer Aktionszeile (nil für Neu/Shell/Header/Sessions-Klapper).
+    private static func session(of a: Action) -> ProjekteData.Session? {
+        switch a {
+        case .resume(let s, _, _, _, _), .compact(let s, _), .togglePin(let s, _), .rename(let s): return s
+        default: return nil
+        }
+    }
+    /// Markierte Session-Zeile, sonst die „Weiter"-Session (erste Zeile mit Session).
+    private var sessionInFocus: ProjekteData.Session? {
+        let r = list.selectedRow
+        if r >= 0, r < actions.count, let s = Self.session(of: actions[r]) { return s }
+        return actions.lazy.compactMap(Self.session(of:)).first
+    }
+
     /// ⌘P: Pin der markierten Session-Zeile (oder der „Weiter"-Session) umschalten.
     private func pinSelectedFromList() -> Bool {
-        let r = list.selectedRow
-        let candidate: Action? = (r >= 0 && r < actions.count) ? actions[r] : actions.first
-        switch candidate {
-        case .resume(let s, _, _, _, _), .compact(let s, _): setPin(s.id, pinned: !(s.pinned ?? false)); return true
-        case .togglePin(let s, let pinned): setPin(s.id, pinned: !pinned); return true
-        default: return true
-        }
+        if let s = sessionInFocus { setPin(s.id, pinned: !(s.pinned ?? false)) }
+        return true
     }
 
     /// ⌘E: markierte Session-Zeile (oder die „Weiter"-Session) umbenennen.
     private func renameSelectedFromList() -> Bool {
-        let r = list.selectedRow
-        let candidate: Action? = (r >= 0 && r < actions.count) ? actions[r] : actions.first
-        switch candidate {
-        case .resume(let s, _, _, _, _), .compact(let s, _), .togglePin(let s, _), .rename(let s): renameSession(s)
-        default: break
-        }
+        if let s = sessionInFocus { renameSession(s) }
         return true
     }
 
@@ -926,6 +960,10 @@ final class HomePaneView: NSView {
         switch ev.keyCode {
         case 36, 76: runSelectedAction(); return true
         case 48 where mods.contains(.shift): togglePinMode(); return true
+        case 124:   // → auf „▸ Sessions" klappt auf
+            if selectedMore == false { setMore(true) }
+            return true
+        case 123 where selectedMore == true: setMore(false); return true   // ← klappt zu
         case 123, 53, 48: window?.makeFirstResponder(tree); return true   // ← / Esc / ⇥ zurück zum Baum
         case 125, 126: return false
         default:
@@ -1071,6 +1109,9 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
         case .togglePin(_, let pinned):
             let t = (pinned ? templates.unpin : templates.pin)!
             cell.set(glyph: t.glyph, text: t.label, detail: pinned ? "im Pin-Screen (⇧⇥)" : "wichtig — in den Pin-Screen (⇧⇥)", meta: "", header: false, accent: Self.yellow)
+        case .more(let n, let expanded):
+            cell.set(glyph: expanded ? "▾" : "▸", text: "Sessions", detail: n == 0 ? "anpinnen · umbenennen" : "\(n) ältere · anpinnen · umbenennen",
+                     meta: "", header: false, accent: Self.faint)
         case .rename(let s):
             let t = templates.rename!
             cell.set(glyph: t.glyph, text: t.label, detail: s.title ?? (t.hint ?? ""), meta: s.titleSource == "manual" ? "✎" : "", header: false, accent: Self.blue)
