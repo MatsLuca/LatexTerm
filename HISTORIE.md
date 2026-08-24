@@ -27,7 +27,13 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
-- **Nicht live verifiziert:** Claude arbeitete in einem LatexTerm-Fenster; Neustart hätte die
+- **Erster Live-Befund (Mats, 24.08. abends):** App startete mit normaler Shell — der Session-Snapshot
+  (#11) hatte Vorrang vor Home; jetzt ist Home immer die erste Kachel. Erste Fassung der Ansicht
+  (6-spaltige Tabelle + Detailspalte + Buttons + Hilfezeile + Kachel-Kopfzeile) war „hässlich,
+  unintuitiv, überladen" → auf eine zweizeilige Liste reduziert, Sessions als zweiter Modus (→/←),
+  keine Buttons, eine Fußzeile. Lehre: Cockpit-Ästhetik heißt *weniger* — die Titlebar-Punkte zeigen
+  die anderen Kacheln schon.
+- **Nicht live verifiziert (Fassung 1):** Claude arbeitete in einem LatexTerm-Fenster; Neustart hätte die
   Session gekillt. Build (Debug, Standard-DerivedData → `/opt/homebrew/bin/latexterm`-Symlink bleibt
   gültig) ist grün, Prüfliste unter HIER WEITERMACHEN in der CLAUDE.md.
 

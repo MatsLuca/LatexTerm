@@ -83,62 +83,49 @@ extension Notification.Name {
 
 // MARK: - Home-Kachel
 
-/// Startbildschirm einer Kachel (⌘N / erste Kachel): Projekte nach letzter Claude-Aktivität,
-/// Sessions zum Fortsetzen, Status der anderen Kacheln. Enter startet Claude im Projekt,
-/// die Kachel wird dann zur normalen Terminal-Kachel (`TerminalPane.launch`).
-///
-/// Tasten: ↑↓ Projekt · ←→ Session · ⏎ Claude (neu bzw. gewählte Session) · ⇧⏎ letzte Session
-/// fortsetzen · ⌥⏎ nur Shell · Tippen filtert · Esc Filter leeren · ⌘R neu laden ·
-/// ⌘⇧N neues Projekt · ⌘W Kachel schließen.
+/// Startbildschirm einer Kachel (⌘N / erste Kachel). Bewusst karg: EINE Liste, zwei Zeilen je
+/// Projekt (Name · Alias · Alter / letzte Session), sortiert nach letzter Claude-Aktivität.
+/// Tippen filtert. `⏎` startet Claude im Projekt, `→` zeigt die Sessions des Projekts als eigene
+/// Liste (`⏎` setzt fort, `←` zurück), `⌥⏎` nur Shell, `⌘⇧N` neues Projekt, `⌘R` neu laden.
+/// Bei Auswahl wird die Kachel zur Terminal-Kachel (`TerminalPane.launch`).
 final class HomePaneView: NSView {
 
     /// (Pfad, Befehl-oder-nil) → Kachel wird Terminal in `Pfad`, `Befehl` wird getippt.
     var onLaunch: ((String, String?) -> Void)?
     var onClose: (() -> Void)?
-    /// First-Responder-Wechsel der Tabelle → Kachel-Dimmung (wie `onFocusChanged` des Terminals).
+    /// First-Responder-Wechsel der Liste → Kachel-Dimmung (wie `onFocusChanged` des Terminals).
     var onFocusChanged: ((Bool) -> Void)?
-    /// Kurzstatus der anderen Kacheln für die Kopfzeile: (Name, Status-Text).
+    /// Reserviert (Kopfzeile mit anderen Kacheln); zurzeit nicht angezeigt — die Titlebar-Punkte reichen.
     var otherPanes: (() -> [(String, String)])?
 
+    private enum Mode { case projects, sessions(ProjekteData.Project) }
+    private var mode: Mode = .projects { didSet { rebuildRows() } }
     private var data: ProjekteData?
-    private var rows: [ProjekteData.Project] = []
-    private var filter = "" { didSet { applyFilter() } }
-    private var sessionIndex: Int? = nil { didSet { renderDetail() } }
+    private var filter = "" { didSet { rebuildRows() } }
 
-    private let titleLabel = NSTextField(labelWithString: "Projekte")
-    private let panesLabel = NSTextField(labelWithString: "")
-    private let filterLabel = NSTextField(labelWithString: "")
-    private let table = HomeTable()
-    private let tableScroll = NSScrollView()
-    private let detail = NSTextView()
-    private let detailScroll = NSScrollView()
-    private let helpLabel = NSTextField(labelWithString: "")
-    private let statusLabel = NSTextField(labelWithString: "Lade …")
-    private var buttons: [NSButton] = []
-    private var refreshTimer: Timer?
-
-    private static let mono = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .regular)
-    private static let monoBold = NSFont.monospacedSystemFont(ofSize: 12.5, weight: .semibold)
-    private static let fg = NSColor(red: 230/255.0, green: 225/255.0, blue: 225/255.0, alpha: 1)
-    private static let dim = NSColor(red: 230/255.0, green: 225/255.0, blue: 225/255.0, alpha: 0.45)
-    private static let green = NSColor(red: 120/255.0, green: 200/255.0, blue: 130/255.0, alpha: 1)
-    private static let yellow = NSColor(red: 235/255.0, green: 190/255.0, blue: 90/255.0, alpha: 1)
-
-    enum Column: String, CaseIterable {
-        case group, name, alias, age, git, title
-        var title: String {
-            switch self {
-            case .group: return "Ordner"; case .name: return "Projekt"; case .alias: return "Alias"
-            case .age: return "Aktiv"; case .git: return "Git"; case .title: return "Letzte Session"
-            }
-        }
-        var width: CGFloat {
-            switch self {
-            case .group: return 190; case .name: return 170; case .alias: return 120
-            case .age: return 80; case .git: return 110; case .title: return 260
-            }
-        }
+    /// Eine Zeile der Liste — Projekt oder Session, jeweils mit fertigen Texten.
+    private struct Row {
+        var title: String
+        var meta: String        // rechts oben, dim (Alias · Alter)
+        var sub: String         // zweite Zeile, dim
+        var warn: Bool = false
+        var project: ProjekteData.Project?
+        var session: ProjekteData.Session?
     }
+    private var rows: [Row] = []
+
+    private let headline = NSTextField(labelWithString: "")
+    private let hint = NSTextField(labelWithString: "")
+    private let table = HomeTable()
+    private let scroll = NSScrollView()
+    private let footer = NSTextField(labelWithString: "")
+
+    static let fg = NSColor(red: 230/255.0, green: 225/255.0, blue: 225/255.0, alpha: 1)
+    private static let dim = fg.withAlphaComponent(0.42)
+    private static let yellow = NSColor(red: 235/255.0, green: 190/255.0, blue: 90/255.0, alpha: 1)
+    private static let titleFont = NSFont.systemFont(ofSize: 15, weight: .medium)
+    private static let metaFont = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
+    private var accent: NSColor { FormulaSettings.shared.accentColor }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -155,269 +142,174 @@ final class HomePaneView: NSView {
         return false
     }
 
-    override func viewDidMoveToWindow() {
-        super.viewDidMoveToWindow()
-        refreshTimer?.invalidate()
-        guard window != nil else { return }
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.renderPanes() }
-        renderPanes()
-    }
-
-    deinit { refreshTimer?.invalidate() }
-
     // MARK: Aufbau
 
     private func buildUI() {
-        let accent = FormulaSettings.shared.accentColor
-        titleLabel.font = NSFont.systemFont(ofSize: 20, weight: .semibold)
-        titleLabel.textColor = Self.fg
-        panesLabel.font = Self.mono
-        panesLabel.textColor = Self.dim
-        panesLabel.lineBreakMode = .byTruncatingTail
-        filterLabel.font = Self.mono
-        filterLabel.textColor = accent
-        helpLabel.font = NSFont.systemFont(ofSize: 11)
-        helpLabel.textColor = Self.dim
-        helpLabel.stringValue = "↑↓ Projekt   ←→ Session   ⏎ Claude   ⇧⏎ letzte Session   ⌥⏎ nur Shell   Tippen filtert   Esc leert   ⌘R neu laden   ⌘⇧N neues Projekt"
-        statusLabel.font = Self.mono
-        statusLabel.textColor = Self.dim
-        statusLabel.lineBreakMode = .byWordWrapping
-        statusLabel.maximumNumberOfLines = 3
+        headline.font = NSFont.systemFont(ofSize: 22, weight: .semibold)
+        headline.textColor = Self.fg
+        hint.font = Self.metaFont
+        hint.textColor = Self.dim
+        hint.lineBreakMode = .byTruncatingTail
+        footer.font = Self.metaFont
+        footer.textColor = Self.dim
+        footer.lineBreakMode = .byTruncatingTail
 
-        table.headerView = NSTableHeaderView()
-        table.rowHeight = 22
-        table.intercellSpacing = NSSize(width: 8, height: 2)
+        table.headerView = nil
+        table.rowHeight = 46
+        table.intercellSpacing = NSSize(width: 0, height: 4)
         table.backgroundColor = .clear
         table.style = .plain
         table.selectionHighlightStyle = .regular
         table.allowsEmptySelection = false
         table.usesAlternatingRowBackgroundColors = false
-        table.columnAutoresizingStyle = .lastColumnOnlyAutoresizingStyle
-        for col in Column.allCases {
-            let c = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(col.rawValue))
-            c.title = col.title
-            c.width = col.width
-            c.minWidth = 40
-            table.addTableColumn(c)
-        }
+        let col = NSTableColumn(identifier: NSUserInterfaceItemIdentifier("row"))
+        col.resizingMask = .autoresizingMask
+        table.addTableColumn(col)
+        table.columnAutoresizingStyle = .firstColumnOnlyAutoresizingStyle
         table.dataSource = self
         table.delegate = self
         table.target = self
-        table.doubleAction = #selector(doubleClicked)
+        table.doubleAction = #selector(activate)
         table.onKey = { [weak self] ev in self?.handleKey(ev) ?? false }
         table.onFocus = { [weak self] f in self?.onFocusChanged?(f) }
-        tableScroll.documentView = table
-        tableScroll.hasVerticalScroller = true
-        tableScroll.drawsBackground = false
-        tableScroll.borderType = .noBorder
+        scroll.documentView = table
+        scroll.hasVerticalScroller = true
+        scroll.autohidesScrollers = true
+        scroll.drawsBackground = false
+        scroll.borderType = .noBorder
 
-        detail.isEditable = false
-        detail.isSelectable = true
-        detail.drawsBackground = true
-        detail.backgroundColor = NSColor(white: 1, alpha: 0.04)
-        detail.textContainerInset = NSSize(width: 10, height: 10)
-        detail.font = Self.mono
-        detail.textColor = Self.fg
-        detail.isVerticallyResizable = true
-        detail.isHorizontallyResizable = false
-        detail.autoresizingMask = [.width]
-        detail.textContainer?.widthTracksTextView = true
-        detailScroll.documentView = detail
-        detailScroll.hasVerticalScroller = true
-        detailScroll.drawsBackground = false
-        detailScroll.borderType = .noBorder
-        detailScroll.wantsLayer = true
-        detailScroll.layer?.cornerRadius = 6
-
-        let specs: [(String, Selector)] = [
-            ("Claude  ⏎", #selector(actNew)), ("Fortsetzen  ⇧⏎", #selector(actResume)),
-            ("Nur Shell  ⌥⏎", #selector(actShell)), ("Neues Projekt  ⌘⇧N", #selector(actNewProject)),
-            ("Neu laden  ⌘R", #selector(reload)),
-        ]
-        for (title, sel) in specs {
-            let b = NSButton(title: title, target: self, action: sel)
-            b.bezelStyle = .rounded
-            b.controlSize = .small
-            b.font = NSFont.systemFont(ofSize: 11)
-            buttons.append(b)
-        }
-
-        for v in [titleLabel, panesLabel, filterLabel, tableScroll, detailScroll, helpLabel, statusLabel] + buttons {
+        for v in [headline, hint, scroll, footer] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
-        let buttonRow = NSStackView(views: buttons)
-        buttonRow.orientation = .horizontal
-        buttonRow.spacing = 6
-        buttonRow.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(buttonRow)
-
-        let m: CGFloat = 16
+        let m: CGFloat = 28
         NSLayoutConstraint.activate([
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: m),
-            titleLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: m),
-            filterLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            filterLabel.leadingAnchor.constraint(equalTo: titleLabel.trailingAnchor, constant: 16),
-            panesLabel.centerYAnchor.constraint(equalTo: titleLabel.centerYAnchor),
-            panesLabel.leadingAnchor.constraint(greaterThanOrEqualTo: filterLabel.trailingAnchor, constant: 16),
-            panesLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -m),
-
-            tableScroll.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 12),
-            tableScroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: m),
-            tableScroll.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.58, constant: -m),
-            tableScroll.bottomAnchor.constraint(equalTo: buttonRow.topAnchor, constant: -10),
-
-            detailScroll.topAnchor.constraint(equalTo: tableScroll.topAnchor),
-            detailScroll.leadingAnchor.constraint(equalTo: tableScroll.trailingAnchor, constant: 12),
-            detailScroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -m),
-            detailScroll.bottomAnchor.constraint(equalTo: tableScroll.bottomAnchor),
-
-            buttonRow.leadingAnchor.constraint(equalTo: leadingAnchor, constant: m),
-            buttonRow.bottomAnchor.constraint(equalTo: helpLabel.topAnchor, constant: -8),
-            statusLabel.leadingAnchor.constraint(equalTo: buttonRow.trailingAnchor, constant: 12),
-            statusLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -m),
-            statusLabel.centerYAnchor.constraint(equalTo: buttonRow.centerYAnchor),
-
-            helpLabel.leadingAnchor.constraint(equalTo: leadingAnchor, constant: m),
-            helpLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -m),
-            helpLabel.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -10),
+            headline.topAnchor.constraint(equalTo: topAnchor, constant: 26),
+            headline.leadingAnchor.constraint(equalTo: leadingAnchor, constant: m),
+            hint.centerYAnchor.constraint(equalTo: headline.centerYAnchor),
+            hint.leadingAnchor.constraint(equalTo: headline.trailingAnchor, constant: 14),
+            hint.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -m),
+            scroll.topAnchor.constraint(equalTo: headline.bottomAnchor, constant: 18),
+            scroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: m - 8),
+            scroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -(m - 8)),
+            scroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -12),
+            footer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: m),
+            footer.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -m),
+            footer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -16),
         ])
+        renderChrome()
+    }
+
+    private func renderChrome() {
+        switch mode {
+        case .projects:
+            headline.stringValue = "Wo weiter?"
+            footer.stringValue = "⏎ Claude    → Sessions    ⌥⏎ Shell    ⌘⇧N neues Projekt"
+        case .sessions(let p):
+            headline.stringValue = p.name
+            footer.stringValue = "⏎ Session fortsetzen    ← zurück    ⌥⏎ Shell"
+        }
+        hint.stringValue = filter.isEmpty ? "" : "⌕ " + filter
+        hint.textColor = filter.isEmpty ? Self.dim : accent
     }
 
     // MARK: Daten
 
     @objc func reload() {
-        statusLabel.stringValue = "Lade …"
+        hint.stringValue = "…"
         ProjekteLoader.load { [weak self] result in
             guard let self else { return }
             switch result {
             case .success(let d):
                 self.data = d
-                self.statusLabel.stringValue = "\(d.projects.count) Projekte"
-                self.applyFilter()
+                self.mode = .projects
             case .failure(let err):
-                let msg = err.message
                 self.data = nil
-                self.rows = []
+                self.rows = [Row(title: "projekte nicht erreichbar", meta: "", sub: err.message, warn: true)]
                 self.table.reloadData()
-                self.statusLabel.stringValue = "⚠ \(msg)"
-                self.detail.string = ""
+            }
+            self.renderChrome()
+        }
+    }
+
+    private func rebuildRows() {
+        let keep = table.selectedRow
+        let q = filter.lowercased()
+        switch mode {
+        case .projects:
+            let list = (data?.projects ?? []).filter { p in
+                q.isEmpty || p.name.lowercased().contains(q) || p.group.lowercased().contains(q)
+                    || p.aliases.contains { $0.lowercased().contains(q) }
+            }
+            rows = list.map { p in
+                var meta = p.aliases.first.map { "\($0)   " } ?? ""
+                meta += Self.age(p.lastActivity)
+                var sub = p.group.replacingOccurrences(of: "4_Projekte/", with: "")
+                if let t = p.sessions.first?.title, !t.isEmpty { sub += "  ·  " + t }
+                if let g = p.git, let d = g.dirty, d > 0 { sub += "  ·  ✎\(d)" }
+                return Row(title: (p.level == "unter-projekt" ? "↳ " : "") + p.name, meta: meta, sub: sub,
+                           warn: p.level == "ohne-claude-md", project: p)
+            }
+        case .sessions(let p):
+            rows = p.sessions.map { s in
+                Row(title: s.title ?? "(ohne Titel)", meta: Self.age(s.lastAt),
+                    sub: "\(s.turns) Nachrichten  ·  \(String(s.id.prefix(8)))", project: p, session: s)
+            }
+            if rows.isEmpty {
+                rows = [Row(title: "Noch keine Session", meta: "", sub: "⏎ startet eine neue", project: p)]
             }
         }
-    }
-
-    private func applyFilter() {
-        guard let data else { rows = []; table.reloadData(); return }
-        let selectedID = selectedProject?.id
-        let q = filter.lowercased()
-        rows = q.isEmpty ? data.projects : data.projects.filter { p in
-            p.name.lowercased().contains(q) || p.group.lowercased().contains(q)
-                || p.aliases.contains { $0.lowercased().contains(q) }
-                || (p.sessions.first?.title?.lowercased().contains(q) ?? false)
-        }
-        filterLabel.stringValue = q.isEmpty ? "" : "▸ \(filter)"
         table.reloadData()
         if !rows.isEmpty {
-            let idx = rows.firstIndex { $0.id == selectedID } ?? 0
-            table.selectRowIndexes(IndexSet(integer: idx), byExtendingSelection: false)
-            table.scrollRowToVisible(idx)
+            let idx = min(max(keep, 0), rows.count - 1)
+            table.selectRowIndexes(IndexSet(integer: q.isEmpty ? idx : 0), byExtendingSelection: false)
+            table.scrollRowToVisible(table.selectedRow)
         }
-        sessionIndex = nil
+        renderChrome()
     }
 
-    private var selectedProject: ProjekteData.Project? {
+    private var selected: Row? {
         let r = table.selectedRow
         return (r >= 0 && r < rows.count) ? rows[r] : nil
     }
 
-    // MARK: Darstellung
-
-    private func renderPanes() {
-        let list = otherPanes?() ?? []
-        panesLabel.stringValue = list.isEmpty ? "" :
-            "Kacheln: " + list.map { "\($0.0) \($0.1)" }.joined(separator: "  ·  ")
-    }
-
-    private func renderDetail() {
-        guard let p = selectedProject else { detail.string = ""; return }
-        let s = NSMutableAttributedString()
-        func add(_ text: String, _ color: NSColor = HomePaneView.fg, bold: Bool = false) {
-            s.append(NSAttributedString(string: text, attributes: [
-                .font: bold ? Self.monoBold : Self.mono, .foregroundColor: color]))
-        }
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        add(p.name + "\n", FormulaSettings.shared.accentColor, bold: true)
-        add(p.path.replacingOccurrences(of: home, with: "~") + "\n", Self.dim)
-        if !p.aliases.isEmpty { add("Aliase  ", Self.dim); add(p.aliases.joined(separator: ", ") + "\n", Self.green) }
-        if let g = p.git { add("Git     ", Self.dim); add(Self.gitBadge(g) + "\n") }
-        if p.level == "ohne-claude-md" { add("⚠ keine CLAUDE.md — ⌘⇧N legt sie nach\n", Self.yellow) }
-        add("\nSessions\n", Self.fg, bold: true)
-        if p.sessions.isEmpty { add("  (keine)\n", Self.dim) }
-        for (i, sess) in p.sessions.enumerated() {
-            let chosen = sessionIndex == i
-            add(chosen ? "  ▶ " : "    ", FormulaSettings.shared.accentColor)
-            add(Self.age(sess.lastAt).padding(toLength: 10, withPad: " ", startingAt: 0), Self.dim)
-            add(String(sess.turns).leftPad(3) + "✉  ", Self.dim)
-            add((sess.title ?? "(ohne Titel)") + "\n", chosen ? Self.fg : Self.dim, bold: chosen)
-        }
-        add("\n")
-        add(sessionIndex == nil ? "⏎  neue Claude-Session\n" : "⏎  diese Session fortsetzen\n", Self.dim)
-        let md = URL(fileURLWithPath: p.path).appendingPathComponent("CLAUDE.md")
-        if let text = try? String(contentsOf: md, encoding: .utf8) {
-            add("\nCLAUDE.md\n", Self.fg, bold: true)
-            let lines = text.split(separator: "\n", omittingEmptySubsequences: false)
-            for line in lines.prefix(30) { add("  " + line + "\n", Self.dim) }
-            if lines.count > 30 { add("  …\n", Self.dim) }
-        }
-        detail.textStorage?.setAttributedString(s)
-        detail.scroll(.zero)
-    }
-
     static func age(_ iso: String?) -> String {
-        guard let iso, let d = ISO8601DateFormatter().date(from: iso) else { return "–" }
+        guard let iso, let d = ISO8601DateFormatter().date(from: iso) else { return "" }
         let delta = Date().timeIntervalSince(d)
-        if delta < 3600 { return "vor \(Int(delta / 60)) min" }
+        if delta < 3600 { return "vor \(max(1, Int(delta / 60))) min" }
         if delta < 86400 { return "vor \(Int(delta / 3600)) h" }
         if delta < 86400 * 14 { return "vor \(Int(delta / 86400)) d" }
-        let f = DateFormatter(); f.dateFormat = "dd.MM.yy"
+        let f = DateFormatter(); f.dateFormat = "d. MMM"; f.locale = Locale(identifier: "de_DE")
         return f.string(from: d)
-    }
-
-    static func gitBadge(_ g: ProjekteData.Git) -> String {
-        var parts = ["⎇ " + (g.branch ?? "?")]
-        if let d = g.dirty, d > 0 { parts.append("✎\(d)") }
-        if let a = g.ahead, a > 0 { parts.append("↑\(a)") }
-        if let b = g.behind, b > 0 { parts.append("↓\(b)") }
-        if parts.count == 1 { parts.append("✓") }
-        return parts.joined(separator: " ")
     }
 
     // MARK: Aktionen
 
-    private func launch(shellOnly: Bool = false, sessionID: String? = nil) {
-        guard let p = selectedProject else { return }
-        let cmd: String?
-        if shellOnly { cmd = nil }
-        else if let sid = sessionID { cmd = "claude --dangerously-skip-permissions --resume \(sid)" }
-        else { cmd = "claude --dangerously-skip-permissions" }
-        onLaunch?(p.path, cmd)
+    private static let claude = "claude --dangerously-skip-permissions"
+
+    @objc private func activate() {
+        guard let row = selected, let p = row.project else { return }
+        if let s = row.session { onLaunch?(p.path, "\(Self.claude) --resume \(s.id)") }
+        else { onLaunch?(p.path, Self.claude) }
     }
 
-    @objc private func actNew() {
-        if let i = sessionIndex, let p = selectedProject, i < p.sessions.count {
-            launch(sessionID: p.sessions[i].id)
-        } else {
-            launch()
-        }
+    private func shellOnly() {
+        guard let p = selected?.project else { return }
+        onLaunch?(p.path, nil)
     }
-    @objc private func actResume() {
-        guard let p = selectedProject else { return }
-        launch(sessionID: p.sessions.first?.id)
-    }
-    @objc private func actShell() { launch(shellOnly: true) }
-    @objc private func doubleClicked() { actNew() }
 
-    @objc private func actNewProject() {
+    private func showSessions() {
+        guard case .projects = mode, let p = selected?.project else { return }
+        filter = ""
+        mode = .sessions(p)
+    }
+
+    private func back() {
+        guard case .sessions = mode else { return }
+        mode = .projects
+    }
+
+    @objc private func newProject() {
         guard let data else { return }
         var groups: [String] = []
         for p in data.projects where !p.group.hasPrefix("/") && !p.group.hasPrefix("~") && !groups.contains(p.group) { groups.append(p.group) }
@@ -426,15 +318,15 @@ final class HomePaneView: NSView {
 
         let alert = NSAlert()
         alert.messageText = "Neues Projekt"
-        alert.informativeText = "Ordner wird angelegt, Claude startet darin mit /neues-projekt (Interview, CLAUDE.md, Git)."
+        alert.informativeText = "Ordner anlegen, dann übernimmt Claude mit /neues-projekt (Interview, CLAUDE.md, Git)."
         alert.addButton(withTitle: "Anlegen")
         alert.addButton(withTitle: "Abbrechen")
         let box = NSView(frame: NSRect(x: 0, y: 0, width: 360, height: 84))
         let nameField = NSTextField(frame: NSRect(x: 90, y: 56, width: 260, height: 22))
-        nameField.placeholderString = "Ordnername (Unterstriche statt Leerzeichen)"
+        nameField.placeholderString = "Ordnername"
         let groupPop = NSPopUpButton(frame: NSRect(x: 90, y: 28, width: 260, height: 24))
         groupPop.addItems(withTitles: groups)
-        if let i = groups.firstIndex(of: selectedProject?.group ?? "") { groupPop.selectItem(at: i) }
+        if let i = groups.firstIndex(of: selected?.project?.group ?? "") { groupPop.selectItem(at: i) }
         let aliasField = NSTextField(frame: NSRect(x: 90, y: 0, width: 260, height: 22))
         aliasField.placeholderString = "optional"
         for (y, t) in [(56, "Name"), (28, "Ordner"), (0, "Alias")] {
@@ -459,7 +351,7 @@ final class HomePaneView: NSView {
         if !alias.isEmpty, alias.range(of: "^[A-Za-z0-9_.-]+$", options: .regularExpression) != nil {
             cmd += " && hier \(alias)"
         }
-        cmd += " && claude --dangerously-skip-permissions '/neues-projekt'"
+        cmd += " && \(Self.claude) '/neues-projekt'"
         onLaunch?(parent, cmd)
     }
 
@@ -467,34 +359,25 @@ final class HomePaneView: NSView {
 
     // MARK: Tastatur
 
-    /// Tasten der Tabelle (First Responder). true = verbraucht.
+    /// Tasten der Liste (First Responder). true = verbraucht.
     private func handleKey(_ ev: NSEvent) -> Bool {
         let mods = ev.modifierFlags.intersection([.command, .shift, .option, .control])
         guard !mods.contains(.command), !mods.contains(.control) else { return false }
         switch ev.keyCode {
         case 36, 76: // Return / Enter
-            if mods.contains(.option) { actShell() }
-            else if mods.contains(.shift) { actResume() }
-            else { actNew() }
+            if mods.contains(.option) { shellOnly() } else { activate() }
             return true
         case 53: // Esc
-            if !filter.isEmpty { filter = "" }
+            if !filter.isEmpty { filter = "" } else { back() }
             return true
         case 51: // Backspace
-            if !filter.isEmpty { filter.removeLast() }
+            if !filter.isEmpty { filter.removeLast() } else { back() }
             return true
-        case 123: // ←
-            guard let p = selectedProject, !p.sessions.isEmpty else { return true }
-            if let i = sessionIndex { sessionIndex = i > 0 ? i - 1 : nil }
-            return true
-        case 124: // →
-            guard let p = selectedProject, !p.sessions.isEmpty else { return true }
-            if let i = sessionIndex { sessionIndex = min(i + 1, p.sessions.count - 1) } else { sessionIndex = 0 }
-            return true
-        case 125, 126: // ↑↓ → Tabelle selbst
-            return false
+        case 123: back(); return true          // ←
+        case 124: showSessions(); return true  // →
+        case 125, 126: return false            // ↑↓ → Tabelle
         default:
-            if let chars = ev.characters, !chars.isEmpty,
+            if case .projects = mode, let chars = ev.characters, !chars.isEmpty,
                chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
                 filter += chars
                 return true
@@ -506,55 +389,91 @@ final class HomePaneView: NSView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
         let a = event.charactersIgnoringModifiers ?? ""
-        let focused: Bool = {
-            let fr = window?.firstResponder as? NSView
-            return fr === self || (fr?.isDescendant(of: self) ?? false)
-        }()
+        let fr = window?.firstResponder as? NSView
+        let focused = fr === self || (fr?.isDescendant(of: self) ?? false)
         guard focused else { return super.performKeyEquivalent(with: event) }
         if mods == .command, a == "w" { onClose?(); return true }
         if mods == .command, a == "r" { reload(); return true }
-        if mods == [.command, .shift], a.lowercased() == "n" { actNewProject(); return true }
+        if mods == [.command, .shift], a.lowercased() == "n" { newProject(); return true }
         return super.performKeyEquivalent(with: event)
     }
 }
 
-// MARK: - Tabelle
+// MARK: - Liste
 
 extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int { rows.count }
 
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
-        guard let col = tableColumn.flatMap({ Column(rawValue: $0.identifier.rawValue) }), row < rows.count else { return nil }
-        let p = rows[row]
-        let id = NSUserInterfaceItemIdentifier("cell." + col.rawValue)
-        let field = (tableView.makeView(withIdentifier: id, owner: nil) as? NSTextField) ?? {
-            let f = NSTextField(labelWithString: "")
-            f.identifier = id
-            f.lineBreakMode = .byTruncatingTail
-            f.font = Self.mono
-            return f
+        guard row < rows.count else { return nil }
+        let r = rows[row]
+        let id = NSUserInterfaceItemIdentifier("cell")
+        let cell = (tableView.makeView(withIdentifier: id, owner: nil) as? HomeRowView) ?? {
+            let c = HomeRowView(); c.identifier = id; return c
         }()
-        var text = "", color = Self.fg, font = Self.mono
-        switch col {
-        case .group: text = p.group; color = Self.dim
-        case .name:
-            text = (p.level == "unter-projekt" ? "  └ " : "") + p.name
-            font = Self.monoBold
-            if p.level == "ohne-claude-md" { text += " ⚠"; color = Self.yellow }
-        case .alias: text = p.aliases.joined(separator: ", "); color = Self.green
-        case .age: text = Self.age(p.lastActivity)
-        case .git: text = p.git.map(Self.gitBadge) ?? ""; color = Self.dim
-        case .title: text = p.sessions.first?.title ?? ""; color = Self.dim
-        }
-        field.stringValue = text
-        field.textColor = color
-        field.font = font
-        return field
+        cell.set(title: r.title, meta: r.meta, sub: r.sub,
+                 titleColor: r.warn ? Self.yellow : Self.fg, dim: Self.dim,
+                 titleFont: Self.titleFont, metaFont: Self.metaFont)
+        return cell
     }
 
-    func tableViewSelectionDidChange(_ notification: Notification) {
-        sessionIndex = nil
+    func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
+        let v = HomeRowBackground()
+        v.accent = accent
+        return v
     }
+}
+
+/// Zweizeilige Zelle: Titel + Meta rechts, darunter eine dimme Zeile.
+final class HomeRowView: NSView {
+    private let title = NSTextField(labelWithString: "")
+    private let meta = NSTextField(labelWithString: "")
+    private let sub = NSTextField(labelWithString: "")
+
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        for f in [title, meta, sub] {
+            f.translatesAutoresizingMaskIntoConstraints = false
+            f.lineBreakMode = .byTruncatingTail
+            f.maximumNumberOfLines = 1
+            addSubview(f)
+        }
+        meta.alignment = .right
+        meta.setContentCompressionResistancePriority(.required, for: .horizontal)
+        NSLayoutConstraint.activate([
+            title.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
+            title.topAnchor.constraint(equalTo: topAnchor, constant: 6),
+            meta.leadingAnchor.constraint(greaterThanOrEqualTo: title.trailingAnchor, constant: 12),
+            meta.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
+            meta.firstBaselineAnchor.constraint(equalTo: title.firstBaselineAnchor),
+            sub.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            sub.trailingAnchor.constraint(equalTo: meta.trailingAnchor),
+            sub.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
+        ])
+    }
+    required init?(coder: NSCoder) { fatalError() }
+
+    func set(title t: String, meta m: String, sub s: String, titleColor: NSColor, dim: NSColor,
+             titleFont: NSFont, metaFont: NSFont) {
+        title.stringValue = t; title.textColor = titleColor; title.font = titleFont
+        meta.stringValue = m; meta.textColor = dim; meta.font = metaFont
+        sub.stringValue = s; sub.textColor = dim; sub.font = metaFont
+    }
+}
+
+/// Auswahl als weiche, abgerundete Fläche in der Akzentfarbe statt des System-Blaus.
+final class HomeRowBackground: NSTableRowView {
+    var accent: NSColor = .controlAccentColor
+    override func drawSelection(in dirtyRect: NSRect) {
+        guard selectionHighlightStyle != .none else { return }
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 0), xRadius: 8, yRadius: 8)
+        accent.withAlphaComponent(isEmphasized ? 0.22 : 0.12).setFill()
+        path.fill()
+        let bar = NSBezierPath(roundedRect: NSRect(x: 2, y: 6, width: 3, height: bounds.height - 12), xRadius: 1.5, yRadius: 1.5)
+        accent.setFill()
+        bar.fill()
+    }
+    override var isEmphasized: Bool { get { true } set {} }
 }
 
 /// NSTableView, das Tasten an die Home-Kachel weiterreicht (Filter tippen, Enter, ←→).
@@ -575,8 +494,4 @@ final class HomeTable: NSTableView {
         if onKey?(event) == true { return }
         super.keyDown(with: event)
     }
-}
-
-private extension String {
-    func leftPad(_ n: Int) -> String { count >= n ? self : String(repeating: " ", count: n - count) + self }
 }

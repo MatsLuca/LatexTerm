@@ -998,11 +998,10 @@ final class TerminalSplitView: NSView {
 
         // Session-Restore (#11): letztes Layout (Pane-Anzahl + CWDs) wiederherstellen;
         // ohne/mit korruptem Snapshot startet wie bisher eine Kachel im Home.
-        if let snap = SessionStore.load() {
-            for dir in snap.paneDirectories { addPane(startingIn: dir) }
-        } else {
-            addPane(home: true)   // erste Kachel = Projekt-Launcher
-        }
+        // Erste Kachel = Projekt-Launcher (Mats' Entscheidung 24.08.). Der Session-Snapshot (#11)
+        // wird weiter geschrieben, aber nicht mehr als Startlayout benutzt — die Home-Kachel
+        // zeigt ohnehin, woran zuletzt gearbeitet wurde.
+        addPane(home: true)
 
         // ⌘N (Menü „Neue Home-Kachel"): nur das Key-Fenster reagiert.
         newHomeObserver = NotificationCenter.default.addObserver(
