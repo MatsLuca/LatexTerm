@@ -151,10 +151,18 @@ final class HomePaneView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    override var acceptsFirstResponder: Bool { true }
-    override func becomeFirstResponder() -> Bool {
+    /// Das eigentliche Fokusziel der Kachel. WICHTIG: nicht über `becomeFirstResponder`
+    /// umleiten — ein verschachteltes `makeFirstResponder` mit anschließendem `false`
+    /// lässt AppKit den ALTEN Responder (ein anderes Terminal) wiederherstellen; die
+    /// Tabelle sah dann fokussiert aus, Tasten gingen aber in die Nachbarkachel.
+    var keyView: NSView { table }
+
+    override var acceptsFirstResponder: Bool { false }
+
+    /// Klick irgendwo in die Kachel (auch neben die Liste) holt den Fokus.
+    override func mouseDown(with event: NSEvent) {
         window?.makeFirstResponder(table)
-        return false
+        super.mouseDown(with: event)
     }
 
     // MARK: Aufbau

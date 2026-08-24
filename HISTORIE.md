@@ -27,6 +27,10 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Fokus-Bug (Mats, 24.08. abends):** in der ⌘N-Home-Kachel gingen Tasten ins Nachbar-Terminal, ⌘W/⇥
+  griffen nicht. Ursache: `HomePaneView.becomeFirstResponder` rief verschachtelt `makeFirstResponder(table)`
+  und gab `false` zurück → AppKit stellte den alten Responder wieder her. **Regel:** Fokusziel direkt
+  benennen (`focusTarget` = die Tabelle), nie in `becomeFirstResponder` umleiten.
 - **Erster Live-Befund (Mats, 24.08. abends):** App startete mit normaler Shell — der Session-Snapshot
   (#11) hatte Vorrang vor Home; jetzt ist Home immer die erste Kachel. Erste Fassung der Ansicht
   (6-spaltige Tabelle + Detailspalte + Buttons + Hilfezeile + Kachel-Kopfzeile) war „hässlich,

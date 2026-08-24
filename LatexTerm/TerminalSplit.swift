@@ -182,7 +182,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private(set) var isStarted = false
     var isHome: Bool { homeView != nil }
     /// Was den Tastaturfokus dieser Kachel trägt: Terminal oder Home-Ansicht.
-    var focusTarget: NSView { homeView ?? view }
+    var focusTarget: NSView { homeView?.keyView ?? view }
 
     /// Kachel als Home-Kachel zeigen (statt Shell). `otherPanes` liefert die Kopfzeile
     /// mit dem Status der übrigen Kacheln.
