@@ -27,6 +27,11 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **UX-Runde 4 (24.08. abends):** „einfarbig, unübersichtlich; soll aussehen wie Terminal + Statusline".
+  → Home-Kachel nutzt jetzt die Terminal-Monospace in der persistierten Größe (`LatexTerminalView.storedFontSize`,
+  jetzt intern sichtbar) und die xterm-256-Palette der `statusline-command.sh` (51 cyan Projekt/Neu, 77 grün
+  Weiter/laufend, 111 blau Shell/Zeit, 171 violett Router/Bereich, 214 orange braucht Input, 220 gelb ohne
+  CLAUDE.md). ⌘⏎ zoomt die Home-Kachel wie eine Terminal-Kachel (`onZoom` → `onZoomRequested`).
 - **UX-Runde 3 (24.08. abends):** Mats' Kritik an Fassung 2: „Wo weiter?" zu wortreich, Zeit-Sortierung
   allein reicht nicht — man will auch *strukturell* navigieren. Erst Modus-Umschalter (⇥ Zuletzt/Struktur),
   dann erkannt: Modus = Denklast. Fassung 3 = Finder-Muster: Baum links, Aktionen des gewählten Ordners

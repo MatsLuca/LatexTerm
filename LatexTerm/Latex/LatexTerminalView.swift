@@ -264,7 +264,8 @@ final class LatexTerminalView: LocalProcessTerminalView {
         return lineCellSize
     }
 
-    private static func storedFontSize() -> CGFloat {
+    /// Aktuelle Terminal-Schriftgröße (⌘+/−, persistiert) — auch die Home-Kachel zieht sie.
+    static func storedFontSize() -> CGFloat {
         let v = UserDefaults.standard.double(forKey: fontSizeKey)
         guard v > 0 else { return defaultFontSize }
         return CGFloat(min(max(v, Double(minFontSize)), Double(maxFontSize)))

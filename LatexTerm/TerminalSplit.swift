@@ -196,6 +196,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             guard let self else { return }
             self.onCloseRequested?(self)
         }
+        home.onZoom = { [weak self] in
+            guard let self else { return }
+            self.onZoomRequested?(self)
+        }
         home.onFocusChanged = { [weak self] focused in
             guard let self else { return }
             self.hasFocus = focused

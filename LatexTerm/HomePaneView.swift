@@ -102,6 +102,8 @@ final class HomePaneView: NSView {
     /// (Pfad, Befehl-oder-nil) → Kachel wird Terminal in `Pfad`, `Befehl` wird getippt.
     var onLaunch: ((String, String?) -> Void)?
     var onClose: (() -> Void)?
+    /// ⌘⏎ — Zoom wie bei Terminal-Kacheln (#26).
+    var onZoom: (() -> Void)?
     /// First-Responder-Wechsel (Baum oder Aktionen) → Kachel-Dimmung.
     var onFocusChanged: ((Bool) -> Void)?
     /// (CWD, Claude-Status) der anderen gestarteten Kacheln → ● im Baum.
@@ -157,10 +159,23 @@ final class HomePaneView: NSView {
     private let footer = NSTextField(labelWithString: "")
     private let divider = NSView()
 
+    // Aus einem Guss mit Terminal und Statusline: dieselbe Monospace-Schrift in derselben Größe,
+    // dieselbe xterm-256-Palette wie `statusline-command.sh` (51 cyan, 77 grün, 111 blau,
+    // 171 violett, 214 orange, 220 gelb, 203 rot).
     static let fg = NSColor(red: 230/255.0, green: 225/255.0, blue: 225/255.0, alpha: 1)
-    private static let dim = fg.withAlphaComponent(0.42)
-    private static let faint = fg.withAlphaComponent(0.22)
-    private static let yellow = NSColor(red: 235/255.0, green: 190/255.0, blue: 90/255.0, alpha: 1)
+    static let dim = fg.withAlphaComponent(0.45)
+    static let faint = fg.withAlphaComponent(0.22)
+    static let cyan   = NSColor(red: 0x5f/255.0, green: 0xd7/255.0, blue: 0xff/255.0, alpha: 1)
+    static let green  = NSColor(red: 0x5f/255.0, green: 0xd7/255.0, blue: 0x5f/255.0, alpha: 1)
+    static let blue   = NSColor(red: 0x87/255.0, green: 0xaf/255.0, blue: 0xff/255.0, alpha: 1)
+    static let violet = NSColor(red: 0xd7/255.0, green: 0x5f/255.0, blue: 0xff/255.0, alpha: 1)
+    static let orange = NSColor(red: 0xff/255.0, green: 0xaf/255.0, blue: 0x00/255.0, alpha: 1)
+    static let yellow = NSColor(red: 0xff/255.0, green: 0xd7/255.0, blue: 0x00/255.0, alpha: 1)
+    static let red    = NSColor(red: 0xff/255.0, green: 0x5f/255.0, blue: 0x5f/255.0, alpha: 1)
+    static var base: CGFloat { LatexTerminalView.storedFontSize() }
+    static func mono(_ delta: CGFloat = 0, _ w: NSFont.Weight = .regular) -> NSFont {
+        NSFont.monospacedSystemFont(ofSize: base + delta, weight: w)
+    }
     static let treeExcludes: Set<String> = ["node_modules", ".build", "venv", "DerivedData", "7_AppData", "__pycache__", "Library"]
     private var accent: NSColor { FormulaSettings.shared.accentColor }
 
@@ -192,21 +207,21 @@ final class HomePaneView: NSView {
     // MARK: Aufbau
 
     private func buildUI() {
-        title.font = NSFont.systemFont(ofSize: 20, weight: .semibold)
-        title.textColor = Self.fg
+        title.font = Self.mono(4, .bold)
+        title.textColor = Self.cyan
         title.lineBreakMode = .byTruncatingTail
-        subtitle.font = NSFont.monospacedSystemFont(ofSize: 11.5, weight: .regular)
+        subtitle.font = Self.mono(-1)
         subtitle.textColor = Self.dim
         subtitle.lineBreakMode = .byTruncatingTail
-        footer.font = NSFont.systemFont(ofSize: 11)
+        footer.font = Self.mono(-2)
         footer.textColor = Self.faint
-        footer.stringValue = "⌘⇧N  Neues Projekt im gewählten Ordner"
+        footer.stringValue = "⏎ ausführen · →← Baum/Aktionen · tippen filtert · ⌘⇧N neues Projekt · ⌘⏎ zoom"
         divider.wantsLayer = true
         divider.layer?.backgroundColor = Self.fg.withAlphaComponent(0.08).cgColor
 
         // Baum
         tree.headerView = nil
-        tree.rowHeight = 26
+        tree.rowHeight = Self.base + 11
         tree.indentationPerLevel = 14
         tree.intercellSpacing = NSSize(width: 0, height: 0)
         tree.backgroundColor = .clear
@@ -233,7 +248,7 @@ final class HomePaneView: NSView {
 
         // Aktionen
         list.headerView = nil
-        list.rowHeight = 30
+        list.rowHeight = Self.base + 15
         list.intercellSpacing = NSSize(width: 0, height: 2)
         list.backgroundColor = .clear
         list.style = .plain
@@ -562,6 +577,7 @@ final class HomePaneView: NSView {
         let focused = fr === self || (fr?.isDescendant(of: self) ?? false)
         guard focused else { return super.performKeyEquivalent(with: event) }
         if mods == .command, a == "w" { onClose?(); return true }
+        if mods == .command, a == "\r" { onZoom?(); return true }
         if mods == .command, a == "r" { reload(); return true }
         if mods == [.command, .shift], a.lowercased() == "n" { newProject(); return true }
         return super.performKeyEquivalent(with: event)
@@ -611,19 +627,19 @@ extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
         let id = NSUserInterfaceItemIdentifier("treeCell")
         let cell = (outlineView.makeView(withIdentifier: id, owner: nil) as? TreeCell) ?? { let c = TreeCell(); c.identifier = id; return c }()
         let p = byPath[n.path]
-        let glyph: String, color: NSColor
+        let glyph: String, glyphColor: NSColor, color: NSColor
         switch p?.level {
-        case "projekt", "unter-projekt": glyph = "▣"; color = Self.fg
-        case "router", "bereich":        glyph = "▤"; color = Self.dim
-        case "ohne-claude-md":           glyph = "◇"; color = Self.fg
-        default:                         glyph = "▫"; color = Self.dim
+        case "projekt", "unter-projekt": glyph = "▣"; glyphColor = Self.cyan;   color = Self.fg
+        case "router", "bereich":        glyph = "▤"; glyphColor = Self.violet; color = Self.fg.withAlphaComponent(0.75)
+        case "ohne-claude-md":           glyph = "◇"; glyphColor = Self.yellow; color = Self.fg
+        default:                         glyph = "·"; glyphColor = Self.faint;  color = Self.dim
         }
         let label = filter.isEmpty ? n.name : String(n.path.dropFirst((root?.path.count ?? 0) + 1))
         var dot: NSColor? = nil
         if let st = running.first(where: { $0.key == n.path || $0.key.hasPrefix(n.path + "/") })?.value {
-            dot = st == "awaitingInput" ? Self.yellow : accent
+            dot = st == "awaitingInput" ? Self.orange : Self.green
         }
-        cell.set(glyph: glyph, text: label, color: color, dot: dot)
+        cell.set(glyph: glyph, glyphColor: glyphColor, text: label, color: color, dot: dot)
         return cell
     }
     func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
@@ -638,21 +654,17 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int { actions.count }
     func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool { actions[row].isHeader }
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { !actions[row].isHeader }
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { actions[row].isHeader ? 34 : 30 }
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { HomePaneView.base + (actions[row].isHeader ? 19 : 15) }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let id = NSUserInterfaceItemIdentifier("actionCell")
         let cell = (tableView.makeView(withIdentifier: id, owner: nil) as? ActionCell) ?? { let c = ActionCell(); c.identifier = id; return c }()
         switch actions[row] {
         case .header(let t):
-            cell.set(glyph: "", text: t, detail: "", meta: "", header: true, accent: accent)
+            cell.set(glyph: "", text: t, detail: "", meta: "", header: true, accent: Self.faint)
         case .resume(_, _, let t, let age, let project):
-            if let project {
-                cell.set(glyph: "↻", text: project, detail: t, meta: age, header: false, accent: accent)
-            } else {
-                cell.set(glyph: "↻", text: "Weiter", detail: t, meta: age, header: false, accent: accent)
-            }
-        case .new:   cell.set(glyph: "＋", text: "Neue Session", detail: "", meta: "", header: false, accent: accent)
-        case .shell: cell.set(glyph: "›", text: "Nur Shell", detail: "", meta: "", header: false, accent: accent)
+            cell.set(glyph: "↻", text: project ?? "Weiter", detail: t, meta: age, header: false, accent: Self.green)
+        case .new:   cell.set(glyph: "+", text: "Neue Session", detail: "", meta: "", header: false, accent: Self.cyan)
+        case .shell: cell.set(glyph: "$", text: "Nur Shell", detail: "", meta: "", header: false, accent: Self.blue)
         }
         return cell
     }
@@ -673,9 +685,9 @@ final class TreeCell: NSView {
             f.lineBreakMode = .byTruncatingTail
             addSubview(f)
         }
-        glyph.font = NSFont.systemFont(ofSize: 11)
-        name.font = NSFont.systemFont(ofSize: 13.5, weight: .regular)
-        dot.font = NSFont.systemFont(ofSize: 9)
+        glyph.font = HomePaneView.mono(-1)
+        name.font = HomePaneView.mono()
+        dot.font = HomePaneView.mono(-3)
         NSLayoutConstraint.activate([
             glyph.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             glyph.centerYAnchor.constraint(equalTo: centerYAnchor),
@@ -688,8 +700,8 @@ final class TreeCell: NSView {
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
-    func set(glyph g: String, text: String, color: NSColor, dot d: NSColor?) {
-        glyph.stringValue = g; glyph.textColor = color.withAlphaComponent(0.6)
+    func set(glyph g: String, glyphColor: NSColor, text: String, color: NSColor, dot d: NSColor?) {
+        glyph.stringValue = g; glyph.textColor = glyphColor
         name.stringValue = text; name.textColor = color
         dot.isHidden = d == nil; dot.textColor = d ?? .clear
     }
@@ -728,14 +740,14 @@ final class ActionCell: NSView {
     func set(glyph g: String, text t: String, detail d: String, meta m: String, header: Bool, accent: NSColor) {
         let fg = HomePaneView.fg
         glyph.stringValue = g; glyph.textColor = accent
-        glyph.font = NSFont.systemFont(ofSize: 13)
-        text.stringValue = t
-        text.font = header ? NSFont.systemFont(ofSize: 11, weight: .semibold) : NSFont.systemFont(ofSize: 14, weight: .medium)
-        text.textColor = header ? fg.withAlphaComponent(0.35) : fg
-        detail.stringValue = d; detail.textColor = fg.withAlphaComponent(0.5)
-        detail.font = NSFont.systemFont(ofSize: 13)
-        meta.stringValue = m; meta.textColor = fg.withAlphaComponent(0.35)
-        meta.font = NSFont.monospacedSystemFont(ofSize: 11, weight: .regular)
+        glyph.font = HomePaneView.mono(0, .bold)
+        text.stringValue = header ? "── \(t) " : t
+        text.font = header ? HomePaneView.mono(-2) : HomePaneView.mono(0, .semibold)
+        text.textColor = header ? HomePaneView.faint : (accent == HomePaneView.faint ? fg : accent)
+        detail.stringValue = d; detail.textColor = fg.withAlphaComponent(0.6)
+        detail.font = HomePaneView.mono()
+        meta.stringValue = m; meta.textColor = HomePaneView.blue.withAlphaComponent(0.8)
+        meta.font = HomePaneView.mono(-2)
     }
 }
 
