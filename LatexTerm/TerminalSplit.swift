@@ -191,7 +191,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         let home = HomePaneView(frame: container.bounds)
         home.autoresizingMask = [.width, .height]
         home.otherPanes = otherPanes
-        home.onLaunch = { [weak self] dir, cmd in self?.launch(in: dir, command: cmd) }
+        home.onLaunch = { [weak self] dir, cmd, label in self?.launch(in: dir, command: cmd, label: label) }
         home.onClose = { [weak self] in
             guard let self else { return }
             self.onCloseRequested?(self)
@@ -212,17 +212,46 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     /// Home → Terminal: Shell in `directory` starten und `command` tippen (Kernel puffert,
     /// die Shell liest es nach dem Prompt — gleicher Pfad wie `new-pane --exec`).
-    func launch(in directory: String, command: String?) {
-        homeView?.removeFromSuperview()
-        homeView = nil
+    func launch(in directory: String, command: String?, label: String? = nil) {
         start(in: directory)
-        if let command, !command.isEmpty {
-            view.send(txt: command + "\r")
+        guard let command, !command.isEmpty, let home = homeView else {
+            // Nur Shell: sofort zeigen.
+            homeView?.removeFromSuperview(); homeView = nil
+            DispatchQueue.main.async { [weak self] in
+                guard let self else { return }
+                self.view.window?.makeFirstResponder(self.view)
+            }
+            return
         }
-        DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            self.view.window?.makeFirstResponder(self.view)
+        // Claude-Start: Home-Ansicht bleibt als Vorhang mit Spinner liegen, bis die Session
+        // wirklich steht (passive Erkennung / Hook-Status), höchstens 12 s — der User sieht
+        // weder das getippte Kommando noch Plugin-Sync und Ladezeilen.
+        home.beginLaunch(label ?? "Claude")
+        view.send(txt: command + "\r")
+        let started = Date()
+        launchTimer?.invalidate()
+        launchTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            let ready = self.sessionState != .none
+            let timeout = Date().timeIntervalSince(started) > 12
+            guard ready || timeout else { return }
+            t.invalidate()
+            self.launchTimer = nil
+            self.revealTerminal()
         }
+    }
+    private var launchTimer: Timer?
+
+    private func revealTerminal() {
+        guard let home = homeView else { return }
+        homeView = nil
+        NSAnimationContext.runAnimationGroup({ ctx in
+            ctx.duration = 0.25
+            home.animator().alphaValue = 0
+        }, completionHandler: {
+            home.removeFromSuperview()
+        })
+        view.window?.makeFirstResponder(view)
     }
 
     override init() {

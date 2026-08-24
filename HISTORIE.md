@@ -27,6 +27,14 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 6 (24.08. spät) — sechs Befunde von Mats:** (1) Start-Overlay: Home bleibt als Vorhang mit
+  Braille-Spinner liegen, bis `sessionState != .none` (passive Erkennung/Hook) oder 12 s — kein sichtbares
+  Kommando-Paste, kein Plugin-Sync-Geflacker; nur-Shell zeigt sofort. (2) Tippen sucht mit Wortpause:
+  > 1 s ohne Taste → nächstes Zeichen startet eine neue Suche; →/←/⇥ beenden die Suche und behalten die
+  Auswahl. (3) Fokus-Spalte: die unfokussierte Spalte auf 55 % gedimmt, Akzentbalken nur bei Fokus, ⇥
+  wechselt die Spalte. (4) Fußzeile: nur noch der Text-Button „✚ Neues Projekt", dim Hinweise, Legende.
+  (5) Aufklapp-Zustand persistent (`LatexTerm.homeExpanded`, relative Pfade). (6) Legende der Baum-
+  Glyphen in der Fußzeile + Tooltips je Zeile.
 - **Runde 5 (24.08. abends) — Höhen-Einstiege aus `projekte`:** Mats' Frage „schreiben wir auf dieser
   Höhe Skills vor?" → Antwort: der Launcher erzwingt nur *Neues Projekt* (immer `/neues-projekt`), sonst
   bietet er höhentypische Einstiege als Zeilen an (Router/Bereich: „⌂ Wartungsgang" = `/claude-md .`;

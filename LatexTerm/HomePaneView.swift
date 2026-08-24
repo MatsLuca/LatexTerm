@@ -113,8 +113,8 @@ extension Notification.Name {
 /// den Baum · Esc leert · ⌘⇧N neues Projekt im gewählten Ordner · ⌘R neu laden.
 final class HomePaneView: NSView {
 
-    /// (Pfad, Befehl-oder-nil) → Kachel wird Terminal in `Pfad`, `Befehl` wird getippt.
-    var onLaunch: ((String, String?) -> Void)?
+    /// (Pfad, Befehl-oder-nil, Label fürs Start-Overlay) → Kachel wird Terminal in `Pfad`.
+    var onLaunch: ((String, String?, String) -> Void)?
     var onClose: (() -> Void)?
     /// ⌘⏎ — Zoom wie bei Terminal-Kacheln (#26).
     var onZoom: (() -> Void)?
@@ -225,6 +225,58 @@ final class HomePaneView: NSView {
     }
     deinit { refreshTimer?.invalidate() }
 
+    // MARK: Start-Overlay (Spinner bis Claude steht)
+
+    private var launchOverlay: NSView?
+    private var spinnerTimer: Timer?
+    private static let spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+
+    func beginLaunch(_ label: String) {
+        let overlay = NSView(frame: bounds)
+        overlay.autoresizingMask = [.width, .height]
+        overlay.wantsLayer = true
+        overlay.layer?.backgroundColor = NSColor(red: 23/255.0, green: 20/255.0, blue: 20/255.0, alpha: 1).cgColor
+        let spin = NSTextField(labelWithString: Self.spinnerFrames[0])
+        spin.font = Self.mono(10)
+        spin.textColor = accent
+        let text = NSTextField(labelWithString: label)
+        text.font = Self.mono(1)
+        text.textColor = Self.fg
+        text.lineBreakMode = .byTruncatingMiddle
+        let sub = NSTextField(labelWithString: "Session startet …")
+        sub.font = Self.mono(-1)
+        sub.textColor = Self.dim
+        let stack = NSStackView(views: [spin, text, sub])
+        stack.orientation = .vertical
+        stack.alignment = .centerX
+        stack.spacing = 10
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        overlay.addSubview(stack)
+        NSLayoutConstraint.activate([
+            stack.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
+            stack.centerYAnchor.constraint(equalTo: overlay.centerYAnchor, constant: -10),
+            text.widthAnchor.constraint(lessThanOrEqualTo: overlay.widthAnchor, multiplier: 0.8),
+        ])
+        overlay.alphaValue = 0
+        addSubview(overlay)
+        launchOverlay = overlay
+        NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.15; overlay.animator().alphaValue = 1 }
+        var i = 0
+        spinnerTimer?.invalidate()
+        spinnerTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { _ in
+            i = (i + 1) % Self.spinnerFrames.count
+            spin.stringValue = Self.spinnerFrames[i]
+        }
+        // Tastatur während des Starts still: Fokus auf das Overlay, nicht mehr auf den Baum.
+        window?.makeFirstResponder(nil)
+    }
+
+    override func removeFromSuperview() {
+        spinnerTimer?.invalidate()
+        spinnerTimer = nil
+        super.removeFromSuperview()
+    }
+
     // MARK: Aufbau
 
     private func buildUI() {
@@ -235,27 +287,23 @@ final class HomePaneView: NSView {
         subtitle.textColor = Self.dim
         subtitle.lineBreakMode = .byTruncatingTail
         footer.orientation = .horizontal
-        footer.spacing = 8
-        let specs: [(String, String, Selector)] = [
-            ("✚ Neues Projekt", "⌘⇧N — Ordner unter dem gewählten anlegen, dann /neues-projekt", #selector(newProject)),
-            ("⟳ Neu laden", "⌘R", #selector(reload)),
-            ("⤢ Zoom", "⌘⏎", #selector(zoomTapped)),
-            ("▭ Kachel schließen", "⌘W", #selector(closeTapped)),
-        ]
-        for (label, tip, sel) in specs {
-            let b = NSButton(title: label, target: self, action: sel)
-            b.bezelStyle = .accessoryBarAction
-            b.controlSize = .small
-            b.font = Self.mono(-2)
-            b.contentTintColor = Self.dim
-            b.toolTip = tip
-            b.focusRingType = .none
-            footer.addArrangedSubview(b)
-        }
-        let help = NSTextField(labelWithString: "⏎ ausführen · →← Baum/Aktionen · tippen filtert")
+        footer.spacing = 18
+        let b = NSButton(title: "✚ Neues Projekt", target: self, action: #selector(newProject))
+        b.isBordered = false
+        b.font = Self.mono(-1)
+        b.contentTintColor = Self.cyan
+        b.attributedTitle = NSAttributedString(string: "✚ Neues Projekt", attributes: [.font: Self.mono(-1), .foregroundColor: Self.cyan])
+        b.toolTip = "⌘⇧N — Ordner unter dem gewählten anlegen, dann /neues-projekt"
+        b.focusRingType = .none
+        footer.addArrangedSubview(b)
+        let help = NSTextField(labelWithString: "⇥ Spalte   ⏎ ausführen   tippen sucht   ⌘⏎ zoom")
         help.font = Self.mono(-2)
         help.textColor = Self.faint
         footer.addArrangedSubview(help)
+        let legend = NSTextField(labelWithString: "")
+        legend.attributedStringValue = Self.legend()
+        legend.font = Self.mono(-2)
+        footer.addArrangedSubview(legend)
         divider.wantsLayer = true
         divider.layer?.backgroundColor = Self.fg.withAlphaComponent(0.08).cgColor
 
@@ -345,6 +393,7 @@ final class HomePaneView: NSView {
 
     private var focusInside = false
     private func focusChanged(_ f: Bool) {
+        updateColumnEmphasis()
         if f { if !focusInside { focusInside = true; onFocusChanged?(true) }; return }
         // Wechsel Baum ↔ Aktionen: erst prüfen, ob der Fokus die Kachel wirklich verlässt.
         DispatchQueue.main.async { [weak self] in
@@ -352,6 +401,24 @@ final class HomePaneView: NSView {
             let fr = self.window?.firstResponder as? NSView
             let inside = fr.map { $0 === self || $0.isDescendant(of: self) } ?? false
             if !inside && self.focusInside { self.focusInside = false; self.onFocusChanged?(false) }
+        }
+    }
+
+    /// Die Spalte mit Tastaturfokus ist voll sichtbar, die andere leicht abgedimmt — so ist
+    /// immer klar, wo ↑↓⏎ gerade wirken. Zusätzlich zeichnet nur die fokussierte Spalte den Akzentbalken.
+    private func updateColumnEmphasis() {
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            let fr = self.window?.firstResponder as? NSView
+            let inTree = fr === self.tree || (fr?.isDescendant(of: self.tree) ?? false)
+            let inList = fr === self.list || (fr?.isDescendant(of: self.list) ?? false)
+            self.treeScroll.animator().alphaValue = inList ? 0.55 : 1
+            self.listScroll.animator().alphaValue = inTree ? 0.55 : 1
+            self.title.animator().alphaValue = inTree ? 0.55 : 1
+            self.subtitle.animator().alphaValue = inTree ? 0.55 : 1
+            self.tree.needsDisplay = true; self.list.needsDisplay = true
+            self.tree.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
+            self.list.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
         }
     }
 
@@ -371,6 +438,7 @@ final class HomePaneView: NSView {
                 self.index(root, depth: 0)
                 self.tree.reloadData()
                 self.tree.expandItem(root)
+                self.restoreExpansion()
                 self.refreshRunning()
                 self.selectInitial()
             case .failure(let err):
@@ -382,6 +450,35 @@ final class HomePaneView: NSView {
             }
         }
     }
+
+    // Aufklapp-Zustand über Sessions/Kacheln hinweg (relative Pfade in UserDefaults).
+    private static let expandedKey = "LatexTerm.homeExpanded"
+    private var suppressExpansionSave = false
+    private func restoreExpansion() {
+        guard let root else { return }
+        suppressExpansionSave = true
+        for rel in UserDefaults.standard.stringArray(forKey: Self.expandedKey) ?? [] {
+            if let n = node(for: rel.isEmpty ? root.path : (root.path as NSString).appendingPathComponent(rel)) {
+                var chain: [Node] = []; var p: Node? = n
+                while let q = p { chain.insert(q, at: 0); p = q.parent }
+                for a in chain { tree.expandItem(a) }
+            }
+        }
+        suppressExpansionSave = false
+    }
+    private func saveExpansion() {
+        guard !suppressExpansionSave, filter.isEmpty, let root else { return }
+        var out: [String] = []
+        func walk(_ n: Node) {
+            guard tree.isItemExpanded(n) else { return }
+            out.append(n.path == root.path ? "" : String(n.path.dropFirst(root.path.count + 1)))
+            for c in n.children(Self.treeExcludes) { walk(c) }
+        }
+        walk(root)
+        UserDefaults.standard.set(out, forKey: Self.expandedKey)
+    }
+    func outlineViewItemDidExpand(_ notification: Notification) { saveExpansion() }
+    func outlineViewItemDidCollapse(_ notification: Notification) { saveExpansion() }
 
     private func index(_ node: Node, depth: Int) {
         allFolders.append(node)
@@ -435,13 +532,29 @@ final class HomePaneView: NSView {
 
     // MARK: Filter
 
+    private var lastTypedAt: Date = .distantPast
+    /// Tippen sucht: nach > 1 s Pause beginnt das nächste Zeichen eine NEUE Suche (kein Backspace nötig).
+    private func typeToSearch(_ chars: String) {
+        let now = Date()
+        if now.timeIntervalSince(lastTypedAt) > 1.0 { filter = chars } else { filter += chars }
+        lastTypedAt = now
+    }
+    /// Suche beenden, aber die aktuelle Auswahl behalten (wird im Baum aufgedeckt).
+    private func endSearchKeepingSelection() {
+        guard !filter.isEmpty else { return }
+        let keep = selectedNode
+        selectedNodeBeforeFilter = keep
+        filter = ""
+    }
+
     private func applyFilter() {
         let q = filter.lowercased()
         if q.isEmpty {
             filtered = []
             tree.reloadData()
             if let root { tree.expandItem(root) }
-            if let sel = selectedNodeBeforeFilter { reveal(sel) }
+            restoreExpansion()
+            if let sel = selectedNodeBeforeFilter, let n = node(for: sel.path) { reveal(n) }
             selectedNodeBeforeFilter = nil
         } else {
             if selectedNodeBeforeFilter == nil { selectedNodeBeforeFilter = selectedNode }
@@ -511,16 +624,26 @@ final class HomePaneView: NSView {
 
     private func run(_ a: Action) {
         switch a {
-        case .resume(let s, let path, _, _, _):
-            onLaunch?(path, (templates.resume.command ?? "").replacingOccurrences(of: "{session}", with: s.id))
+        case .resume(let s, let path, let title, _, let project):
+            let cmd = (templates.resume.command ?? "").replacingOccurrences(of: "{session}", with: s.id)
+            onLaunch?(path, cmd, "\(project ?? (path as NSString).lastPathComponent) · \(title)")
         case .run(let t, let path):
-            onLaunch?(path, t.command)
+            onLaunch?(path, t.command, "\((path as NSString).lastPathComponent) · \(t.label)")
         case .header: break
         }
     }
 
-    @objc private func zoomTapped() { onZoom?() }
-    @objc private func closeTapped() { onClose?() }
+    /// Farblegende des Baums, einmal in der Fußzeile.
+    private static func legend() -> NSAttributedString {
+        let a = NSMutableAttributedString()
+        func add(_ g: String, _ c: NSColor, _ t: String) {
+            a.append(NSAttributedString(string: g, attributes: [.font: mono(-2), .foregroundColor: c]))
+            a.append(NSAttributedString(string: " \(t)   ", attributes: [.font: mono(-2), .foregroundColor: faint]))
+        }
+        add("▣", cyan, "Projekt"); add("▤", violet, "Bereich"); add("◇", yellow, "ohne CLAUDE.md")
+        add("●", green, "läuft"); add("●", orange, "wartet")
+        return a
+    }
 
     @objc private func runSelectedAction() {
         let r = list.selectedRow
@@ -575,7 +698,7 @@ final class HomePaneView: NSView {
             cmd += " && " + ac.replacingOccurrences(of: "{alias}", with: alias)
         }
         if let c = t.command { cmd += " && " + c }
-        onLaunch?(parentNode.path, cmd)
+        onLaunch?(parentNode.path, cmd, "\(name) · \(t.label)")
     }
 
     private static func q(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
@@ -589,23 +712,25 @@ final class HomePaneView: NSView {
         case 36, 76:
             if let a = actions.first { run(a) }
             return true
-        case 124: // → : aufklappen, sonst zu den Aktionen
-            if let n = selectedNode, filter.isEmpty, n.hasChildren, !tree.isItemExpanded(n) {
-                tree.expandItem(n); return true
-            }
+        case 48: // ⇥ : zu den Aktionen
+            endSearchKeepingSelection(); focusList(); return true
+        case 124: // → : Suche beenden / aufklappen / sonst zu den Aktionen
+            if !filter.isEmpty { endSearchKeepingSelection(); return true }
+            if let n = selectedNode, n.hasChildren, !tree.isItemExpanded(n) { tree.expandItem(n); return true }
             focusList(); return true
         case 123: // ← : zuklappen, sonst zum Eltern-Ordner
+            if !filter.isEmpty { endSearchKeepingSelection(); return true }
             guard let n = selectedNode else { return true }
-            if filter.isEmpty, tree.isItemExpanded(n) { tree.collapseItem(n); return true }
+            if tree.isItemExpanded(n) { tree.collapseItem(n); return true }
             if let p = n.parent { reveal(p) }
             return true
         case 53: if !filter.isEmpty { filter = "" }; return true
-        case 51: if !filter.isEmpty { filter.removeLast() }; return true
+        case 51: if !filter.isEmpty { filter.removeLast(); lastTypedAt = Date() }; return true
         case 125, 126: return false
         default:
             if let chars = ev.characters, !chars.isEmpty,
                chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
-                filter += chars; return true
+                typeToSearch(chars); return true
             }
             return false
         }
@@ -616,7 +741,7 @@ final class HomePaneView: NSView {
         guard !mods.contains(.command), !mods.contains(.control) else { return false }
         switch ev.keyCode {
         case 36, 76: runSelectedAction(); return true
-        case 123, 53: window?.makeFirstResponder(tree); return true   // ← / Esc zurück zum Baum
+        case 123, 53, 48: window?.makeFirstResponder(tree); return true   // ← / Esc / ⇥ zurück zum Baum
         case 125, 126: return false
         default: return true
         }
@@ -692,6 +817,17 @@ extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
             dot = st == "awaitingInput" ? Self.orange : Self.green
         }
         cell.set(glyph: glyph, glyphColor: glyphColor, text: label, color: color, dot: dot)
+        var tip: String
+        switch p?.level {
+        case "projekt", "unter-projekt": tip = "Projekt (CLAUDE.md)"
+        case "router": tip = "Router — Karte der Kinder"
+        case "bereich": tip = "Bereich — Arbeitsmuster für die Kinder"
+        case "ohne-claude-md": tip = "Ordner mit Claude-Aktivität, aber ohne CLAUDE.md"
+        default: tip = "Ordner"
+        }
+        if let a = p?.aliases, !a.isEmpty { tip += " · Alias: " + a.joined(separator: ", ") }
+        if dot != nil { tip += " · hier läuft eine Claude-Kachel" }
+        cell.toolTip = tip
         return cell
     }
     func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
@@ -811,8 +947,12 @@ final class HomeRowBackground: NSTableRowView {
     override func drawSelection(in dirtyRect: NSRect) {
         guard selectionHighlightStyle != .none else { return }
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 1), xRadius: 6, yRadius: 6)
-        accent.withAlphaComponent(isEmphasized ? 0.22 : 0.12).setFill()
+        accent.withAlphaComponent(isEmphasized ? 0.22 : 0.10).setFill()
         path.fill()
+        if isEmphasized {   // Akzentbalken nur in der fokussierten Spalte: „hier wirkt ⏎"
+            let bar = NSBezierPath(roundedRect: NSRect(x: 2, y: 5, width: 3, height: bounds.height - 10), xRadius: 1.5, yRadius: 1.5)
+            accent.setFill(); bar.fill()
+        }
     }
     override var isEmphasized: Bool { get { window?.firstResponder.map { ($0 as? NSView)?.isDescendant(of: self.superview ?? self) ?? false } ?? false } set {} }
 }
