@@ -108,7 +108,7 @@ extension Notification.Name {
 /// (Finder-Logik, lazy aus dem Dateisystem, Projekte/Sessions aus `projekte` angeheftet, ● wo
 /// gerade eine Claude-Kachel läuft), rechts die Aktionen des gewählten Ordners:
 /// „↻ Weiter" (letzte Session), „＋ Neue Session", „› Nur Shell", darunter „Zuletzt hier"
-/// (Projekte unterhalb, nach Aktivität) bzw. „Frühere Sessions".
+/// (eigene Sessions + letzte Session jedes Unterprojekts, EINE Zeitliste).
 /// Tasten: ↑↓ · → in den Ordner / zu den Aktionen · ← zu / zurück · ⏎ ausführen · Tippen filtert
 /// den Baum · Esc leert · ⌘⇧N neues Projekt im gewählten Ordner · ⌘R neu laden.
 final class HomePaneView: NSView {
@@ -589,8 +589,11 @@ final class HomePaneView: NSView {
         var out: [Action] = []
         // „Weiter" = die neueste Session im GESAMTEN Teilbaum (eigene + alle Unterordner) —
         // ein Bereich zeigt so das zuletzt bearbeitete Projekt darunter, nicht seine eigene alte Session.
+        // Kandidaten: ALLE eigenen Sessions des Ordners + die jeweils letzte Session jedes Projekts
+        // darunter, gemeinsam nach Zeit. „Weiter" = die neueste; der Rest wird EINE Liste —
+        // eigene Sessions tragen den Ordnernamen, damit sie neben den Unterprojekten erkennbar sind.
         var candidates: [(ProjekteData.Project, ProjekteData.Session)] = []
-        if let p, let s = p.sessions.first { candidates.append((p, s)) }
+        if let p { for s in p.sessions { candidates.append((p, s)) } }
         let below = d.projects.filter { $0.path != node.path && $0.path.hasPrefix(node.path + "/") && !$0.sessions.isEmpty }
         for q in below { if let s = q.sessions.first { candidates.append((q, s)) } }
         candidates.sort { ($0.1.lastAt ?? "") > ($1.1.lastAt ?? "") }
@@ -602,19 +605,11 @@ final class HomePaneView: NSView {
         for t in templates.byLevel[level] ?? templates.byLevel["ordner"] ?? [] {
             out.append(.run(t, path: node.path))
         }
-
-        // Weitere Projekte unterhalb, nach Aktivität (Root: „Zuletzt überall"); das „Weiter"-Projekt nicht doppelt
-        let rest = candidates.dropFirst().filter { $0.0.path != node.path }
+        let rest = candidates.dropFirst()
         if !rest.isEmpty {
             out.append(.header(isRoot ? "Zuletzt überall" : "Zuletzt hier"))
-            for (q, s) in rest.prefix(12) {
+            for (q, s) in rest.prefix(20) {
                 out.append(.resume(s, path: q.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt), project: q.name))
-            }
-        }
-        if let p, p.sessions.count > 1 {
-            out.append(.header("Frühere Sessions"))
-            for s in p.sessions.dropFirst() {
-                out.append(.resume(s, path: node.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt), project: nil))
             }
         }
         actions = out
