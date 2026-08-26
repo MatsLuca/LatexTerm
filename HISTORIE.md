@@ -27,6 +27,22 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 19 — Gesamtbild (Mats: „alles, was echte Verbesserung ist"):**
+  *Laufende Kacheln:* Hinweisleiste über dem Baum „● <Projekt> wartet auf dich → zur Kachel"; in der
+  Aktionsspalte ist „→ Zur Kachel" die erste Zeile, sobald hier (oder darunter) eine Kachel läuft —
+  ⏎ springt dann hin statt aus Gewohnheit eine zweite Session daneben zu öffnen (Wartende zuerst).
+  Verdrahtung: `showHome(otherPanes:focusPane:)`, Sprung per CWD über `TerminalSplit.focusPane`.
+  *Wiedervorlagen:* fällige `~/.claude/wiedervorlage/*.md` als ⏰-Hinweis und, an der Wurzel, als
+  Zeilen unter „Fällig"; ⏎ startet eine Session in der Wurzel mit dem Auftrag als erstem Prompt
+  (`followUp`) — der SessionStart-Hook spielt die Datei ohnehin ein, der Prompt sagt „die hier, jetzt".
+  *Optik:* Knopf-Zeilen (alles bis „Nur Shell") höher, mit leiser Fläche; die Liste dahinter kleiner.
+  Der Kopf rechts ist kleiner und trägt, was der Baum nicht zeigt: Alias · CLAUDE.md-Kopf ·
+  `⎇ main ↑2 · 3 geändert` · „aktiv vor 2 h" und darunter „» letzter Prompt" der Weiter-Session
+  (auch als Tooltip der Weiter-Zeilen). Kontingente als Mini-Balken (█░) und farblich neutral —
+  cyan/violett/orange/gelb gehören dem Baum; Kontext-Badge nicht mehr orange (orange = wartet),
+  „compact" heller, „critical" rot. *Suche:* trifft auch Session-Titel („Japan" → `030_Reise`).
+  **Entscheidung:** „primär" ist Position, nicht Typ — alles vor der ersten Listenzeile ist Knopf,
+  auch „Weiter · Unterprojekt" eines Bereichs; sonst wäre genau die wichtigste Zeile die kleine.
 - **Runde 18 — Neues Projekt, zwei Wege:** Der ⌘⇧N-Dialog hat jetzt Name · Alias · Zweck (ein Satz,
   optional) · Ort. Ort = Baumauswahl, per „Ändern…" ein Finder-Picker (NSOpenPanel, Ordner, darf
   anlegen), oder der zweite Radioknopf „noch offen — mit Claude klären": dann wird *nichts* angelegt,

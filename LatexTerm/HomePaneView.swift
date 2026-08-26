@@ -272,11 +272,20 @@ final class HomePaneView: NSView {
         case wiedervorlage(ProjekteData.Wiedervorlage, path: String)
         case header(String)
         var isHeader: Bool { if case .header = self { return true }; return false }
+        /// Ab hier beginnt die Liste (Mehr, Kopfzeilen, Pin-Zeilen) — davor sind Knöpfe.
+        var endsPrimary: Bool {
+            switch self {
+            case .more, .header, .togglePin, .togglePinProject, .rename: return true
+            case .run(let t, _): return t.command == nil     // „Nur Shell" ist der letzte Knopf
+            default: return false
+            }
+        }
     }
 
     /// Fallback, falls `projekte` (noch) keine Templates liefert: nur Neu + Shell.
     /// Pin-Screen: rechts die Aktionen des gewählten Pins (Projekt: Neu/Weiter/Shell — Session: Weiter …).
     private func renderPinActions() {
+        lastLine.stringValue = ""
         let item = tree.item(atRow: tree.selectedRow)
         if let pp = (item as? PinProjectItem)?.p {
             title.stringValue = pp.name
@@ -339,6 +348,16 @@ final class HomePaneView: NSView {
         renderActions()
     }
 
+    /// „⎇ main ↑2 ↓1 · 3 geändert" — nur was abweicht; ein sauberes main ohne Abweichung bleibt kurz.
+    static func gitLine(_ g: ProjekteData.Git?) -> String? {
+        guard let g, let b = g.branch else { return nil }
+        var out = "⎇ " + b
+        if let a = g.ahead, a > 0 { out += " ↑\(a)" }
+        if let bh = g.behind, bh > 0 { out += " ↓\(bh)" }
+        if let d = g.dirty, d > 0 { out += " · \(d) geändert" }
+        return out
+    }
+
     static func contextLine(_ c: ProjekteData.Context) -> String {
         let k = c.tokens >= 1000 ? "\(c.tokens / 1000)k" : "\(c.tokens)"
         var out = c.percent.map { "Kontext \(c.exact == false ? "≈" : "")\($0) %" } ?? "Kontext"
@@ -354,7 +373,7 @@ final class HomePaneView: NSView {
     /// Kurzform für die rechte Spalte: „55%" (Farbe nach Empfehlung).
     static func contextBadge(_ c: ProjekteData.Context?) -> (String, NSColor)? {
         guard let c, let pct = c.percent else { return nil }
-        let color: NSColor = c.advice == "critical" ? red : (c.advice == "compact" ? orange : faint)
+        let color: NSColor = c.advice == "critical" ? red : (c.advice == "compact" ? fg.withAlphaComponent(0.8) : faint)
         return ("\(c.exact == false ? "≈" : "")\(pct)%", color)
     }
 
@@ -385,7 +404,15 @@ final class HomePaneView: NSView {
     private var relevant: Set<String> = []
     private var onlyProjects = UserDefaults.standard.bool(forKey: "LatexTerm.homeOnlyProjects")
     private var allFolders: [Node] = []          // flacher Index für die Suche (bis Tiefe 4)
-    private var actions: [Action] = []
+    private var actions: [Action] = [] { didSet { primaryCount = Self.primaryCount(actions) } }
+    /// Zeilen vor der ersten Listenzeile sind Knöpfe (höher, mit Fläche).
+    private var primaryCount = 0
+    private static func primaryCount(_ a: [Action]) -> Int {
+        guard let i = a.firstIndex(where: { $0.endsPrimary }) else { return a.count }
+        if case .run(let t, _) = a[i], t.command == nil { return i + 1 }   // Shell-Knopf zählt noch mit
+        return i
+    }
+    private func isPrimary(_ row: Int) -> Bool { row < primaryCount && !actions[row].isHeader }
     private var running: [String: String] = [:]  // cwd → state
     private var refreshTimer: Timer?
     private var limitsTimer: Timer?
@@ -399,6 +426,7 @@ final class HomePaneView: NSView {
     private let treeScroll = NSScrollView()
     private let title = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
+    private let lastLine = NSTextField(labelWithString: "")   // „zuletzt: …" der Weiter-Session
     private let list = HomeTable()
     private let listScroll = NSScrollView()
     private let limitsLabel = NSTextField(labelWithString: "")
@@ -529,12 +557,16 @@ final class HomePaneView: NSView {
     // MARK: Aufbau
 
     private func buildUI() {
-        title.font = Self.mono(4, .bold)
+        title.font = Self.mono(2, .bold)
         title.textColor = Self.cyan
         title.lineBreakMode = .byTruncatingTail
         subtitle.font = Self.mono(-1)
         subtitle.textColor = Self.dim
         subtitle.lineBreakMode = .byTruncatingTail
+        lastLine.font = Self.mono(-1)
+        lastLine.textColor = Self.fg.withAlphaComponent(0.5)
+        lastLine.lineBreakMode = .byTruncatingTail
+        lastLine.maximumNumberOfLines = 1
         limitsLabel.font = Self.mono(-1)
         limitsLabel.alignment = .right
         limitsLabel.lineBreakMode = .byClipping
@@ -600,7 +632,7 @@ final class HomePaneView: NSView {
         notices.orientation = .vertical
         notices.alignment = .leading
         notices.spacing = 4
-        for v in [notices, treeScroll, divider, title, subtitle, limitsLabel, listScroll] {
+        for v in [notices, treeScroll, divider, title, subtitle, lastLine, limitsLabel, listScroll] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -632,7 +664,10 @@ final class HomePaneView: NSView {
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -m),
 
-            listScroll.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 14),
+            lastLine.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 2),
+            lastLine.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            lastLine.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -m),
+            listScroll.topAnchor.constraint(equalTo: lastLine.bottomAnchor, constant: 12),
             listScroll.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: m - 8),
             listScroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -(m - 8)),
             listScroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
@@ -653,6 +688,7 @@ final class HomePaneView: NSView {
         listScroll.animator().alphaValue = inTree ? 0.55 : 1
         title.animator().alphaValue = inTree ? 0.55 : 1
         subtitle.animator().alphaValue = inTree ? 0.55 : 1
+        lastLine.animator().alphaValue = inTree ? 0.55 : 1
         tree.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
         list.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
         HomeFocus.shared.set(self, focused: inside)
@@ -695,16 +731,16 @@ final class HomePaneView: NSView {
         return String(format: "%d:%02d", secs / 60, secs % 60)
     }
 
+    /// Farbdisziplin: cyan/violett/orange/gelb gehören dem Baum (Projekt/Bereich/wartet/◇). Die
+    /// Kontingente bleiben neutral — Aufmerksamkeit erst, wenn es eng wird (≥ 85 % rot).
     private static func limitColor(_ l: LimitsData.Limit) -> NSColor {
         if l.percent >= 85 || l.severity == "critical" { return red }
-        switch l.color {
-        case "orange": return orange
-        case "violet": return violet
-        case "pink":   return pink
-        case "green":  return green
-        case "blue":   return blue
-        default:       return fg
-        }
+        return fg.withAlphaComponent(0.85)
+    }
+    /// Mini-Balken wie in der Statusline (█░), 6 Zellen.
+    private static func limitBar(_ pct: Int) -> String {
+        let full = max(0, min(6, Int((Double(pct) / 100 * 6).rounded())))
+        return String(repeating: "█", count: full) + String(repeating: "░", count: 6 - full)
     }
 
     private func renderLimits() {
@@ -717,8 +753,11 @@ final class HomePaneView: NSView {
         for l in d.limits {
             if out.length > 0 { out.append(NSAttributedString(string: "   ", attributes: dimA)) }
             out.append(NSAttributedString(string: l.label + " ", attributes: dimA))
+            let c = Self.limitColor(l)
+            out.append(NSAttributedString(string: Self.limitBar(l.percent) + " ", attributes: [
+                .font: Self.mono(-2), .foregroundColor: c.withAlphaComponent(c == Self.red ? 1 : 0.7)]))
             out.append(NSAttributedString(string: "\(l.percent)%", attributes: [
-                .font: Self.mono(-1, .bold), .foregroundColor: Self.limitColor(l)]))
+                .font: Self.mono(-1, .bold), .foregroundColor: c]))
             if let rest = Self.until(l.resetsAt) {
                 out.append(NSAttributedString(string: " ↻" + rest, attributes: [
                     .font: Self.mono(-2), .foregroundColor: Self.faint]))
@@ -954,6 +993,8 @@ final class HomePaneView: NSView {
             filtered = allFolders.filter { n in
                 n.name.lowercased().contains(q)
                     || (byPath[n.path]?.aliases.contains { $0.lowercased().contains(q) } ?? false)
+                    // … und über Session-Titel: „Japan" findet das Projekt, auch wenn der Ordner 030_Reise heißt
+                    || (byPath[n.path]?.sessions.contains { ($0.title ?? "").lowercased().contains(q) } ?? false)
             }.sorted { a, b in
                 let la = byPath[a.path]?.lastActivity ?? "", lb = byPath[b.path]?.lastActivity ?? ""
                 return la != lb ? la > lb : a.name.localizedStandardCompare(b.name) == .orderedAscending
@@ -979,6 +1020,8 @@ final class HomePaneView: NSView {
         var sub: [String] = []
         if let a = p?.aliases, !a.isEmpty { sub.append(a.joined(separator: ", ")) }
         if let h = p?.claudeMdHeader { sub.append(h) } else if !isRoot { sub.append("keine CLAUDE.md") }
+        if let g = Self.gitLine(p?.git) { sub.append(g) }
+        if let la = p?.lastActivity, !isRoot { sub.append("aktiv " + Self.age(la)) }
         subtitle.stringValue = sub.joined(separator: "   ·   ")
 
         var out: [Action] = []
@@ -1008,6 +1051,7 @@ final class HomePaneView: NSView {
             out.append(.resume(s, path: q.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt),
                                project: q.path == node.path ? nil : q.name))
         }
+        lastLine.stringValue = candidates.first.flatMap { $0.1.lastPrompt }.map { "» \($0)" } ?? ""
         for t in byLevel where t.command == nil { out.append(.run(t, path: node.path)) }
         // Kompakt-Rat bleibt sichtbar (Warnung), alles Weitere — Pin, Umbenennen, ältere Sessions —
         // liegt hinter „▸ Sessions": erreichbar mit einem →, aber nicht dauernd im Bild.
@@ -1616,7 +1660,10 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
     func numberOfRows(in tableView: NSTableView) -> Int { actions.count }
     func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool { actions[row].isHeader }
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { !actions[row].isHeader }
-    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat { HomePaneView.base + (actions[row].isHeader ? 19 : 15) }
+    func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
+        if actions[row].isHeader { return HomePaneView.base + 19 }
+        return isPrimary(row) ? HomePaneView.base + 22 : HomePaneView.base + 13
+    }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let id = NSUserInterfaceItemIdentifier("actionCell")
         let cell = (tableView.makeView(withIdentifier: id, owner: nil) as? ActionCell) ?? { let c = ActionCell(); c.identifier = id; return c }()
@@ -1638,7 +1685,7 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
         case .compact(let s, _):
             let t = templates.compact!
             cell.set(glyph: t.glyph, text: t.label, detail: s.context.map(Self.contextLine) ?? (t.hint ?? ""), meta: "", header: false,
-                     accent: s.context?.advice == "critical" ? Self.red : Self.orange)
+                     accent: s.context?.advice == "critical" ? Self.red : Self.yellow)
         case .togglePin(_, let pinned):
             let t = (pinned ? templates.unpin : templates.pin)!
             cell.set(glyph: t.glyph, text: t.label, detail: pinned ? "im Pin-Screen (⇧⇥)" : "wichtig — in den Pin-Screen (⇧⇥)", meta: "", header: false, accent: Self.yellow)
@@ -1658,10 +1705,11 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
         case .wiedervorlage(let w, _):
             cell.set(glyph: "⏰", text: w.title, detail: w.overdue ? "seit \(-w.daysLeft) d fällig" : "heute fällig", meta: w.due, header: false, accent: Self.yellow)
         }
+        cell.setPrimary(isPrimary(row))
         return cell
     }
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
-        let v = HomeRowBackground(); v.accent = accent; return v
+        let v = HomeRowBackground(); v.accent = accent; v.isPrimary = isPrimary(row); return v
     }
 }
 
@@ -1715,6 +1763,15 @@ final class TreeCell: NSView {
 
 /// Aktionszeile: Glyph · Text · Detail (dim) · Meta rechts; Kopfzeilen dim und klein.
 final class ActionCell: NSView {
+    /// Nachträglich (die Zelle kennt ihre Zeile nicht): Schriftgrade für Knopf- vs. Listenzeile.
+    func setPrimary(_ p: Bool) {
+        let header = text.stringValue.hasPrefix("── ")
+        guard !header else { return }
+        glyph.font = HomePaneView.mono(p ? 1 : -1, .bold)
+        text.font = HomePaneView.mono(p ? 0 : -1, p ? .semibold : .regular)
+        text.textColor = p ? HomePaneView.fg : HomePaneView.fg.withAlphaComponent(0.85)
+        detail.font = HomePaneView.mono(p ? 0 : -1)
+    }
     private let glyph = NSTextField(labelWithString: "")
     private let text = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
@@ -1743,16 +1800,16 @@ final class ActionCell: NSView {
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
-    func set(glyph g: String, text t: String, detail d: String, meta m: String, header: Bool, accent: NSColor, metaColor: NSColor? = nil) {
+    func set(glyph g: String, text t: String, detail d: String, meta m: String, header: Bool, accent: NSColor, metaColor: NSColor? = nil, primary: Bool = true) {
         let fg = HomePaneView.fg
         glyph.stringValue = g; glyph.textColor = accent
-        glyph.font = HomePaneView.mono(0, .bold)
+        glyph.font = HomePaneView.mono(primary ? 1 : -1, .bold)
         text.stringValue = header ? "── \(t) " : t
-        text.font = header ? HomePaneView.mono(-2) : HomePaneView.mono(0, .semibold)
-        text.textColor = header ? HomePaneView.faint : fg
-        detail.stringValue = d; detail.textColor = fg.withAlphaComponent(0.6)
-        detail.font = HomePaneView.mono()
-        meta.stringValue = m; meta.textColor = metaColor ?? HomePaneView.blue.withAlphaComponent(0.8)
+        text.font = header ? HomePaneView.mono(-2) : HomePaneView.mono(primary ? 0 : -1, primary ? .semibold : .regular)
+        text.textColor = header ? HomePaneView.faint : (primary ? fg : fg.withAlphaComponent(0.85))
+        detail.stringValue = d; detail.textColor = fg.withAlphaComponent(primary ? 0.6 : 0.5)
+        detail.font = HomePaneView.mono(primary ? 0 : -1)
+        meta.stringValue = m; meta.textColor = metaColor ?? HomePaneView.dim
         meta.font = HomePaneView.mono(-2)
     }
 }
@@ -1760,6 +1817,15 @@ final class ActionCell: NSView {
 /// Auswahl als weiche, abgerundete Fläche in der Akzentfarbe statt des System-Blaus.
 final class HomeRowBackground: NSTableRowView {
     var accent: NSColor = .controlAccentColor
+    var isPrimary = false
+    /// Knopf-Zeilen bekommen eine leise Fläche — so liest sich „das hier kann ich drücken" ohne Rahmen.
+    override func drawBackground(in dirtyRect: NSRect) {
+        super.drawBackground(in: dirtyRect)
+        guard isPrimary, !isSelected else { return }
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 6, yRadius: 6)
+        HomePaneView.fg.withAlphaComponent(0.045).setFill()
+        path.fill()
+    }
     override func drawSelection(in dirtyRect: NSRect) {
         guard selectionHighlightStyle != .none else { return }
         let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 1), xRadius: 6, yRadius: 6)
