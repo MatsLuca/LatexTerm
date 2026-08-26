@@ -27,6 +27,10 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 17 — Kontext exakt:** Die Prozentzahl an den Sessions stimmt jetzt: die Datenschicht liest
+  das Modell samt Variante aus `modelUsage` (`claude-opus-5[1m]` → 1M-Fenster) statt es aus der
+  Tokenzahl zu raten. Wo das Transkript zu alt für das Feld ist, bleibt es geschätzt und die Kachel
+  schreibt „≈" vor die Zahl — lieber sichtbar unscharf als falsch genau.
 - **Runde 16 — Reduzierter Baum:** „Nur Projekte" (⌘⇧B, Menü Home, Häkchen) blendet jeden Ordner
   aus, der weder Projekt/Bereich ist noch je eine Session hatte. Regel: sichtbar bleibt, was in
   `projekte --json` als Projekt steht — plus alle Ordner auf dem Weg dorthin (`relevantPaths`,

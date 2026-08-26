@@ -14,6 +14,8 @@ struct ProjekteData: Decodable {
         var percent: Int?
         var model: String?
         var advice: String   // ok | compact | critical
+        var window: Int?
+        var exact: Bool?     // false = Fenster geraten (altes Transkript ohne `modelUsage`) → „≈"
     }
     struct Session: Decodable {
         var id: String
@@ -328,7 +330,7 @@ final class HomePaneView: NSView {
 
     static func contextLine(_ c: ProjekteData.Context) -> String {
         let k = c.tokens >= 1000 ? "\(c.tokens / 1000)k" : "\(c.tokens)"
-        var out = c.percent.map { "Kontext \($0) %" } ?? "Kontext"
+        var out = c.percent.map { "Kontext \(c.exact == false ? "≈" : "")\($0) %" } ?? "Kontext"
         out += " · \(k) Tokens"
         switch c.advice {
         case "compact": out += " · kompakten empfohlen"
@@ -342,7 +344,7 @@ final class HomePaneView: NSView {
     static func contextBadge(_ c: ProjekteData.Context?) -> (String, NSColor)? {
         guard let c, let pct = c.percent else { return nil }
         let color: NSColor = c.advice == "critical" ? red : (c.advice == "compact" ? orange : faint)
-        return ("\(pct)%", color)
+        return ("\(c.exact == false ? "≈" : "")\(pct)%", color)
     }
 
     private static let fallbackActions = ProjekteData.Actions(
