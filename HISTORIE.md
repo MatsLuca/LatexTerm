@@ -27,6 +27,15 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 14 — Kontingente live:** Oben rechts in der Home-Kachel stehen 5h-Fenster, Woche und
+  Modell-Woche mit Prozent und Reset-Countdown (auf der Grundlinie des Titels; ≥ 85 % rot). Der
+  Countdown wird sekündlich neu gerechnet, die Zahlen alle 30 s über `projekte limits --json`
+  nachgeladen — unter 10 Minuten Restzeit sekundengenau (`9:41`), sonst `1h38m` / `25m`.
+  **Fund:** die 5h-/7d-Werte reicht Claude Code nur ins Statusline-JSON *innerhalb* einer Session;
+  außerhalb liefert sie der OAuth-Usage-Endpoint (Token aus der Keychain) — das macht die Datenschicht,
+  die App bekommt Label, Prozent, Farbnamen und `resetsAt` fertig serviert und bleibt generisch
+  (`LatexTerm.limitsCommand`, Default `projekte limits --json`). Fehlt das CLI oder das Token, bleibt
+  die Zeile leer statt zu meckern.
 - **Runde 13 — Projekte anpinnen:** Pin-Screen (⇧⇥) hat jetzt zwei Blöcke, „Projekte“ oben und „Sessions“
   darunter (`PinGroup`, nicht wählbar, immer offen). Ein angepinntes Projekt zeigt rechts ＋ Neue Session,
   ↻ Weiter (letzte Session), › Nur Shell, ☆ Loslösen — der Griff „Projekt → neue Session“ ohne Baum.

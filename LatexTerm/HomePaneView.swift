@@ -143,6 +143,48 @@ enum ProjekteLoader {
     }
 }
 
+/// Kontingente des Claude-Abos (5h / 7d / Modell-Woche), wie `projekte limits --json` sie liefert.
+/// Reine Anzeige: Label, Prozent, Farbname und Reset-Zeitpunkt kommen fertig aus der Datenschicht.
+struct LimitsData: Decodable {
+    struct Limit: Decodable {
+        var key: String?
+        var label: String
+        var percent: Int
+        var resetsAt: String?
+        var severity: String?
+        var color: String?
+    }
+    var stale: Bool?
+    var limits: [Limit]
+}
+
+enum LimitsLoader {
+    static var command: String {
+        UserDefaults.standard.string(forKey: "LatexTerm.limitsCommand") ?? "projekte limits --json"
+    }
+
+    /// Still: schlägt der Befehl fehl (kein Token, kein Netz, Befehl gar nicht da), liefert er nil
+    /// und die Zeile bleibt einfach leer — Kontingente sind Beiwerk, kein Grund für eine Fehlermeldung.
+    static func load(completion: @escaping (LimitsData?) -> Void) {
+        DispatchQueue.global(qos: .utility).async {
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
+            proc.arguments = ["-lc", command]
+            let out = Pipe()
+            proc.standardOutput = out
+            proc.standardError = Pipe()
+            do { try proc.run() } catch {
+                DispatchQueue.main.async { completion(nil) }
+                return
+            }
+            let data = out.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            let parsed = try? JSONDecoder().decode(LimitsData.self, from: data)
+            DispatchQueue.main.async { completion(parsed) }
+        }
+    }
+}
+
 struct LoaderError: Error { let message: String }
 
 extension Notification.Name {
@@ -314,6 +356,9 @@ final class HomePaneView: NSView {
     private var actions: [Action] = []
     private var running: [String: String] = [:]  // cwd → state
     private var refreshTimer: Timer?
+    private var limitsTimer: Timer?
+    private var limitsTick = 0
+    private var limitsData: LimitsData?
 
     // MARK: Views
 
@@ -323,6 +368,7 @@ final class HomePaneView: NSView {
     private let subtitle = NSTextField(labelWithString: "")
     private let list = HomeTable()
     private let listScroll = NSScrollView()
+    private let limitsLabel = NSTextField(labelWithString: "")
     private let footer = NSStackView()
     private let divider = NSView()
 
@@ -338,6 +384,7 @@ final class HomePaneView: NSView {
     static let violet = NSColor(red: 0xd7/255.0, green: 0x5f/255.0, blue: 0xff/255.0, alpha: 1)
     static let orange = NSColor(red: 0xff/255.0, green: 0xaf/255.0, blue: 0x00/255.0, alpha: 1)
     static let yellow = NSColor(red: 0xff/255.0, green: 0xd7/255.0, blue: 0x00/255.0, alpha: 1)
+    static let pink   = NSColor(red: 0xff/255.0, green: 0x5f/255.0, blue: 0xaf/255.0, alpha: 1)
     static let red    = NSColor(red: 0xff/255.0, green: 0x5f/255.0, blue: 0x5f/255.0, alpha: 1)
     static var base: CGFloat { LatexTerminalView.storedFontSize() }
     static func mono(_ delta: CGFloat = 0, _ w: NSFont.Weight = .regular) -> NSFont {
@@ -371,14 +418,18 @@ final class HomePaneView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         refreshTimer?.invalidate()
+        limitsTimer?.invalidate()
         firstResponderObservation = nil
         guard let window else { return }
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshRunning() }
+        limitsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.limitsTock() }
+        limitsTick = 0
+        limitsTock()
         firstResponderObservation = window.observe(\.firstResponder, options: [.initial, .new]) { [weak self] _, _ in
             self?.focusDidChange()
         }
     }
-    deinit { refreshTimer?.invalidate() }
+    deinit { refreshTimer?.invalidate(); limitsTimer?.invalidate() }
 
     // MARK: Start-Overlay (Spinner bis Claude steht)
 
@@ -441,6 +492,13 @@ final class HomePaneView: NSView {
         subtitle.font = Self.mono(-1)
         subtitle.textColor = Self.dim
         subtitle.lineBreakMode = .byTruncatingTail
+        limitsLabel.font = Self.mono(-1)
+        limitsLabel.alignment = .right
+        limitsLabel.lineBreakMode = .byClipping
+        limitsLabel.toolTip = "Kontingente des Abos — 5-Stunden-Fenster, Woche, Modell-Woche; ↻ = Reset"
+        limitsLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        limitsLabel.setContentHuggingPriority(.required, for: .horizontal)
+        title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         footer.orientation = .horizontal
         footer.spacing = 18
         let b = NSButton(title: "✚ Neues Projekt", target: self, action: #selector(newProject))
@@ -513,7 +571,7 @@ final class HomePaneView: NSView {
         listScroll.drawsBackground = false
         listScroll.borderType = .noBorder
 
-        for v in [treeScroll, divider, title, subtitle, listScroll, footer] {
+        for v in [treeScroll, divider, title, subtitle, limitsLabel, listScroll, footer] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -531,7 +589,13 @@ final class HomePaneView: NSView {
 
             title.topAnchor.constraint(equalTo: topAnchor, constant: 24),
             title.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: m),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -m),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: limitsLabel.leadingAnchor, constant: -14),
+
+            // Kontingente oben rechts, auf der Grundlinie des Titels: immer im Blick, ohne die
+            // Aktionsspalte zu belegen — der Countdown tickt sekündlich weiter.
+            limitsLabel.firstBaselineAnchor.constraint(equalTo: title.firstBaselineAnchor),
+            limitsLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -m),
+            limitsLabel.leadingAnchor.constraint(greaterThanOrEqualTo: divider.trailingAnchor, constant: m),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -m),
@@ -562,6 +626,75 @@ final class HomePaneView: NSView {
         tree.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
         list.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
         if inside != focusInside { focusInside = inside; onFocusChanged?(inside) }
+    }
+
+    // MARK: Kontingente
+
+    /// Sekundentakt: der Countdown wird jedes Mal neu gerechnet, die Zahlen selbst nur alle 30 s
+    /// nachgeladen (die Datenschicht cacht ohnehin — der Endpoint drosselt).
+    private func limitsTock() {
+        if limitsTick % 30 == 0 {
+            LimitsLoader.load { [weak self] d in
+                guard let self else { return }
+                if let d { self.limitsData = d }
+                self.renderLimits()
+            }
+        }
+        limitsTick += 1
+        renderLimits()
+    }
+
+    private static let isoParser: ISO8601DateFormatter = {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f
+    }()
+
+    private static func parseISO(_ s: String) -> Date? {
+        isoParser.date(from: s) ?? ISO8601DateFormatter().date(from: s)
+    }
+
+    /// Restzeit kurz: 1h38m · 25m · 9:41 (unter 10 Minuten sekundengenau — dann zählt jede Minute).
+    private static func until(_ iso: String?) -> String? {
+        guard let iso, let target = parseISO(iso) else { return nil }
+        let secs = Int(target.timeIntervalSinceNow.rounded())
+        if secs <= 0 { return "jetzt" }
+        if secs >= 3600 { return String(format: "%dh%02dm", secs / 3600, secs % 3600 / 60) }
+        if secs >= 600 { return "\(secs / 60)m" }
+        return String(format: "%d:%02d", secs / 60, secs % 60)
+    }
+
+    private static func limitColor(_ l: LimitsData.Limit) -> NSColor {
+        if l.percent >= 85 || l.severity == "critical" { return red }
+        switch l.color {
+        case "orange": return orange
+        case "violet": return violet
+        case "pink":   return pink
+        case "green":  return green
+        case "blue":   return blue
+        default:       return fg
+        }
+    }
+
+    private func renderLimits() {
+        guard let d = limitsData, !d.limits.isEmpty else {
+            limitsLabel.stringValue = ""
+            return
+        }
+        let out = NSMutableAttributedString()
+        let dimA: [NSAttributedString.Key: Any] = [.font: Self.mono(-1), .foregroundColor: Self.dim]
+        for l in d.limits {
+            if out.length > 0 { out.append(NSAttributedString(string: "   ", attributes: dimA)) }
+            out.append(NSAttributedString(string: l.label + " ", attributes: dimA))
+            out.append(NSAttributedString(string: "\(l.percent)%", attributes: [
+                .font: Self.mono(-1, .bold), .foregroundColor: Self.limitColor(l)]))
+            if let rest = Self.until(l.resetsAt) {
+                out.append(NSAttributedString(string: " ↻" + rest, attributes: [
+                    .font: Self.mono(-2), .foregroundColor: Self.faint]))
+            }
+        }
+        limitsLabel.attributedStringValue = out
+        limitsLabel.alphaValue = (d.stale == true) ? 0.5 : 1
     }
 
     // MARK: Daten
