@@ -59,6 +59,9 @@ struct LatexTermApp: App {
                 Button("Alles ausklappen") { HomeFocus.shared.active?.menuExpandAll() }
                     .keyboardShortcut("a", modifiers: [.command, .shift])
                     .disabled(aus)
+                Button("Alles einklappen") { HomeFocus.shared.active?.menuCollapseAll() }
+                    .keyboardShortcut("e", modifiers: [.command, .shift])
+                    .disabled(aus)
                 Divider()
                 // Kein ⇧⇥ als Menükürzel: das würde Shift-Tab auch in Terminal-Kacheln schlucken.
                 Button("Angepinntes zeigen  (⇧⇥)") { HomeFocus.shared.active?.menuShowPins() }

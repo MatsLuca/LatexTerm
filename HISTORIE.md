@@ -36,6 +36,12 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
   (`LatexTerm.homeOnlyProjects`, gilt für alle Home-Kacheln; Umschalten kommt als Notification),
   der Wurzelknoten trägt dann den Hinweis „nur Projekte" — sonst sucht man ausgeblendete Ordner.
   Tippen sucht weiterhin im *ganzen* Baum: der Reduktionsmodus ist eine Sicht, kein Käfig.
+  Nachtrag: „Alles einklappen" (⌘⇧E) als Gegenstück — zwei Knöpfe statt eines Häkchens, weil
+  Aus-/Einklappen Handlungen sind und keine Zustände: nach einem manuellen Aufklappen wäre ein
+  Häkchen schlicht falsch. Der Aufklapp-Zustand bleibt in allen Fällen die Wahrheit auf Platte
+  (`expandedPaths` → UserDefaults): die Knöpfe schreiben ihn mit, das Umschalten von ⌘⇧B nicht
+  (dort `suppressExpansionSave`, sonst würde das Neuzeichnen die Handarbeit löschen) — im
+  reduzierten Baum ausgeblendete Ordner behalten ihren gemerkten Zustand für die Rückkehr.
 - **Runde 15 — Fußzeile ins Menü:** Die Dauer-Fußzeile (Button „✚ Neues Projekt", Tastenliste,
   Zeichenlegende) war eine Legende, kein Bedienelement — sie ist raus. Die Befehle stehen jetzt im
   eigenen Menü **Home** (Neues Projekt ⌘⇧N, Neu laden ⌘R, Session/Projekt anpinnen ⌘P/⌘⇧P,

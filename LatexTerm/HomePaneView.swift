@@ -1064,6 +1064,14 @@ final class HomePaneView: NSView {
         if let n = selectedNode { reveal(n) }
     }
 
+    /// „Alles einklappen": Gegenstück zu ⌘⇧A. Die Wurzel bleibt offen (sie *ist* der Baum);
+    /// die Auswahl wandert dabei von selbst auf den nächsten sichtbaren Elternordner.
+    func menuCollapseAll() {
+        guard let root else { return }
+        tree.collapseItem(root, collapseChildren: true)
+        tree.expandItem(root)
+    }
+
     /// Umschalten kommt als Notification (die Einstellung gilt für alle Home-Kacheln).
     private func applyTreeMode() {
         let want = UserDefaults.standard.bool(forKey: "LatexTerm.homeOnlyProjects")
@@ -1091,7 +1099,8 @@ final class HomePaneView: NSView {
         ("⌘⇧N / ⌘R", "neues Projekt · neu laden"),
         ("⌘P / ⌘⇧P", "Session / Projekt anpinnen"),
         ("⌘E", "Session umbenennen"),
-        ("⌘⇧B / ⌘⇧A", "nur Projekte · alles ausklappen"),
+        ("⌘⇧B", "nur Projekte zeigen"),
+        ("⌘⇧A / ⌘⇧E", "alles aus- / einklappen"),
     ]
 
     private func buildKeyHelp() {
