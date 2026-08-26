@@ -192,6 +192,19 @@ extension Notification.Name {
     static let latexTermNewHomePane = Notification.Name("LatexTerm.newHomePane")
 }
 
+/// Welche Home-Kachel gerade den Tastaturfokus hat. Die Menüpunkte im „Home"-Menü sind
+/// SwiftUI-Buttons und können den Responder-Chain nicht selbst validieren — also merkt sich die
+/// Kachel hier selbst, wer dran ist (Setzen nur durch den Gewinner, Löschen nur durch sich selbst,
+/// damit die Reihenfolge zweier Fokuswechsel egal ist).
+final class HomeFocus: ObservableObject {
+    static let shared = HomeFocus()
+    @Published private(set) var active: HomePaneView?
+    fileprivate func set(_ pane: HomePaneView, focused: Bool) {
+        if focused { if active !== pane { active = pane } }
+        else if active === pane { active = nil }
+    }
+}
+
 // MARK: - Home-Kachel
 
 /// Startbildschirm einer Kachel (⌘N / erste Kachel): links der Ordnerbaum unter `root`
@@ -369,7 +382,7 @@ final class HomePaneView: NSView {
     private let list = HomeTable()
     private let listScroll = NSScrollView()
     private let limitsLabel = NSTextField(labelWithString: "")
-    private let footer = NSStackView()
+    private let keyHelp = NSView()
     private let divider = NSView()
 
     // Aus einem Guss mit Terminal und Statusline: dieselbe Monospace-Schrift in derselben Größe,
@@ -407,6 +420,7 @@ final class HomePaneView: NSView {
     override var acceptsFirstResponder: Bool { false }
     override func mouseDown(with event: NSEvent) {
         // Klick ins Leere: die Spalte unter der Maus bekommt den Fokus (rechts nur, wenn es Aktionen gibt).
+        closeKeyHelpIfOpen()
         let p = convert(event.locationInWindow, from: nil)
         if listScroll.frame.contains(p), !actions.isEmpty { focusList() } else { window?.makeFirstResponder(tree) }
         super.mouseDown(with: event)
@@ -499,24 +513,7 @@ final class HomePaneView: NSView {
         limitsLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         limitsLabel.setContentHuggingPriority(.required, for: .horizontal)
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        footer.orientation = .horizontal
-        footer.spacing = 18
-        let b = NSButton(title: "✚ Neues Projekt", target: self, action: #selector(newProject))
-        b.isBordered = false
-        b.font = Self.mono(-1)
-        b.contentTintColor = Self.cyan
-        b.attributedTitle = NSAttributedString(string: "✚ Neues Projekt", attributes: [.font: Self.mono(-1), .foregroundColor: Self.cyan])
-        b.toolTip = "⌘⇧N — Ordner unter dem gewählten anlegen, dann /neues-projekt"
-        b.focusRingType = .none
-        footer.addArrangedSubview(b)
-        let help = NSTextField(labelWithString: "⇥ Spalte   ⇧⇥ Pins   ⌘P Session anpinnen   ⌘⇧P Projekt anpinnen   ⌘E umbenennen   ⏎ ausführen   tippen sucht")
-        help.font = Self.mono(-2)
-        help.textColor = Self.faint
-        footer.addArrangedSubview(help)
-        let legend = NSTextField(labelWithString: "")
-        legend.attributedStringValue = Self.legend()
-        legend.font = Self.mono(-2)
-        footer.addArrangedSubview(legend)
+        buildKeyHelp()
         divider.wantsLayer = true
         divider.layer?.backgroundColor = Self.fg.withAlphaComponent(0.08).cgColor
 
@@ -571,7 +568,7 @@ final class HomePaneView: NSView {
         listScroll.drawsBackground = false
         listScroll.borderType = .noBorder
 
-        for v in [treeScroll, divider, title, subtitle, limitsLabel, listScroll, footer] {
+        for v in [treeScroll, divider, title, subtitle, limitsLabel, listScroll] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -580,7 +577,7 @@ final class HomePaneView: NSView {
             treeScroll.topAnchor.constraint(equalTo: topAnchor, constant: 22),
             treeScroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             treeScroll.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.36),
-            treeScroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -10),
+            treeScroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
 
             divider.leadingAnchor.constraint(equalTo: treeScroll.trailingAnchor, constant: 8),
             divider.widthAnchor.constraint(equalToConstant: 1),
@@ -603,10 +600,8 @@ final class HomePaneView: NSView {
             listScroll.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 14),
             listScroll.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: m - 8),
             listScroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -(m - 8)),
-            listScroll.bottomAnchor.constraint(equalTo: footer.topAnchor, constant: -10),
+            listScroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
 
-            footer.leadingAnchor.constraint(equalTo: leadingAnchor, constant: m),
-            footer.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -12),
         ])
     }
 
@@ -625,6 +620,7 @@ final class HomePaneView: NSView {
         subtitle.animator().alphaValue = inTree ? 0.55 : 1
         tree.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
         list.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
+        HomeFocus.shared.set(self, focused: inside)
         if inside != focusInside { focusInside = inside; onFocusChanged?(inside) }
     }
 
@@ -1010,6 +1006,82 @@ final class HomePaneView: NSView {
     }
 
     /// Farblegende des Baums, einmal in der Fußzeile.
+    // MARK: Griffe fürs Home-Menü
+
+    func menuNewProject()  { newProject() }
+    func menuReload()      { reload() }
+    func menuPinSession()  { _ = pinSelectedFromList() }
+    func menuPinProject()  { _ = pinSelectedProject() }
+    func menuRename()      { _ = renameSelectedFromList() }
+    func menuShowPins()    { togglePinMode() }
+
+    // MARK: Tastenhilfe
+
+    /// Alles, was kein Menübefehl sein kann (Pfeile, ⇥, ⏎, Tippen) und die Zeichenlegende —
+    /// früher eine Dauer-Fußzeile, jetzt auf Abruf mit ⌘/ (Menü „Home"). Die Kachel bleibt leer.
+    private static let keyHelpRows: [(String, String)] = [
+        ("↑ ↓", "auswählen"),
+        ("→ ←", "Ordner auf/zu · zwischen Baum und Aktionen"),
+        ("⇥ / ⇧⇥", "Spalte wechseln / Angepinntes zeigen"),
+        ("⏎", "ausführen"),
+        ("A–Z", "sucht im Baum, Esc leert"),
+        ("⌘⇧N / ⌘R", "neues Projekt · neu laden"),
+        ("⌘P / ⌘⇧P", "Session / Projekt anpinnen"),
+        ("⌘E", "Session umbenennen"),
+    ]
+
+    private func buildKeyHelp() {
+        keyHelp.wantsLayer = true
+        keyHelp.layer?.backgroundColor = NSColor(red: 31/255.0, green: 27/255.0, blue: 27/255.0, alpha: 0.97).cgColor
+        keyHelp.layer?.cornerRadius = 10
+        keyHelp.layer?.borderWidth = 1
+        keyHelp.layer?.borderColor = Self.fg.withAlphaComponent(0.10).cgColor
+        keyHelp.isHidden = true
+        let text = NSTextField(labelWithAttributedString: Self.keyHelpText())
+        text.translatesAutoresizingMaskIntoConstraints = false
+        keyHelp.addSubview(text)
+        NSLayoutConstraint.activate([
+            text.topAnchor.constraint(equalTo: keyHelp.topAnchor, constant: 14),
+            text.bottomAnchor.constraint(equalTo: keyHelp.bottomAnchor, constant: -14),
+            text.leadingAnchor.constraint(equalTo: keyHelp.leadingAnchor, constant: 18),
+            text.trailingAnchor.constraint(equalTo: keyHelp.trailingAnchor, constant: -18),
+        ])
+    }
+
+    private static func keyHelpText() -> NSAttributedString {
+        let a = NSMutableAttributedString()
+        let width = keyHelpRows.map(\.0.count).max() ?? 8
+        for (key, what) in keyHelpRows {
+            a.append(NSAttributedString(string: key.padding(toLength: width, withPad: " ", startingAt: 0) + "  ",
+                                        attributes: [.font: mono(-1), .foregroundColor: cyan]))
+            a.append(NSAttributedString(string: what + "\n", attributes: [.font: mono(-1), .foregroundColor: dim]))
+        }
+        a.append(NSAttributedString(string: "\n", attributes: [.font: mono(-2)]))
+        a.append(legend())
+        return a
+    }
+
+    /// ⌘/ — Menüpunkt „Tastenhilfe" im Home-Menü.
+    func toggleKeyHelp() {
+        if keyHelp.superview == nil {
+            keyHelp.translatesAutoresizingMaskIntoConstraints = false
+            addSubview(keyHelp)
+            NSLayoutConstraint.activate([
+                keyHelp.centerXAnchor.constraint(equalTo: centerXAnchor),
+                keyHelp.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -24),
+            ])
+        }
+        keyHelp.isHidden.toggle()
+    }
+
+    /// Esc/Klick schließen die Hilfe, wenn sie offen ist — true heißt „Taste verbraucht".
+    @discardableResult
+    private func closeKeyHelpIfOpen() -> Bool {
+        guard keyHelp.superview != nil, !keyHelp.isHidden else { return false }
+        keyHelp.isHidden = true
+        return true
+    }
+
     private static func legend() -> NSAttributedString {
         let a = NSMutableAttributedString()
         func add(_ g: String, _ c: NSColor, _ t: String) {
@@ -1120,6 +1192,7 @@ final class HomePaneView: NSView {
     // MARK: Tastatur
 
     private func treeKey(_ ev: NSEvent) -> Bool {
+        if ev.keyCode == 53, closeKeyHelpIfOpen() { return true }
         let mods = ev.modifierFlags.intersection([.command, .shift, .option, .control])
         guard !mods.contains(.command), !mods.contains(.control) else { return false }
         switch ev.keyCode {
@@ -1155,6 +1228,7 @@ final class HomePaneView: NSView {
     }
 
     private func listKey(_ ev: NSEvent) -> Bool {
+        if ev.keyCode == 53, closeKeyHelpIfOpen() { return true }
         let mods = ev.modifierFlags.intersection([.command, .shift, .option, .control])
         guard !mods.contains(.command), !mods.contains(.control) else { return false }
         switch ev.keyCode {

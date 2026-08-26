@@ -27,6 +27,17 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 15 — Fußzeile ins Menü:** Die Dauer-Fußzeile (Button „✚ Neues Projekt", Tastenliste,
+  Zeichenlegende) war eine Legende, kein Bedienelement — sie ist raus. Die Befehle stehen jetzt im
+  eigenen Menü **Home** (Neues Projekt ⌘⇧N, Neu laden ⌘R, Session/Projekt anpinnen ⌘P/⌘⇧P,
+  Umbenennen ⌘E, Angepinntes zeigen, Tastenhilfe ⌘/), alles Übrige (Pfeile, ⇥/⇧⇥, ⏎, Tippen,
+  Zeichenlegende) in einer Tastenhilfe auf Abruf (⌘/, Esc oder Klick schließt).
+  **Entscheidung:** ⇧⇥ bekommt *kein* Menükürzel — Menükürzel gelten fensterweit und würden
+  Shift-Tab in Terminal-Kacheln schlucken (Claude Codes Modus-Umschalter). Es steht als Text im
+  Menüpunkt. **Fund:** die Kachel gewinnt gegen das Menü — `performKeyEquivalent` der View-Hierarchie
+  läuft vor dem Hauptmenü, und ausgegraute Menüpunkte verbrauchen ihr Kürzel nicht: ⌘R/⌘P/⌘E kommen
+  in Terminal-Kacheln weiterhin unten an. Fokusquelle fürs Ausgrauen ist `HomeFocus.shared` (setzen
+  nur der Gewinner, löschen nur man selbst — so ist die Reihenfolge zweier Fokuswechsel egal).
 - **Runde 14 — Kontingente live:** Oben rechts in der Home-Kachel stehen 5h-Fenster, Woche und
   Modell-Woche mit Prozent und Reset-Countdown (auf der Grundlinie des Titels; ≥ 85 % rot). Der
   Countdown wird sekündlich neu gerechnet, die Zahlen alle 30 s über `projekte limits --json`

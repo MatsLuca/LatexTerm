@@ -5,6 +5,7 @@ import AppKit
 struct LatexTermApp: App {
 
     @ObservedObject private var settings = FormulaSettings.shared
+    @ObservedObject private var homeFocus = HomeFocus.shared
 
     var body: some Scene {
         WindowGroup("LatexTerm") {
@@ -25,6 +26,35 @@ struct LatexTermApp: App {
                     NotificationCenter.default.post(name: .latexTermNewHomePane, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
+            }
+            // Home-Kachel: die Befehle stehen im Menü statt in einer Fußzeile in der Kachel
+            // (Runde 15). Die Tastenwege selbst fängt HomePaneView.performKeyEquivalent ab —
+            // die Kachel ist vor dem Menü dran; die Einträge hier sind Schaufenster + Mausweg.
+            CommandMenu("Home") {
+                let aus = homeFocus.active == nil
+                Button("Neues Projekt…") { HomeFocus.shared.active?.menuNewProject() }
+                    .keyboardShortcut("n", modifiers: [.command, .shift])
+                    .disabled(aus)
+                Button("Neu laden") { HomeFocus.shared.active?.menuReload() }
+                    .keyboardShortcut("r", modifiers: .command)
+                    .disabled(aus)
+                Divider()
+                Button("Session anpinnen") { HomeFocus.shared.active?.menuPinSession() }
+                    .keyboardShortcut("p", modifiers: .command)
+                    .disabled(aus)
+                Button("Projekt anpinnen") { HomeFocus.shared.active?.menuPinProject() }
+                    .keyboardShortcut("p", modifiers: [.command, .shift])
+                    .disabled(aus)
+                Button("Session umbenennen") { HomeFocus.shared.active?.menuRename() }
+                    .keyboardShortcut("e", modifiers: .command)
+                    .disabled(aus)
+                Divider()
+                // Kein ⇧⇥ als Menükürzel: das würde Shift-Tab auch in Terminal-Kacheln schlucken.
+                Button("Angepinntes zeigen  (⇧⇥)") { HomeFocus.shared.active?.menuShowPins() }
+                    .disabled(aus)
+                Button("Tastenhilfe") { HomeFocus.shared.active?.toggleKeyHelp() }
+                    .keyboardShortcut("/", modifiers: .command)
+                    .disabled(aus)
             }
             CommandMenu("Terminal") {
 
