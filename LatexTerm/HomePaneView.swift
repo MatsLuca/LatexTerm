@@ -726,6 +726,7 @@ final class HomePaneView: NSView {
         guard let iso, let target = parseISO(iso) else { return nil }
         let secs = Int(target.timeIntervalSinceNow.rounded())
         if secs <= 0 { return "jetzt" }
+        if secs >= 86400 { return String(format: "%dd%dh", secs / 86400, secs % 86400 / 3600) }   // 6d23h statt 167h38m
         if secs >= 3600 { return String(format: "%dh%02dm", secs / 3600, secs % 3600 / 60) }
         if secs >= 600 { return "\(secs / 60)m" }
         return String(format: "%d:%02d", secs / 60, secs % 60)
