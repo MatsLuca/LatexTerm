@@ -27,6 +27,15 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 16 — Reduzierter Baum:** „Nur Projekte" (⌘⇧B, Menü Home, Häkchen) blendet jeden Ordner
+  aus, der weder Projekt/Bereich ist noch je eine Session hatte. Regel: sichtbar bleibt, was in
+  `projekte --json` als Projekt steht — plus alle Ordner auf dem Weg dorthin (`relevantPaths`,
+  Projektpfad + Elternpfade), sonst wäre nichts mehr erreichbar. Wurzel 13 → 3 Ordner,
+  `01_Aktiv` 19 → 11. Dazu „Alles ausklappen" (⌘⇧A), das bewusst nur den relevanten Pfaden folgt
+  — im vollen Baum zöge es sonst das halbe Dateisystem auf. Die Einstellung liegt in `UserDefaults`
+  (`LatexTerm.homeOnlyProjects`, gilt für alle Home-Kacheln; Umschalten kommt als Notification),
+  der Wurzelknoten trägt dann den Hinweis „nur Projekte" — sonst sucht man ausgeblendete Ordner.
+  Tippen sucht weiterhin im *ganzen* Baum: der Reduktionsmodus ist eine Sicht, kein Käfig.
 - **Runde 15 — Fußzeile ins Menü:** Die Dauer-Fußzeile (Button „✚ Neues Projekt", Tastenliste,
   Zeichenlegende) war eine Legende, kein Bedienelement — sie ist raus. Die Befehle stehen jetzt im
   eigenen Menü **Home** (Neues Projekt ⌘⇧N, Neu laden ⌘R, Session/Projekt anpinnen ⌘P/⌘⇧P,

@@ -190,6 +190,8 @@ struct LoaderError: Error { let message: String }
 extension Notification.Name {
     /// ⌘N (Menü): das Key-Fenster hängt eine Home-Kachel an.
     static let latexTermNewHomePane = Notification.Name("LatexTerm.newHomePane")
+    /// Menü „Home" → „Nur Projekte": alle Home-Kacheln stellen ihren Baum um.
+    static let latexTermHomeTreeChanged = Notification.Name("LatexTerm.homeTreeChanged")
 }
 
 /// Welche Home-Kachel gerade den Tastaturfokus hat. Die Menüpunkte im „Home"-Menü sind
@@ -365,6 +367,10 @@ final class HomePaneView: NSView {
     private var root: Node?
     private var filter = "" { didSet { applyFilter() } }
     private var filtered: [Node] = []
+    /// Reduzierter Baum: nur Projekte/Bereiche (CLAUDE.md oder Sessions) und die Ordner, die zu
+    /// ihnen führen. Alles andere ist grau und im Weg — `relevant` hält Projektpfade + Elternpfade.
+    private var relevant: Set<String> = []
+    private var onlyProjects = UserDefaults.standard.bool(forKey: "LatexTerm.homeOnlyProjects")
     private var allFolders: [Node] = []          // flacher Index für die Suche (bis Tiefe 4)
     private var actions: [Action] = []
     private var running: [String: String] = [:]  // cwd → state
@@ -372,6 +378,7 @@ final class HomePaneView: NSView {
     private var limitsTimer: Timer?
     private var limitsTick = 0
     private var limitsData: LimitsData?
+    private var treeModeObserver: NSObjectProtocol?
 
     // MARK: Views
 
@@ -433,9 +440,14 @@ final class HomePaneView: NSView {
         super.viewDidMoveToWindow()
         refreshTimer?.invalidate()
         limitsTimer?.invalidate()
+        treeModeObserver.map(NotificationCenter.default.removeObserver)
+        treeModeObserver = nil
         firstResponderObservation = nil
         guard let window else { return }
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshRunning() }
+        treeModeObserver = NotificationCenter.default.addObserver(forName: .latexTermHomeTreeChanged, object: nil, queue: .main) { [weak self] _ in
+            self?.applyTreeMode()
+        }
         limitsTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.limitsTock() }
         limitsTick = 0
         limitsTock()
@@ -443,7 +455,10 @@ final class HomePaneView: NSView {
             self?.focusDidChange()
         }
     }
-    deinit { refreshTimer?.invalidate(); limitsTimer?.invalidate() }
+    deinit {
+        refreshTimer?.invalidate(); limitsTimer?.invalidate()
+        treeModeObserver.map(NotificationCenter.default.removeObserver)
+    }
 
     // MARK: Start-Overlay (Spinner bis Claude steht)
 
@@ -706,6 +721,7 @@ final class HomePaneView: NSView {
                 let root = Node(path: d.root, parent: nil)
                 self.root = root
                 self.allFolders = []
+                self.relevant = Self.relevantPaths(d)
                 self.index(root, depth: 0)
                 self.loadExpansion()
                 self.suppressExpansionSave = true
@@ -764,10 +780,30 @@ final class HomePaneView: NSView {
         persistExpansion()
     }
 
+    /// Kinder, wie der Baum sie zeigt — im reduzierten Modus ohne die grauen Ordner.
+    private func kids(_ n: Node) -> [Node] {
+        let all = n.children(Self.treeExcludes)
+        guard onlyProjects, !relevant.isEmpty else { return all }
+        return all.filter { relevant.contains($0.path) }
+    }
+
     private func index(_ node: Node, depth: Int) {
         allFolders.append(node)
         guard depth < 4 else { return }
         for c in node.children(Self.treeExcludes) { index(c, depth: depth + 1) }
+    }
+
+    /// Projektpfade plus alle Ordner darüber — nur die überleben den reduzierten Baum.
+    private static func relevantPaths(_ d: ProjekteData) -> Set<String> {
+        var out: Set<String> = [d.root]
+        for p in d.projects {
+            var path = p.path
+            while path.hasPrefix(d.root), path.count > d.root.count {
+                out.insert(path)
+                path = (path as NSString).deletingLastPathComponent
+            }
+        }
+        return out
     }
 
     /// Startauswahl: das zuletzt aktive Projekt, aufgeklappt bis dorthin.
@@ -1015,6 +1051,33 @@ final class HomePaneView: NSView {
     func menuRename()      { _ = renameSelectedFromList() }
     func menuShowPins()    { togglePinMode() }
 
+    /// „Alles ausklappen": nur entlang der relevanten Pfade — im vollen Baum würde alles andere
+    /// das halbe Dateisystem aufziehen.
+    func menuExpandAll() {
+        guard let root else { return }
+        func walk(_ n: Node, _ depth: Int) {
+            guard depth < 6 else { return }
+            tree.expandItem(n)
+            for c in kids(n) where relevant.contains(c.path) { walk(c, depth + 1) }
+        }
+        walk(root, 0)
+        if let n = selectedNode { reveal(n) }
+    }
+
+    /// Umschalten kommt als Notification (die Einstellung gilt für alle Home-Kacheln).
+    private func applyTreeMode() {
+        let want = UserDefaults.standard.bool(forKey: "LatexTerm.homeOnlyProjects")
+        guard want != onlyProjects else { return }
+        onlyProjects = want
+        let keep = selectedNode?.path
+        suppressExpansionSave = true
+        tree.reloadData()
+        if let root { tree.expandItem(root) }
+        suppressExpansionSave = false
+        restoreExpansion()
+        if let keep, let n = node(for: keep), tree.row(forItem: n) >= 0 { reveal(n) } else { selectInitial() }
+    }
+
     // MARK: Tastenhilfe
 
     /// Alles, was kein Menübefehl sein kann (Pfeile, ⇥, ⏎, Tippen) und die Zeichenlegende —
@@ -1028,6 +1091,7 @@ final class HomePaneView: NSView {
         ("⌘⇧N / ⌘R", "neues Projekt · neu laden"),
         ("⌘P / ⌘⇧P", "Session / Projekt anpinnen"),
         ("⌘E", "Session umbenennen"),
+        ("⌘⇧B / ⌘⇧A", "nur Projekte · alles ausklappen"),
     ]
 
     private func buildKeyHelp() {
@@ -1298,17 +1362,17 @@ extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
         if pinMode { return item == nil ? pinGroups.count : ((item as? PinGroup)?.items.count ?? 0) }
         if !filter.isEmpty { return item == nil ? filtered.count : 0 }
         if item == nil { return root == nil ? 0 : 1 }
-        return (item as? Node)?.children(Self.treeExcludes).count ?? 0
+        return (item as? Node).map { kids($0).count } ?? 0
     }
     func outlineView(_ outlineView: NSOutlineView, child index: Int, ofItem item: Any?) -> Any {
         if pinMode { return item == nil ? pinGroups[index] : (item as! PinGroup).items[index] }
         if !filter.isEmpty { return filtered[index] }
         if item == nil { return root! }
-        return (item as! Node).children(Self.treeExcludes)[index]
+        return kids(item as! Node)[index]
     }
     func outlineView(_ outlineView: NSOutlineView, isItemExpandable item: Any) -> Bool {
         if pinMode { return item is PinGroup }
-        return filter.isEmpty && ((item as? Node)?.hasChildren ?? false)
+        return filter.isEmpty && ((item as? Node).map { !kids($0).isEmpty } ?? false)
     }
     func outlineView(_ outlineView: NSOutlineView, shouldSelectItem item: Any) -> Bool { !(item is PinGroup) }
     func outlineView(_ outlineView: NSOutlineView, shouldCollapseItem item: Any) -> Bool { !(item is PinGroup) }
@@ -1353,7 +1417,9 @@ extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
         case "ohne-claude-md":           glyph = "◇"; glyphColor = Self.yellow; color = Self.fg
         default:                         glyph = "·"; glyphColor = Self.faint;  color = Self.dim
         }
-        let label = filter.isEmpty ? n.name : String(n.path.dropFirst((root?.path.count ?? 0) + 1))
+        var label = filter.isEmpty ? n.name : String(n.path.dropFirst((root?.path.count ?? 0) + 1))
+        // Nur am Wurzelknoten: sichtbarer Hinweis, dass gerade Ordner ausgeblendet sind (⌘⇧B).
+        if onlyProjects, filter.isEmpty, n === root { label += "   nur Projekte" }
         var dot: NSColor? = nil
         if let st = running.first(where: { $0.key == n.path || $0.key.hasPrefix(n.path + "/") })?.value {
             dot = st == "awaitingInput" ? Self.orange : Self.green

@@ -6,6 +6,8 @@ struct LatexTermApp: App {
 
     @ObservedObject private var settings = FormulaSettings.shared
     @ObservedObject private var homeFocus = HomeFocus.shared
+    /// Reduzierter Baum (nur Projekte und die Ordner dorthin) — gilt für alle Home-Kacheln.
+    @AppStorage("LatexTerm.homeOnlyProjects") private var onlyProjects = false
 
     var body: some Scene {
         WindowGroup("LatexTerm") {
@@ -47,6 +49,15 @@ struct LatexTermApp: App {
                     .disabled(aus)
                 Button("Session umbenennen") { HomeFocus.shared.active?.menuRename() }
                     .keyboardShortcut("e", modifiers: .command)
+                    .disabled(aus)
+                Divider()
+                Toggle("Nur Projekte", isOn: Binding(
+                    get: { onlyProjects },
+                    set: { onlyProjects = $0; NotificationCenter.default.post(name: .latexTermHomeTreeChanged, object: nil) }))
+                    .keyboardShortcut("b", modifiers: [.command, .shift])
+                    .disabled(aus)
+                Button("Alles ausklappen") { HomeFocus.shared.active?.menuExpandAll() }
+                    .keyboardShortcut("a", modifiers: [.command, .shift])
                     .disabled(aus)
                 Divider()
                 // Kein ⇧⇥ als Menükürzel: das würde Shift-Tab auch in Terminal-Kacheln schlucken.
