@@ -74,6 +74,7 @@ struct ProjekteData: Decodable {
         var hint: String?
         var command: String?      // nil = nur Shell
         var aliasCommand: String? // nur newProject: "hier {alias}"
+        var placeCommand: String? // nur newProject: Ort offen → Start in der Wurzel mit --einordnen
         var followUp: String?     // nach dem Start tippen (compact: "/compact")
     }
     struct Actions: Decodable {
@@ -1225,41 +1226,111 @@ final class HomePaneView: NSView {
 
     // MARK: Neues Projekt
 
+    /// Neues Projekt (⌘⇧N / Menü Home). Zwei Wege: Ort bekannt (Baumauswahl oder Finder-Picker) →
+    /// Ordner anlegen, `/neues-projekt <Zweck>`; Ort noch offen → keine Anlage, Start in der Wurzel
+    /// mit `--einordnen`, Claude klärt die Einordnung und legt den Ordner selbst an. Alle Befehle
+    /// kommen aus dem Werkstatt-Template (`newProject.command` / `.placeCommand`).
     @objc private func newProject() {
-        guard let parentNode = selectedNode else { return }
+        guard let selected = selectedNode, let rootPath = data?.root ?? root?.path else { return }
         let alert = NSAlert()
-        alert.messageText = "Neues Projekt in \(parentNode.name)"
-        alert.informativeText = "Ordner anlegen, dann übernimmt Claude mit /neues-projekt (Interview, CLAUDE.md, Git)."
+        alert.messageText = "Neues Projekt"
+        alert.informativeText = "Claude übernimmt mit /neues-projekt: Interview, CLAUDE.md, Git."
         alert.addButton(withTitle: "Anlegen")
         alert.addButton(withTitle: "Abbrechen")
-        let box = NSView(frame: NSRect(x: 0, y: 0, width: 340, height: 54))
-        let nameField = NSTextField(frame: NSRect(x: 70, y: 30, width: 260, height: 22))
-        nameField.placeholderString = "Ordnername"
-        let aliasField = NSTextField(frame: NSRect(x: 70, y: 0, width: 260, height: 22))
-        aliasField.placeholderString = "optional"
-        for (y, t) in [(30, "Name"), (0, "Alias")] {
-            let l = NSTextField(labelWithString: t); l.frame = NSRect(x: 0, y: y + 2, width: 64, height: 18); l.alignment = .right
+
+        let box = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 150))
+        func label(_ t: String, y: CGFloat) {
+            let l = NSTextField(labelWithString: t); l.frame = NSRect(x: 0, y: y + 3, width: 60, height: 18); l.alignment = .right
             box.addSubview(l)
         }
-        box.addSubview(nameField); box.addSubview(aliasField)
+        let nameField = NSTextField(frame: NSRect(x: 68, y: 124, width: 344, height: 22))
+        nameField.placeholderString = "Ordnername"
+        let aliasField = NSTextField(frame: NSRect(x: 68, y: 96, width: 120, height: 22))
+        aliasField.placeholderString = "optional"
+        let purposeField = NSTextField(frame: NSRect(x: 68, y: 68, width: 344, height: 22))
+        purposeField.placeholderString = "ein Satz, optional — spart die erste Interviewfrage"
+        label("Name", y: 124); label("Alias", y: 96); label("Zweck", y: 68); label("Ort", y: 36)
+
+        var place = selected.path
+        let known = NSButton(radioButtonWithTitle: "", target: nil, action: nil)
+        known.frame = NSRect(x: 68, y: 36, width: 18, height: 20)
+        let placeLabel = NSTextField(labelWithString: "")
+        placeLabel.frame = NSRect(x: 88, y: 39, width: 240, height: 18)
+        placeLabel.lineBreakMode = .byTruncatingHead
+        placeLabel.textColor = .secondaryLabelColor
+        func showPlace() { placeLabel.stringValue = place == rootPath ? "Documents (Wurzel)" : Self.rootRelative(place) }
+        showPlace()
+        let change = NSButton(title: "Ändern…", target: nil, action: nil)
+        change.frame = NSRect(x: 330, y: 33, width: 82, height: 26)
+        change.bezelStyle = .rounded
+        change.controlSize = .small
+        let open = NSButton(radioButtonWithTitle: "noch offen — mit Claude klären, wo es hingehört", target: nil, action: nil)
+        open.frame = NSRect(x: 68, y: 8, width: 344, height: 20)
+        known.state = .on
+
+        // Radios ohne Target/Action gruppieren sich nicht von selbst — Handler über einen Helfer.
+        let sink = RadioSink(); sink.onKnown = { known.state = .on; open.state = .off }
+        sink.onOpen = { open.state = .on; known.state = .off }
+        sink.onChange = {
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
+            panel.directoryURL = URL(fileURLWithPath: place)
+            panel.prompt = "Hier anlegen"
+            panel.message = "Ordner, unter dem das neue Projekt liegen soll"
+            if panel.runModal() == .OK, let u = panel.url { place = u.path; showPlace(); sink.onKnown?() }
+        }
+        known.target = sink; known.action = #selector(RadioSink.known)
+        open.target = sink; open.action = #selector(RadioSink.open)
+        change.target = sink; change.action = #selector(RadioSink.change)
+        for v in [nameField, aliasField, purposeField, known, placeLabel, change, open] { box.addSubview(v) }
         alert.accessoryView = box
         alert.window.initialFirstResponder = nameField
+        nameField.nextKeyView = aliasField; aliasField.nextKeyView = purposeField; purposeField.nextKeyView = nameField
         guard alert.runModal() == .alertFirstButtonReturn else { return }
+        withExtendedLifetime(sink) {}
+
         let name = nameField.stringValue.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: " ", with: "_")
         guard !name.isEmpty, !name.contains("/") else { return }
         let alias = aliasField.stringValue.trimmingCharacters(in: .whitespaces)
-        let dir = (parentNode.path as NSString).appendingPathComponent(name)
+        let purpose = purposeField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let t = templates.newProject
+        func fill(_ s: String) -> String {
+            s.replacingOccurrences(of: "{purpose}", with: Self.plain(purpose))
+             .replacingOccurrences(of: "{name}", with: Self.plain(name))
+             .replacingOccurrences(of: "{alias}", with: alias)
+        }
+
+        if open.state == .on {
+            // Ort offen: nichts anlegen, Claude erörtert es in der Wurzel.
+            guard let pc = t.placeCommand else { return }
+            let cmd = "cd \(Self.q(rootPath)) && " + fill(pc)
+            onLaunch?(LaunchRequest(path: rootPath, command: cmd, label: "\(name) · einordnen", followUp: nil))
+            return
+        }
+        let dir = (place as NSString).appendingPathComponent(name)
         if FileManager.default.fileExists(atPath: dir) {
             let a = NSAlert(); a.messageText = "Gibt es schon"; a.informativeText = dir; a.runModal(); return
         }
-        let t = templates.newProject
         var cmd = "mkdir -p \(Self.q(dir)) && cd \(Self.q(dir))"
         if !alias.isEmpty, alias.range(of: "^[A-Za-z0-9_.-]+$", options: .regularExpression) != nil,
            let ac = t.aliasCommand {
-            cmd += " && " + ac.replacingOccurrences(of: "{alias}", with: alias)
+            cmd += " && " + fill(ac)
         }
-        if let c = t.command { cmd += " && " + c }
-        onLaunch?(LaunchRequest(path: parentNode.path, command: cmd, label: "\(name) · \(t.label)", followUp: nil))
+        if let c = t.command { cmd += " && " + fill(c) }
+        onLaunch?(LaunchRequest(path: place, command: cmd, label: "\(name) · \(t.label)", followUp: nil))
+    }
+
+    /// Text, der in einem einfach-quotierten Shell-Argument landet (der Zweck-Satz): Apostrophe
+    /// und Zeilenumbrüche raus, sonst bricht das Quoting des Templates.
+    private static func plain(_ s: String) -> String {
+        s.replacingOccurrences(of: "'", with: "’").replacingOccurrences(of: "\n", with: " ")
+    }
+
+    private final class RadioSink: NSObject {
+        var onKnown: (() -> Void)?; var onOpen: (() -> Void)?; var onChange: (() -> Void)?
+        @objc func known() { onKnown?() }
+        @objc func open() { onOpen?() }
+        @objc func change() { onChange?() }
     }
 
     private static func q(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }

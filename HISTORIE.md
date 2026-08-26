@@ -27,6 +27,14 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 18 — Neues Projekt, zwei Wege:** Der ⌘⇧N-Dialog hat jetzt Name · Alias · Zweck (ein Satz,
+  optional) · Ort. Ort = Baumauswahl, per „Ändern…" ein Finder-Picker (NSOpenPanel, Ordner, darf
+  anlegen), oder der zweite Radioknopf „noch offen — mit Claude klären": dann wird *nichts* angelegt,
+  die Kachel startet in der Wurzel mit dem `placeCommand` des Templates (`--einordnen Name: Zweck`),
+  und Claude erörtert den Ort. Der Zweck geht als Argument mit und spart die erste Interviewfrage.
+  **Bewusst:** kein Finder-Dialog als Hauptweg — der Baum links *ist* der Ortswähler. Die App füllt
+  nur `{purpose}`/`{name}`/`{alias}`; Apostrophe im Zweck werden zu ’ (einfaches Shell-Quoting).
+  Radiobuttons ohne gemeinsames Target gruppieren sich nicht — `RadioSink` schaltet sie von Hand.
 - **Runde 17 — Kontext exakt:** Die Prozentzahl an den Sessions stimmt jetzt: die Datenschicht liest
   das Modell samt Variante aus `modelUsage` (`claude-opus-5[1m]` → 1M-Fenster) statt es aus der
   Tokenzahl zu raten. Wo das Transkript zu alt für das Feld ist, bleibt es geschätzt und die Kachel
