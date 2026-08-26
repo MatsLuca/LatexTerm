@@ -23,6 +23,7 @@ struct ProjekteData: Decodable {
         var turns: Int
         var title: String?
         var titleSource: String?   // manual | ai | first-prompt | none
+        var lastPrompt: String?    // letzte Eingabe — „wo war ich" beim Weitermachen
         var pinned: Bool?
         var context: Context?
     }
@@ -88,6 +89,11 @@ struct ProjekteData: Decodable {
         var rename: ActionTemplate?
         var byLevel: [String: [ActionTemplate]]
     }
+    struct Wiedervorlage: Decodable {
+        var file: String; var slug: String; var due: String; var daysLeft: Int; var title: String
+        var overdue: Bool; var dueToday: Bool
+    }
+    var wiedervorlagen: [Wiedervorlage]?
     var root: String
     var projects: [Project]
     var areas: [Area]
@@ -230,6 +236,8 @@ final class HomePaneView: NSView {
     var onFocusChanged: ((Bool) -> Void)?
     /// (CWD, Claude-Status) der anderen gestarteten Kacheln → ● im Baum.
     var otherPanes: (() -> [(String, String)])?
+    /// Sprung zu einer laufenden Kachel (CWD) — Fokus + ggf. Zoom wandert dorthin.
+    var onFocusPane: ((String) -> Void)?
 
     // MARK: Modell
 
@@ -260,6 +268,8 @@ final class HomePaneView: NSView {
         case rename(ProjekteData.Session)                     // eigener Titel (⌘E)
         case togglePinProject(path: String, name: String, pinned: Bool)
         case more(count: Int, expanded: Bool)                 // „▸ Sessions (n)" — klappt den Rest auf
+        case jump(cwd: String, state: String, name: String)   // → zur laufenden Kachel
+        case wiedervorlage(ProjekteData.Wiedervorlage, path: String)
         case header(String)
         var isHeader: Bool { if case .header = self { return true }; return false }
     }
@@ -393,6 +403,7 @@ final class HomePaneView: NSView {
     private let listScroll = NSScrollView()
     private let limitsLabel = NSTextField(labelWithString: "")
     private let keyHelp = NSView()
+    private let notices = NSStackView()          // über dem Baum: wartet auf dich · fällige Wiedervorlagen
     private let divider = NSView()
 
     // Aus einem Guss mit Terminal und Statusline: dieselbe Monospace-Schrift in derselben Größe,
@@ -586,13 +597,19 @@ final class HomePaneView: NSView {
         listScroll.drawsBackground = false
         listScroll.borderType = .noBorder
 
-        for v in [treeScroll, divider, title, subtitle, limitsLabel, listScroll] {
+        notices.orientation = .vertical
+        notices.alignment = .leading
+        notices.spacing = 4
+        for v in [notices, treeScroll, divider, title, subtitle, limitsLabel, listScroll] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
         let m: CGFloat = 18
         NSLayoutConstraint.activate([
-            treeScroll.topAnchor.constraint(equalTo: topAnchor, constant: 22),
+            notices.topAnchor.constraint(equalTo: topAnchor, constant: 22),
+            notices.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            notices.trailingAnchor.constraint(lessThanOrEqualTo: divider.leadingAnchor, constant: -8),
+            { let c = treeScroll.topAnchor.constraint(equalTo: notices.bottomAnchor, constant: 0); noticesGap = c; return c }(),
             treeScroll.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             treeScroll.widthAnchor.constraint(equalTo: widthAnchor, multiplier: 0.36),
             treeScroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
@@ -733,6 +750,7 @@ final class HomePaneView: NSView {
                 self.suppressExpansionSave = false
                 self.restoreExpansion()
                 self.refreshRunning()
+                self.renderNotices()
                 self.selectInitial()
             case .failure(let err):
                 self.data = nil
@@ -849,7 +867,56 @@ final class HomePaneView: NSView {
         if m != running {
             running = m
             tree.reloadData(forRowIndexes: IndexSet(integersIn: 0..<tree.numberOfRows), columnIndexes: IndexSet(integer: 0))
+            renderNotices()
+            if !pinMode, filter.isEmpty { renderActions(keepSelection: true) }
         }
+    }
+
+    // MARK: Hinweise (über dem Baum)
+
+    /// Die eine Information, für die man das Home aufmacht, wenn mehrere Sessions laufen: wer wartet.
+    /// Dazu fällige Wiedervorlagen — die kämen sonst erst beim nächsten Session-Start ins Bild.
+    private func renderNotices() {
+        notices.arrangedSubviews.forEach { $0.removeFromSuperview() }
+        let waiting = running.filter { $0.value == "awaitingInput" }.keys.sorted()
+        for cwd in waiting {
+            let name = (cwd as NSString).lastPathComponent
+            notices.addArrangedSubview(noticeButton(glyph: "●", color: Self.orange, text: "\(name) wartet auf dich", hint: "→ zur Kachel") { [weak self] in
+                self?.onFocusPane?(cwd)
+            })
+        }
+        let due = (data?.wiedervorlagen ?? []).filter { $0.daysLeft <= 0 }
+        for w in due {
+            let when = w.overdue ? "seit \(-w.daysLeft) d fällig" : "heute fällig"
+            notices.addArrangedSubview(noticeButton(glyph: "⏰", color: Self.yellow, text: w.title, hint: when) { [weak self] in
+                self?.startWiedervorlage(w)
+            })
+        }
+        notices.isHidden = notices.arrangedSubviews.isEmpty
+        // Abstand zum Baum nur, wenn etwas drinsteht
+        noticesGap?.constant = notices.isHidden ? 0 : 10
+    }
+    private var noticesGap: NSLayoutConstraint?
+
+    private func noticeButton(glyph: String, color: NSColor, text: String, hint: String, action: @escaping () -> Void) -> NSView {
+        let b = NoticeButton()
+        let a = NSMutableAttributedString()
+        a.append(NSAttributedString(string: glyph + " ", attributes: [.font: Self.mono(-2), .foregroundColor: color]))
+        a.append(NSAttributedString(string: text, attributes: [.font: Self.mono(-1, .semibold), .foregroundColor: Self.fg]))
+        a.append(NSAttributedString(string: "  " + hint, attributes: [.font: Self.mono(-2), .foregroundColor: Self.faint]))
+        b.attributedTitle = a
+        b.onClick = action
+        return b
+    }
+
+    /// Wiedervorlage: Session in der Wurzel, der Text der Datei geht als erster Prompt mit —
+    /// der SessionStart-Hook spielt die fällige Datei ohnehin ein, der Prompt sagt nur „die hier, jetzt".
+    private func startWiedervorlage(_ w: ProjekteData.Wiedervorlage) {
+        guard let rootPath = data?.root else { return }
+        let new = (templates.byLevel["router"] ?? templates.byLevel["ordner"] ?? []).first { $0.command != nil }
+        guard let cmd = new?.command else { return }
+        onLaunch?(LaunchRequest(path: rootPath, command: cmd, label: "Wiedervorlage · \(w.title)",
+                                followUp: "Wiedervorlage \(w.slug) (\(w.due)) abarbeiten: \(w.title). Datei: \(w.file) — erledigt = Datei löschen."))
     }
 
     // MARK: Filter
@@ -902,9 +969,10 @@ final class HomePaneView: NSView {
 
     private var selectedNode: Node? { tree.item(atRow: tree.selectedRow) as? Node }
 
-    private func renderActions() {
+    private func renderActions(keepSelection: Bool = false) {
         if pinMode { renderPinActions(); return }
         guard let node = selectedNode, let d = data else { actions = []; list.reloadData(); return }
+        let keepRow = keepSelection ? list.selectedRow : 0
         let p = byPath[node.path]
         let isRoot = node.path == d.root
         title.stringValue = isRoot ? (node.name) : node.name
@@ -928,6 +996,13 @@ final class HomePaneView: NSView {
         // häufigste Griff: Alias tippen, ⏎), dann ↻ Weiter, dann Shell & Co. (Templates ohne Befehl).
         let level = p?.level ?? "ordner"
         let byLevel = templates.byLevel[level] ?? templates.byLevel["ordner"] ?? []
+        // Läuft hier (oder darunter) schon eine Kachel, ist der Sprung dorthin die erste Zeile —
+        // sonst öffnet ⏎ aus Gewohnheit eine zweite Session neben der laufenden. Wartende zuerst.
+        let here = running.filter { $0.key == node.path || $0.key.hasPrefix(node.path + "/") }
+            .sorted { ($0.value == "awaitingInput" ? 0 : 1, $0.key) < ($1.value == "awaitingInput" ? 0 : 1, $1.key) }
+        for (cwd, st) in here.prefix(3) {
+            out.append(.jump(cwd: cwd, state: st, name: (cwd as NSString).lastPathComponent))
+        }
         for t in byLevel where t.command != nil { out.append(.run(t, path: node.path)) }
         if let (q, s) = candidates.first {
             out.append(.resume(s, path: q.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt),
@@ -959,9 +1034,14 @@ final class HomePaneView: NSView {
                 }
             }
         }
+        // Fällige Wiedervorlagen an der Wurzel auch als Zeilen — die Hinweisleiste ist Maus, das hier ⏎.
+        if isRoot, let wv = d.wiedervorlagen?.filter({ $0.daysLeft <= 0 }), !wv.isEmpty {
+            out.append(.header("Fällig"))
+            for w in wv { out.append(.wiedervorlage(w, path: d.root)) }
+        }
         actions = out
         list.reloadData()
-        list.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
+        list.selectRowIndexes(IndexSet(integer: min(max(keepRow, 0), max(out.count - 1, 0))), byExtendingSelection: false)
     }
 
     private func run(_ a: Action) {
@@ -983,6 +1063,10 @@ final class HomePaneView: NSView {
             runProjekte([pinned ? "unpin-projekt" : "pin-projekt", path])
         case .more(_, let expanded):
             setMore(!expanded)
+        case .jump(let cwd, _, _):
+            onFocusPane?(cwd)
+        case .wiedervorlage(let w, _):
+            startWiedervorlage(w)
         case .header: break
         }
     }
@@ -1536,6 +1620,7 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let id = NSUserInterfaceItemIdentifier("actionCell")
         let cell = (tableView.makeView(withIdentifier: id, owner: nil) as? ActionCell) ?? { let c = ActionCell(); c.identifier = id; return c }()
+        cell.toolTip = nil
         switch actions[row] {
         case .header(let t):
             cell.set(glyph: "", text: t, detail: "", meta: "", header: true, accent: Self.faint)
@@ -1546,6 +1631,7 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
             var metaColor: NSColor? = nil
             if let (badge, color) = Self.contextBadge(s.context) { meta = badge + "  " + age; metaColor = color }
             cell.set(glyph: r.glyph, text: star + (project.map { "\(r.label) · \($0)" } ?? r.label), detail: t, meta: meta, header: false, accent: Self.green, metaColor: metaColor)
+            cell.toolTip = s.lastPrompt.map { "Zuletzt: „\($0)“" + (s.context.map { "\n" + Self.contextLine($0) } ?? "") }
         case .run(let t, _):
             let color: NSColor = t.command == nil ? Self.blue : (t.glyph == "+" ? Self.cyan : Self.violet)
             cell.set(glyph: t.glyph, text: t.label, detail: t.hint ?? "", meta: "", header: false, accent: color)
@@ -1565,12 +1651,32 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
         case .rename(let s):
             let t = templates.rename!
             cell.set(glyph: t.glyph, text: t.label, detail: s.title ?? (t.hint ?? ""), meta: s.titleSource == "manual" ? "✎" : "", header: false, accent: Self.blue)
+        case .jump(_, let st, let name):
+            let waiting = st == "awaitingInput"
+            cell.set(glyph: "→", text: "Zur Kachel", detail: name + (waiting ? " — wartet auf dich" : (st == "working" ? " — arbeitet" : "")),
+                     meta: "", header: false, accent: waiting ? Self.orange : Self.green)
+        case .wiedervorlage(let w, _):
+            cell.set(glyph: "⏰", text: w.title, detail: w.overdue ? "seit \(-w.daysLeft) d fällig" : "heute fällig", meta: w.due, header: false, accent: Self.yellow)
         }
         return cell
     }
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let v = HomeRowBackground(); v.accent = accent; return v
     }
+}
+
+/// Randlose Hinweiszeile über dem Baum; Klick = Aktion, kein Fokusklau.
+final class NoticeButton: NSButton {
+    var onClick: (() -> Void)?
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        isBordered = false; focusRingType = .none; setButtonType(.momentaryChange)
+        target = self; action = #selector(fire)
+        setContentHuggingPriority(.required, for: .horizontal)
+    }
+    required init?(coder: NSCoder) { fatalError() }
+    override var acceptsFirstResponder: Bool { false }
+    @objc private func fire() { onClick?() }
 }
 
 /// Baumzeile: Glyph · Name · (●)

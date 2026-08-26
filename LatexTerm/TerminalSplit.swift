@@ -186,11 +186,12 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     /// Kachel als Home-Kachel zeigen (statt Shell). `otherPanes` liefert die Kopfzeile
     /// mit dem Status der übrigen Kacheln.
-    func showHome(otherPanes: @escaping () -> [(String, String)]) {
+    func showHome(otherPanes: @escaping () -> [(String, String)], focusPane: @escaping (String) -> Void) {
         guard !isStarted, homeView == nil else { return }
         let home = HomePaneView(frame: container.bounds)
         home.autoresizingMask = [.width, .height]
         home.otherPanes = otherPanes
+        home.onFocusPane = focusPane
         home.onLaunch = { [weak self] req in self?.launch(in: req.path, command: req.command, label: req.label, followUp: req.followUp) }
         home.onClose = { [weak self] in
             guard let self else { return }
@@ -1151,6 +1152,9 @@ final class TerminalSplitView: NSView {
             pane.showHome(otherPanes: { [weak self, weak pane] in
                 guard let self, let pane else { return [] }
                 return self.paneSummary(excluding: pane)
+            }, focusPane: { [weak self] cwd in
+                guard let self, let target = self.panes.first(where: { $0.isStarted && $0.currentDirectory == cwd }) else { return }
+                self.focusPane(target)
             })
         } else {
             pane.start(in: directory)
