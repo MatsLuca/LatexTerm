@@ -1062,9 +1062,7 @@ final class TerminalSplitView: NSView {
             guard let self, let q = note.userInfo?["quickstart"] as? ProjekteData.Quickstart else { return }
             let target = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible })
             guard self.window === target else { return }
-            let pane = self.addPane(home: true)
-            self.focusPane(pane)
-            pane.launch(in: q.path, command: q.command, label: q.label)
+            self.runQuickstart(q)
         }
 
         // Beim Beenden den aktuellen Stand sichern (CWDs werden live ausgelesen).
@@ -1083,6 +1081,16 @@ final class TerminalSplitView: NSView {
         if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
         if let newHomeObserver { NotificationCenter.default.removeObserver(newHomeObserver) }
         if let quickstartObserver { NotificationCenter.default.removeObserver(quickstartObserver) }
+    }
+
+    /// Quickstart ausführen: eine noch unberührte Home-Kachel (Kaltstart: die einzige) wird
+    /// direkt benutzt, sonst entsteht eine neue — gleicher Startweg wie ein Klick in der Kachel.
+    func runQuickstart(_ q: ProjekteData.Quickstart) {
+        QuickstartStore.shared.pending = nil
+        let fresh = (panes.count == 1 && panes[0].isHome && !panes[0].isStarted) ? panes[0] : nil
+        let pane = fresh ?? addPane(home: true)
+        focusPane(pane)
+        pane.launch(in: q.path, command: q.command, label: q.label)
     }
 
     /// Home-Kacheln sind flüchtig: nur gestartete Shells landen im Snapshot. Sind es
@@ -1108,6 +1116,12 @@ final class TerminalSplitView: NSView {
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         guard let window = window else { return }
+
+        // Kaltstart per URL/Dock-Plugin: die Anforderung kam, bevor es ein Fenster gab.
+        if let q = QuickstartStore.shared.pending {
+            QuickstartStore.shared.pending = nil
+            DispatchQueue.main.async { [weak self] in self?.runQuickstart(q) }
+        }
 
         // Window-Styling für rahmenlosen Premium-Desktop-Blend
         window.titlebarAppearsTransparent = true

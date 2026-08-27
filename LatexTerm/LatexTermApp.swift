@@ -1,9 +1,12 @@
 import SwiftUI
 import AppKit
 
-/// Dock-Menü (Rechtsklick aufs Dock-Icon): Quickstarts aus der Datenschicht (`config.toml`
-/// → `projekte --json` → `quickstarts[]`). Die App kennt keine Pfade und keine Befehle —
-/// sie zeigt, was der Store zuletzt gesehen hat, und reicht den Eintrag an das Fenster weiter.
+/// Einstiege von außen — beide führen auf denselben Weg (`QuickstartStore` → Fenster):
+/// - URL-Scheme `latexterm://quickstart/<key>` und `latexterm://home` (Dock-Tile-Plugin bei nicht
+///   laufender App, Raycast/Spotlight/`open`). Beim Kaltstart gibt es noch kein Fenster: der
+///   Eintrag wartet in `QuickstartStore.pending`, `TerminalSplitView.viewDidMoveToWindow` holt ihn.
+/// - Dock-Menü (`applicationDockMenu`) bei laufender App — dieselbe Liste wie das Plugin.
+/// Die App kennt keine Pfade und keine Befehle; alles kommt aus `projekte` (`config.toml`).
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
@@ -28,14 +31,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
+    func application(_ application: NSApplication, open urls: [URL]) {
+        for url in urls where url.scheme?.lowercased() == "latexterm" {
+            let parts = ([url.host ?? ""] + url.pathComponents.filter { $0 != "/" }).filter { !$0.isEmpty }
+            switch parts.first {
+            case "quickstart":
+                guard let key = parts.dropFirst().first, let q = QuickstartStore.shared.find(key: key) else {
+                    NSSound.beep(); continue
+                }
+                deliver(q)
+            case "home":
+                newHomePane()
+            default:
+                NSSound.beep()
+            }
+        }
+    }
+
+    /// Läuft schon ein Fenster, bekommt es die Anforderung sofort; sonst wartet sie auf das erste.
+    private func deliver(_ q: ProjekteData.Quickstart) {
+        NSApp.activate(ignoringOtherApps: true)
+        guard NSApp.windows.contains(where: { $0.isVisible }) else {
+            QuickstartStore.shared.pending = q
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NotificationCenter.default.post(name: .latexTermQuickstart, object: nil, userInfo: ["quickstart": q])
+        }
+    }
+
     @objc private func runQuickstart(_ sender: NSMenuItem) {
         let items = QuickstartStore.shared.items
         guard items.indices.contains(sender.tag) else { return }
-        // Erst aktivieren, dann posten: das Fenster soll Key sein, wenn der Split-View prüft.
-        NSApp.activate(ignoringOtherApps: true)
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            NotificationCenter.default.post(name: .latexTermQuickstart, object: nil, userInfo: ["quickstart": items[sender.tag]])
-        }
+        deliver(items[sender.tag])
     }
 
     @objc private func newHomePane() {

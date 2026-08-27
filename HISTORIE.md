@@ -27,6 +27,17 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 21 — Quickstarts auch bei geschlossener App (27.08.):** Mats: „hätte man es auf ein
+  geschlossenes App-Symbol machen können". Drei Teile: (1) **URL-Scheme** `latexterm://quickstart/<key>`
+  und `latexterm://home` (`CFBundleURLTypes`, `application(_:open:)` im AppDelegate) — geht auch aus
+  Raycast/Spotlight/`open`. (2) **Kaltstart-Pfad:** ohne Fenster wartet der Eintrag in
+  `QuickstartStore.pending`, `TerminalSplitView.viewDidMoveToWindow` holt ihn; `runQuickstart` nutzt
+  die noch unberührte erste Home-Kachel statt eine zweite zu öffnen. Der Store fällt auf
+  `~/.cache/projekte/quickstarts.json` zurück, solange keine Kachel geladen hat. (3) **Dock-Tile-Plugin**
+  `LatexTermDockTile.docktileplugin` (neues Bundle-Target, `NSDockTilePlugIn` in der Info.plist, eingebettet
+  nach `Contents/PlugIns`, CodeSignOnCopy): läuft im Dock-Prozess, liest denselben Cache, Klick öffnet
+  die URL. Handarbeit in der pbxproj (IDs `D7…`). Nach jedem Plugin-Build `killall Dock`. Nicht
+  abgenommen — Plugin-Menü sieht man nur bei beendeter App, und Claude läuft in LatexTerm.
 - **Runde 20 — Dock-Menü mit Quickstarts (27.08.):** `AppDelegate` (`@NSApplicationDelegateAdaptor`)
   liefert `applicationDockMenu` — Einträge aus `QuickstartStore` (gefüllt bei jedem `projekte --json`-
   Load, weil das Dock-Menü synchron gebaut wird), Klick → `NSApp.activate` + 0,1 s → Notification

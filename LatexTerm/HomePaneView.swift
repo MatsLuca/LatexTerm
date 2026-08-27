@@ -1876,9 +1876,29 @@ final class HomeOutline: NSOutlineView {
 }
 
 
-/// Letzter bekannter Stand der Quickstarts — das Dock-Menü wird synchron gebaut und kann
-/// `projekte` nicht abwarten; jede geladene Home-Kachel frischt den Stand auf.
+/// Quickstarts für Dock-Menü und URL-Scheme. Quelle 1: das letzte `projekte --json` (jede
+/// Home-Kachel füllt den Store); Quelle 2: der Spiegel `~/.cache/projekte/quickstarts.json`,
+/// den `projekte` mitschreibt — nötig beim Kaltstart per URL, bevor eine Kachel geladen hat, und
+/// dieselbe Datei liest das Dock-Tile-Plugin, wenn die App gar nicht läuft.
 final class QuickstartStore {
     static let shared = QuickstartStore()
-    var items: [ProjekteData.Quickstart] = []
+    static let cacheFile = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent(".cache/projekte/quickstarts.json")
+
+    private var loaded: [ProjekteData.Quickstart] = []
+    var items: [ProjekteData.Quickstart] {
+        get { loaded.isEmpty ? Self.readCache() : loaded }
+        set { loaded = newValue }
+    }
+    /// Per URL angeforderter Quickstart, den noch kein Fenster übernommen hat (Kaltstart).
+    var pending: ProjekteData.Quickstart?
+
+    func find(key: String) -> ProjekteData.Quickstart? { items.first { $0.key == key } }
+
+    private struct Cache: Decodable { var quickstarts: [ProjekteData.Quickstart] }
+    static func readCache() -> [ProjekteData.Quickstart] {
+        guard let data = try? Data(contentsOf: cacheFile),
+              let c = try? JSONDecoder().decode(Cache.self, from: data) else { return [] }
+        return c.quickstarts
+    }
 }
