@@ -1,9 +1,55 @@
 import SwiftUI
 import AppKit
 
+/// Dock-Menü (Rechtsklick aufs Dock-Icon): Quickstarts aus der Datenschicht (`config.toml`
+/// → `projekte --json` → `quickstarts[]`). Die App kennt keine Pfade und keine Befehle —
+/// sie zeigt, was der Store zuletzt gesehen hat, und reicht den Eintrag an das Fenster weiter.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
+        let menu = NSMenu()
+        let items = QuickstartStore.shared.items
+        if items.isEmpty {
+            let hint = NSMenuItem(title: "Keine Quickstarts (config.toml der Werkstatt)", action: nil, keyEquivalent: "")
+            hint.isEnabled = false
+            menu.addItem(hint)
+        }
+        for (i, q) in items.enumerated() {
+            let item = NSMenuItem(title: "\(q.glyph)  \(q.label)", action: #selector(runQuickstart(_:)), keyEquivalent: "")
+            item.target = self
+            item.tag = i
+            item.isEnabled = q.exists
+            item.toolTip = q.hint ?? q.path
+            menu.addItem(item)
+        }
+        menu.addItem(.separator())
+        let home = NSMenuItem(title: "Neue Home-Kachel", action: #selector(newHomePane), keyEquivalent: "")
+        home.target = self
+        menu.addItem(home)
+        return menu
+    }
+
+    @objc private func runQuickstart(_ sender: NSMenuItem) {
+        let items = QuickstartStore.shared.items
+        guard items.indices.contains(sender.tag) else { return }
+        // Erst aktivieren, dann posten: das Fenster soll Key sein, wenn der Split-View prüft.
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NotificationCenter.default.post(name: .latexTermQuickstart, object: nil, userInfo: ["quickstart": items[sender.tag]])
+        }
+    }
+
+    @objc private func newHomePane() {
+        NSApp.activate(ignoringOtherApps: true)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NotificationCenter.default.post(name: .latexTermNewHomePane, object: nil)
+        }
+    }
+}
+
 @main
 struct LatexTermApp: App {
 
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @ObservedObject private var settings = FormulaSettings.shared
     @ObservedObject private var homeFocus = HomeFocus.shared
     /// Reduzierter Baum (nur Projekte und die Ordner dorthin) — gilt für alle Home-Kacheln.

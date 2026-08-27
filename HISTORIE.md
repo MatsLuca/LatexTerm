@@ -27,6 +27,13 @@ ist die Projekt-Wahrheit, Aliase optional; Sortierung nach letzter Claude-Aktivi
 - **Datenquelle bewusst extern:** `projekte --json` über `/bin/zsh -lc` (holt PATH aus `.zprofile`
   — `.local/bin`, Homebrew-Python ≥ 3.11 für `tomllib`); die App enthält keine Pfade, das Repo
   bleibt privacy-sauber. Fehlt das CLI: Hinweis in der Statuszeile, sonst nichts.
+- **Runde 20 — Dock-Menü mit Quickstarts (27.08.):** `AppDelegate` (`@NSApplicationDelegateAdaptor`)
+  liefert `applicationDockMenu` — Einträge aus `QuickstartStore` (gefüllt bei jedem `projekte --json`-
+  Load, weil das Dock-Menü synchron gebaut wird), Klick → `NSApp.activate` + 0,1 s → Notification
+  `.latexTermQuickstart` → `TerminalSplitView` des Key-Fensters (Fallback: erstes sichtbare) legt eine
+  Home-Kachel an und ruft sofort `launch(in:command:label:)`. Dazu „Neue Home-Kachel" im Dock.
+  Ordner/Befehle/Prompts stehen ausschließlich in `config.toml` der Werkstatt (`quickstarts[]`).
+  Ohne Fenster passiert nichts — bekannte Lücke. Nicht abgenommen (App-Neustart nötig).
 - **Runde 19 — Gesamtbild (Mats: „alles, was echte Verbesserung ist"):**
   *Laufende Kacheln:* Hinweisleiste über dem Baum „● <Projekt> wartet auf dich → zur Kachel"; in der
   Aktionsspalte ist „→ Zur Kachel" die erste Zeile, sobald hier (oder darunter) eine Kachel läuft —

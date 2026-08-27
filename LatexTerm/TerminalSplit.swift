@@ -1015,6 +1015,7 @@ final class TerminalSplitView: NSView {
     private var isFirstLayout = true
     private var terminateObserver: NSObjectProtocol?
     private var newHomeObserver: NSObjectProtocol?
+    private var quickstartObserver: NSObjectProtocol?
 
     /// Lücke (Steg) zwischen den Kacheln in Punkten.
     private static let gap: CGFloat = 8
@@ -1053,6 +1054,19 @@ final class TerminalSplitView: NSView {
             self.addPane(home: true)
         }
 
+        // Dock-Menü „Quickstart": neue Home-Kachel im Key-Fenster (ohne Key-Fenster: im ersten
+        // sichtbaren) und sofort starten — gleicher Weg wie ein Klick in der Kachel.
+        quickstartObserver = NotificationCenter.default.addObserver(
+            forName: .latexTermQuickstart, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, let q = note.userInfo?["quickstart"] as? ProjekteData.Quickstart else { return }
+            let target = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible })
+            guard self.window === target else { return }
+            let pane = self.addPane(home: true)
+            self.focusPane(pane)
+            pane.launch(in: q.path, command: q.command, label: q.label)
+        }
+
         // Beim Beenden den aktuellen Stand sichern (CWDs werden live ausgelesen).
         terminateObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.willTerminateNotification, object: nil, queue: .main
@@ -1068,6 +1082,7 @@ final class TerminalSplitView: NSView {
     deinit {
         if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
         if let newHomeObserver { NotificationCenter.default.removeObserver(newHomeObserver) }
+        if let quickstartObserver { NotificationCenter.default.removeObserver(quickstartObserver) }
     }
 
     /// Home-Kacheln sind flüchtig: nur gestartete Shells landen im Snapshot. Sind es

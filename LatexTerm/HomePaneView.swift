@@ -93,6 +93,12 @@ struct ProjekteData: Decodable {
         var file: String; var slug: String; var due: String; var daysLeft: Int; var title: String
         var overdue: Bool; var dueToday: Bool
     }
+    /// Quickstart (Dock-Menü): fertiger Ordner + Befehl aus `config.toml` der Datenschicht.
+    struct Quickstart: Decodable {
+        var key: String; var label: String; var glyph: String; var hint: String?
+        var path: String; var exists: Bool; var prompt: String?; var command: String?
+    }
+    var quickstarts: [Quickstart]?
     var wiedervorlagen: [Wiedervorlage]?
     var root: String
     var projects: [Project]
@@ -144,7 +150,10 @@ enum ProjekteLoader {
             }
             do {
                 let parsed = try JSONDecoder().decode(ProjekteData.self, from: data)
-                DispatchQueue.main.async { completion(.success(parsed)) }
+                DispatchQueue.main.async {
+                    QuickstartStore.shared.items = parsed.quickstarts ?? []
+                    completion(.success(parsed))
+                }
             } catch {
                 DispatchQueue.main.async { completion(.failure(LoaderError(message: "JSON von `\(command)` unlesbar: \(error)"))) }
             }
@@ -199,6 +208,8 @@ struct LoaderError: Error { let message: String }
 extension Notification.Name {
     /// ⌘N (Menü): das Key-Fenster hängt eine Home-Kachel an.
     static let latexTermNewHomePane = Notification.Name("LatexTerm.newHomePane")
+    /// Dock-Menü → Quickstart starten; userInfo["quickstart"] = ProjekteData.Quickstart.
+    static let latexTermQuickstart = Notification.Name("LatexTerm.quickstart")
     /// Menü „Home" → „Nur Projekte": alle Home-Kacheln stellen ihren Baum um.
     static let latexTermHomeTreeChanged = Notification.Name("LatexTerm.homeTreeChanged")
 }
@@ -1862,4 +1873,12 @@ final class HomeOutline: NSOutlineView {
         super.mouseDown(with: event)
     }
     override func keyDown(with event: NSEvent) { if onKey?(event) == true { return }; super.keyDown(with: event) }
+}
+
+
+/// Letzter bekannter Stand der Quickstarts — das Dock-Menü wird synchron gebaut und kann
+/// `projekte` nicht abwarten; jede geladene Home-Kachel frischt den Stand auf.
+final class QuickstartStore {
+    static let shared = QuickstartStore()
+    var items: [ProjekteData.Quickstart] = []
 }
