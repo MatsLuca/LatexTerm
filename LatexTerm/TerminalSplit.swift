@@ -1,4 +1,5 @@
 import AppKit
+import os
 import SwiftTerm
 
 /// Äußere Hülle einer Terminal-Kachel: trägt abgerundete Ecken, Fokus-Rahmen und
@@ -228,17 +229,27 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         // wirklich steht (passive Erkennung / Hook-Status), höchstens 12 s — der User sieht
         // weder das getippte Kommando noch Plugin-Sync und Ladezeilen.
         home.beginLaunch(label ?? "Claude")
-        view.send(txt: command + "\r")
+        // Start-Timer: T0 = dieser Tastendruck, als Umgebung vor das Kommando (zsh exportiert
+        // Zuweisungen vor einem Funktionsaufruf an dessen Kinder). Der SessionStart-Hook
+        // hooks/start-timer.sh (mats-tools) rechnet daraus die Phasen und loggt sie; wir
+        // hängen unten die Vorhang-Zeit (bis reveal, Grund) an dasselbe Log.
+        let t0 = Int(Date().timeIntervalSince1970 * 1000)
+        launchReady = false
+        view.send(txt: "MATS_START_T0=\(t0) " + command + "\r")
         let started = Date()
         launchTimer?.invalidate()
         launchTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] t in
             guard let self else { t.invalidate(); return }
-            let ready = self.sessionState != .none
+            // `status=ready` aus dem SessionStart-Hook ist das eigentliche Signal; die passive
+            // Grid-Erkennung (sessionState) bleibt Fallback, dann harter Timeout.
+            let ready = self.launchReady || self.sessionState != .none
             let timeout = Date().timeIntervalSince(started) > 12
             guard ready || timeout else { return }
             t.invalidate()
             self.launchTimer = nil
             self.revealTerminal()
+            Self.startTimerLog(t0: t0, curtain: Date().timeIntervalSince(started),
+                               reason: self.launchReady ? "signal" : (ready ? "passiv" : "timeout"))
             // Folgebefehl (z. B. /compact): Text in die Claude-TUI, Enter separat nach 1 s —
             // ein mitgesendetes Enter wird beim Paste geschluckt (Regel aus dem latexterm-Skill).
             if let followUp, !followUp.isEmpty, ready {
@@ -250,6 +261,21 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         }
     }
     private var launchTimer: Timer?
+    /// `status=ready` vom SessionStart-Hook (settings.json) ist angekommen — Session steht.
+    private var launchReady = false
+
+    /// Vorhang-Zeile ins Start-Timer-Log (gleiches Log wie hooks/start-timer.sh; t0 verknüpft beide).
+    private static func startTimerLog(t0: Int, curtain: TimeInterval, reason: String) {
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let dir = home.appendingPathComponent(".cache/mats-tools")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent("start-timer.log")
+        let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm:ss"
+        let line = "\(f.string(from: Date()))  t0=\(t0) vorhang=\(Int(curtain * 1000)) grund=\(reason)  (LatexTerm: Tastendruck bis Vorhang weg)\n"
+        guard let data = line.data(using: .utf8) else { return }
+        if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(data); try? h.close() }
+        else { try? data.write(to: url) }
+    }
 
     private func revealTerminal() {
         guard let home = homeView else { return }
@@ -409,7 +435,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         }
     }
 
-    /// Hook-getriebener Session-Status (#27 Vollausbau): `status=<working|input|done>[;detail]`
+    /// Hook-getriebener Session-Status (#27 Vollausbau): `status=<working|input|done|ready>[;detail]`
     /// über den 5522-Kanal — präzise Events aus Claude-Code-Hooks statt Grid-Heuristik.
     /// Setzt den Zustand OHNE Hysterese (der Hook weiß es sicher); die passive
     /// Erkennung läuft weiter und bestätigt ihn beim nächsten Scan von selbst.
@@ -447,6 +473,12 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             lastHookStatusAt = Date()
             sessionState = .none           // räumt statusDetail im didSet mit ab
             onAttentionSignal?(self, "Claude ist fertig", detail)
+        case "ready":
+            // SessionStart-Hook: Session steht, wartet auf die erste Eingabe. Hebt nur den
+            // Home-Vorhang (launch) — kein Zustand, keine Pille, keine Notification. Erneuert
+            // die Hook-Frist, damit der Grid-Rater der frischen Eingabe-Box nichts unterstellt.
+            lastHookStatusAt = Date()
+            launchReady = true
         default:
             break                          // unbekannter/kaputter Status erneuert NICHT
         }
@@ -1059,8 +1091,9 @@ final class TerminalSplitView: NSView {
         quickstartObserver = NotificationCenter.default.addObserver(
             forName: .latexTermQuickstart, object: nil, queue: .main
         ) { [weak self] note in
-            guard let self, let q = note.userInfo?["quickstart"] as? ProjekteData.Quickstart else { return }
-            let target = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible })
+            guard let self, let q = note.userInfo?["quickstart"] as? ProjekteData.Quickstart, self.window != nil else { return }
+            // Key-Fenster, sonst erstes sichtbares, beim Kaltstart das erste überhaupt.
+            let target = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }) ?? NSApp.windows.first
             guard self.window === target else { return }
             self.runQuickstart(q)
         }
@@ -1086,6 +1119,7 @@ final class TerminalSplitView: NSView {
     /// Quickstart ausführen: eine noch unberührte Home-Kachel (Kaltstart: die einzige) wird
     /// direkt benutzt, sonst entsteht eine neue — gleicher Startweg wie ein Klick in der Kachel.
     func runQuickstart(_ q: ProjekteData.Quickstart) {
+        Logger(subsystem: "com.mats.LatexTerm", category: "quickstart").notice("runQuickstart \(q.key, privacy: .public) in \(q.path, privacy: .public); panes \(self.panes.count)")
         QuickstartStore.shared.pending = nil
         let fresh = (panes.count == 1 && panes[0].isHome && !panes[0].isStarted) ? panes[0] : nil
         let pane = fresh ?? addPane(home: true)

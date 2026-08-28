@@ -58,7 +58,7 @@ The data comes from an external CLI — `projekte --json` (run through your logi
 
 Each pane tracks its session: **working** (titlebar dot pulses, a floating pill in the pane shows the current tool live) → **done** / **needs input** (macOS notification if the pane is unwatched; clicking it focuses and zooms the pane).
 
-- **Precise:** Claude Code hooks write `\e]5522;status=working|input|done[;detail]\a` to the pane's tty — `detail` (e.g. the tool name from a `PreToolUse` hook) becomes the pill text.
+- **Precise:** Claude Code hooks write `\e]5522;status=working|input|done|ready[;detail]\a` to the pane's tty — `detail` (e.g. the tool name from a `PreToolUse` hook) becomes the pill text. `ready` (from a `SessionStart` hook) only lifts the home-tile launch curtain.
 - **Zero-config fallback:** the pane detects spinner vs. input box straight from the buffer grid; a fresh hook signal silences it for 10 minutes (hooks win, the fallback self-heals crashed sessions).
 - Terminal bell (`\a`) and OSC 777 (`\e]777;notify;Title;Body\a`) notify instantly too.
 

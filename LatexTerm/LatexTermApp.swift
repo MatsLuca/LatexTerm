@@ -1,5 +1,8 @@
 import SwiftUI
 import AppKit
+import os
+
+private let qlog = Logger(subsystem: "com.mats.LatexTerm", category: "quickstart")
 
 /// Einstiege von außen — beide führen auf denselben Weg (`QuickstartStore` → Fenster):
 /// - URL-Scheme `latexterm://quickstart/<key>` und `latexterm://home` (Dock-Tile-Plugin bei nicht
@@ -32,32 +35,50 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where url.scheme?.lowercased() == "latexterm" {
-            let parts = ([url.host ?? ""] + url.pathComponents.filter { $0 != "/" }).filter { !$0.isEmpty }
-            switch parts.first {
-            case "quickstart":
-                guard let key = parts.dropFirst().first, let q = QuickstartStore.shared.find(key: key) else {
-                    NSSound.beep(); continue
-                }
-                deliver(q)
-            case "home":
-                newHomePane()
-            default:
-                NSSound.beep()
+        qlog.notice("application(open:) \(urls.map(\.absoluteString).joined(separator: " "), privacy: .public)")
+        urls.forEach(handle)
+    }
+
+    /// Dieselbe URL kann doppelt ankommen (AppDelegate *und* SwiftUI `onOpenURL`) — einmal reicht.
+    private var lastURL: (URL, Date)?
+    func handle(_ url: URL) {
+        guard url.scheme?.lowercased() == "latexterm" else { return }
+        if let (u, t) = lastURL, u == url, Date().timeIntervalSince(t) < 1.5 { return }
+        lastURL = (url, Date())
+        let parts = ([url.host ?? ""] + url.pathComponents.filter { $0 != "/" }).filter { !$0.isEmpty }
+        switch parts.first {
+        case "quickstart":
+            guard let key = parts.dropFirst().first, let q = QuickstartStore.shared.find(key: key) else {
+                qlog.error("unbekannter Quickstart in \(url.absoluteString, privacy: .public); Store hat \(QuickstartStore.shared.items.count) Einträge")
+                NSSound.beep(); return
             }
+            deliver(q)
+        case "home":
+            newHomePane()
+        default:
+            qlog.error("unbekannte URL \(url.absoluteString, privacy: .public)")
+            NSSound.beep()
         }
     }
 
-    /// Läuft schon ein Fenster, bekommt es die Anforderung sofort; sonst wartet sie auf das erste.
+    /// Zustellen mit Wiederholung: beim Kaltstart existiert das Fenster oft schon, ist aber noch
+    /// unsichtbar/nicht Key — `viewDidMoveToWindow` ist dann längst vorbei. Also `pending` setzen
+    /// und alle 0,2 s anklopfen, bis ein `TerminalSplitView` übernimmt (`pending` wieder nil).
     private func deliver(_ q: ProjekteData.Quickstart) {
         NSApp.activate(ignoringOtherApps: true)
-        guard NSApp.windows.contains(where: { $0.isVisible }) else {
-            QuickstartStore.shared.pending = q
+        QuickstartStore.shared.pending = q
+        qlog.notice("deliver \(q.key, privacy: .public): Fenster \(NSApp.windows.count), sichtbar \(NSApp.windows.filter { $0.isVisible }.count)")
+        knock(q, attempt: 0)
+    }
+
+    private func knock(_ q: ProjekteData.Quickstart, attempt: Int) {
+        guard QuickstartStore.shared.pending?.key == q.key else { return }   // übernommen (oder ersetzt)
+        NotificationCenter.default.post(name: .latexTermQuickstart, object: nil, userInfo: ["quickstart": q])
+        guard QuickstartStore.shared.pending != nil, attempt < 50 else {
+            if attempt >= 50 { qlog.error("Quickstart \(q.key, privacy: .public) nach 10 s nicht zugestellt") }
             return
         }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-            NotificationCenter.default.post(name: .latexTermQuickstart, object: nil, userInfo: ["quickstart": q])
-        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.knock(q, attempt: attempt + 1) }
     }
 
     @objc private func runQuickstart(_ sender: NSMenuItem) {
@@ -93,6 +114,11 @@ struct LatexTermApp: App {
             }
             .frame(minWidth: 640, minHeight: 400)
             .preferredColorScheme(.dark)
+            // Kaltstart per URL: SwiftUI liefert die URL hier — der AppDelegate dedupliziert.
+            .onOpenURL { url in
+                qlog.notice("onOpenURL \(url.absoluteString, privacy: .public)")
+                appDelegate.handle(url)
+            }
         }
         .commands {
             // ⌘N: Home-Kachel (Projekt-Launcher) statt SwiftUIs „Neues Fenster".

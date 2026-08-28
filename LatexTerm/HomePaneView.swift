@@ -555,11 +555,16 @@ final class HomePaneView: NSView {
         addSubview(overlay)
         launchOverlay = overlay
         NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.15; overlay.animator().alphaValue = 1 }
+        // Live-Zähler: die ECHTE Vorhang-Zeit (Tastendruck bis reveal), nicht die Hook-Phasen.
+        // Läuft bis removeFromSuperview; TerminalPane.launch loggt den Endwert (vorhang=…).
         var i = 0
+        let started = Date()
         spinnerTimer?.invalidate()
         spinnerTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { _ in
             i = (i + 1) % Self.spinnerFrames.count
             spin.stringValue = Self.spinnerFrames[i]
+            let t = String(format: "%.1f", Date().timeIntervalSince(started)).replacingOccurrences(of: ".", with: ",")
+            sub.stringValue = "Session startet … \(t) s"
         }
         // Tastatur während des Starts still: Fokus auf das Overlay, nicht mehr auf den Baum.
         window?.makeFirstResponder(nil)
@@ -1755,7 +1760,14 @@ final class NoticeButton: NSButton {
         super.init(frame: frame)
         isBordered = false; focusRingType = .none; setButtonType(.momentaryChange)
         target = self; action = #selector(fire)
+        // Eine Zeile, linksbündig, bei Platznot hinten abschneiden — NSButton würde sonst den
+        // Titel umbrechen und die zweite Zeile zentrieren (sah in der Hinweisleiste zerrissen aus).
+        alignment = .left
+        lineBreakMode = .byTruncatingTail
+        (cell as? NSButtonCell)?.wraps = false
+        (cell as? NSButtonCell)?.truncatesLastVisibleLine = true
         setContentHuggingPriority(.required, for: .horizontal)
+        setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
     }
     required init?(coder: NSCoder) { fatalError() }
     override var acceptsFirstResponder: Bool { false }
