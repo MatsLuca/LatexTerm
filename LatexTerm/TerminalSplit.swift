@@ -87,7 +87,6 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Von der Split-View gemountete/layoutete Hülle; `view` (das Terminal) lebt darin.
     let container: PaneContainerView
     private let controller: OverlayController
-    private var settingsObserver: NSObjectProtocol?
     private var themeObserver: NSObjectProtocol?
     /// Aktueller Fokus-Zustand (vom `onFocusChanged`-Callback gepflegt).
     private var hasFocus = false
@@ -121,7 +120,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         didSet { applyAccent(); applyFocusStyle(animated: false) }
     }
     /// Wirksame Akzentfarbe dieser Kachel: OSC-Override > erkannter Rahmen > global.
-    var effectiveAccent: NSColor { accentOverride ?? borderAccent ?? FormulaSettings.shared.accentColor }
+    var effectiveAccent: NSColor { accentOverride ?? borderAccent ?? ThemeStore.shared.accentColor }
     /// Pane-EIGENE Farbe (Override oder erkannt) — nil, wenn die Kachel nur der
     /// globalen Farbe folgt. Steuert Hüll-Tint und Session-Persistierung.
     var paneAccent: NSColor? { accentOverride ?? borderAccent }
@@ -360,7 +359,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     override init() {
-        let settings = FormulaSettings.shared
+        let store = ThemeStore.shared
         let term = LatexTerminalView(frame: .zero)
         // Farben, Palette, Cursor, Auswahl: alles aus dem Theme (Runde 26) — siehe applyTheme().
         // 256-Farben nach xterm-Würfel wie in jedem anderen Emulator, nicht LAB-interpoliert
@@ -368,8 +367,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         // anders aus als in Ghostty. Vor installColors setzen, das baut die Tabelle neu.
         term.getTerminal().options.ansi256PaletteStrategy = .xterm
         Self.applyTheme(ThemeStore.shared.theme, to: term)
-        term.caretColor = settings.accentColor
-        term.extraLineSpacing = settings.extraLineSpacing  // aus UserDefaults
+        term.caretColor = store.accentColor
+        term.extraLineSpacing = store.lineSpacing
 
         // Kachel-Styling (Ecken/Rahmen/Dimmung) liegt auf der Container-Hülle;
         // ihr Hintergrund füllt das Content-Inset in der Terminal-Farbe auf.
@@ -379,9 +378,9 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         box.layer?.masksToBounds = true
         box.layer?.backgroundColor = term.nativeBackgroundColor.cgColor
         box.layer?.borderWidth = 0
-        box.layer?.borderColor = settings.accentColor.withAlphaComponent(0.65).cgColor
+        box.layer?.borderColor = store.accentColor.withAlphaComponent(0.65).cgColor
         // Kachel ist standardmäßig inaktiv (abgedunkelt), bis sie fokussiert wird
-        box.alphaValue = 0.65
+        box.alphaValue = store.focusDimming ? 0.65 : 1.0
         box.addSubview(term)
 
         self.view = term
@@ -475,40 +474,48 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             }
         }
 
+        // Darstellungs-Änderungen, nach Art gefiltert: das volle Theme-Installieren nur, wenn
+        // Theme/Grund-Schalter sich ändern — nicht bei jeder (adaptiv gesetzten) Akzentfarbe.
         themeObserver = NotificationCenter.default.addObserver(
             forName: ThemeStore.didChange, object: nil, queue: .main
-        ) { [weak self] _ in self?.applyTheme() }
-
-        // Auf Einstellungs-Änderungen reagieren
-        settingsObserver = NotificationCenter.default.addObserver(
-            forName: FormulaSettings.didChange,
-            object: nil,
-            queue: .main
         ) { [weak self, weak term] note in
-            let settings = FormulaSettings.shared
-            term?.extraLineSpacing = settings.extraLineSpacing
-            // Globale Akzent-Änderungen nur anwenden, wo kein OSC-Override liegt
-            // (applyAccent respektiert den Override von selbst).
-            self?.applyAccent()
-
-            // Nur wenn der Modus selbst eingeschaltet wurde, sofort analysieren —
-            // sonst stieße jede (adaptiv gesetzte) accentColor-Änderung gleich die
-            // nächste Analyse an.
-            let change = note.userInfo?[FormulaSettings.changeKey] as? FormulaSettings.Change
-            if change == .isAdaptiveAccent {
-                if settings.isAdaptiveAccent {
-                    self?.scheduleContrastAnalysis()
+            guard let self, let change = note.userInfo?[ThemeStore.changeKey] as? ThemeStore.Change else { return }
+            let store = ThemeStore.shared
+            switch change {
+            case .theme, .appearance:
+                self.applyTheme()
+            case .font:
+                break   // LatexTerminalView übernimmt selbst (applyFont)
+            case .lineSpacing:
+                term?.extraLineSpacing = store.lineSpacing
+                term?.onNeedsFullRescan?()
+            case .accent:
+                // Globale Akzent-Änderungen nur anwenden, wo kein OSC-Override liegt
+                // (applyAccent respektiert den Override von selbst).
+                self.applyAccent()
+            case .adaptiveAccent:
+                // Nur wenn der Modus selbst eingeschaltet wurde, sofort analysieren —
+                // sonst stieße jede (adaptiv gesetzte) accentColor-Änderung gleich die
+                // nächste Analyse an.
+                if store.isAdaptiveAccent {
+                    self.scheduleContrastAnalysis()
                 } else {
                     // Adaptiv aus → auch die passiv erkannte Rahmenfarbe loslassen,
                     // die Kachel folgt wieder der manuellen globalen Farbe.
-                    self?.borderAccent = nil
+                    self.borderAccent = nil
+                    self.applyAccent()
                 }
+            case .prompt:
+                self.updateRainbowTimer()
+                self.view.needsDisplay = true
+            case .panes:
+                self.applyAccent()
+                self.applyFocusStyle(animated: true)
             }
         }
     }
 
     deinit {
-        if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
         rainbowTimer?.invalidate()
     }
@@ -603,7 +610,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// in ihrer Akzentfarbe (Session-Identität auf einen Blick) — die fokussierte
     /// kräftiger und dicker, unfokussierte dünn und zurückgenommen.
     private func applyFocusStyle(animated: Bool) {
-        let alpha: CGFloat = hasFocus ? 1.0 : 0.65
+        let alpha: CGFloat = (hasFocus || !ThemeStore.shared.focusDimming) ? 1.0 : 0.65
         // Fenster-füllend (gezoomt oder einzige Kachel): voller Akzent — der
         // Rahmen IST dann die Session-Kennung; sonst Fokus-Abstufung im Grid.
         var borderWidth: CGFloat = fillsWindow ? 2.0 : (showsFocusBorder ? (hasFocus ? 1.5 : 1.0) : 0)
@@ -648,7 +655,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             // Akzent-Detektion nur im adaptiven Modus; eine explizit per OSC
             // gefärbte Kachel ist autoritativ — sie soll die globale adaptive
             // Farbe weder treiben noch von ihr überschrieben werden.
-            guard FormulaSettings.shared.isAdaptiveAccent, self.accentOverride == nil else { return }
+            guard ThemeStore.shared.isAdaptiveAccent, self.accentOverride == nil else { return }
             // Stufe 1 (per-Pane, läuft für JEDE Kachel — auch unfokussierte CC-
             // Sessions färben ihre eigene Kachel): TUI-Rahmenfarbe aus dem Grid.
             if let border = self.detectBorderAccent() {
@@ -990,7 +997,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Skaliert den Terminalinhalt hocheffizient auf 64x64 Pixel herunter, filtert alle
     /// Hintergrundpixel heraus und berechnet den Farbdurchschnitt des reinen Vordergrundtexts.
     private func analyzeContrast() {
-        guard FormulaSettings.shared.isAdaptiveAccent else { return }
+        guard ThemeStore.shared.isAdaptiveAccent else { return }
         let bounds = view.bounds
         guard bounds.width > 20, bounds.height > 20 else { return }
 
@@ -1068,8 +1075,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
             // Farbraumfest vergleichen: die geladene Akzentfarbe (sRGB) wäre per
             // NSColor-`==` nie gleich einer Palettenfarbe (anderer Farbraum).
-            if !FormulaSettings.shared.accentColor.srgbMatches(bestColor) {
-                FormulaSettings.shared.accentColor = bestColor
+            if !ThemeStore.shared.accentColor.srgbMatches(bestColor) {
+                ThemeStore.shared.accentColor = bestColor
             }
         }
     }
@@ -1557,13 +1564,19 @@ final class TerminalSplitView: NSView {
 
     // MARK: - Session-Status → Notification (#30)
 
+    /// Melden nur, wenn die Session gerade niemand ansieht — App im Hintergrund ODER andere
+    /// Kachel fokussiert; Einstellung „Claude → nur wenn unbeobachtet“ (aus = immer).
+    private func isUnobserved(_ pane: TerminalPane) -> Bool {
+        !CockpitSettings.shared.notifyOnlyUnobserved || !NSApp.isActive || !isFocused(pane)
+    }
+
     /// Bestätigter working→awaitingInput: nur melden, wenn die Session gerade
     /// niemand ansieht — App im Hintergrund ODER andere Kachel fokussiert.
     private func notifySessionAwaiting(_ pane: TerminalPane) {
 #if DEBUG
         TerminalPane.statusLog("NOTIFY? passive appActive=\(NSApp.isActive) focused=\(isFocused(pane))")
 #endif
-        guard !NSApp.isActive || !isFocused(pane) else { return }
+        guard isUnobserved(pane) else { return }
         SessionNotifier.shared.notify(paneID: pane.id, title: "Claude braucht Input",
                                       body: pane.currentDirectory.map {
                                           ($0 as NSString).abbreviatingWithTildeInPath
@@ -1577,7 +1590,7 @@ final class TerminalSplitView: NSView {
 #if DEBUG
         TerminalPane.statusLog("NOTIFY? native title=\(title ?? "-") appActive=\(NSApp.isActive) focused=\(isFocused(pane))")
 #endif
-        guard !NSApp.isActive || !isFocused(pane) else { return }
+        guard isUnobserved(pane) else { return }
         let fallback = pane.sessionState != .none ? "Claude braucht Input" : "Terminal-Glocke"
         let detail = body ?? pane.currentDirectory.map { ($0 as NSString).abbreviatingWithTildeInPath }
         SessionNotifier.shared.notify(paneID: pane.id, title: title ?? fallback, body: detail)

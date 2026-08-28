@@ -47,16 +47,14 @@ final class OverlayController {
         // KaTeX-Render-Fehler je Key → für Hover/Pin-Anzeige merken (#4)
         layer.onError = { [weak self] errs in self?.formulaErrors = errs }
 
-        // Bei formelrelevanten Einstellungsänderungen (Farbe/Scale/Spacing/Toggle) alles
-        // neu aufbauen und neu scannen. Akzentfarben-Änderungen (Caret/Kachelrahmen,
-        // bei adaptivem Akzent häufig!) lösen bewusst KEINEN KaTeX-Rebuild aus (#18).
+        // Formel-Einstellung (Farbe/Scale/Toggle) geändert → alles neu aufbauen und scannen.
+        // `FormulaSettings` enthält seit dem Settings-Umbau nur noch Formel-Optionen; die
+        // (bei adaptivem Akzent häufige) Akzentfarbe läuft über `ThemeStore` und kommt hier
+        // gar nicht erst an (#18). Zeilenabstand ändert die Zellhöhe → Kachel ruft
+        // `onNeedsFullRescan`.
         observer = NotificationCenter.default.addObserver(
-            forName: FormulaSettings.didChange,
-            object: nil,
-            queue: .main
-        ) { [weak self] note in
-            guard let change = note.userInfo?[FormulaSettings.changeKey] as? FormulaSettings.Change,
-                  change.affectsFormulas else { return }
+            forName: FormulaSettings.didChange, object: nil, queue: .main
+        ) { [weak self] _ in
             self?.invalidateAll()
             self?.scheduleRescan()
         }

@@ -1,31 +1,13 @@
 import AppKit
 import Combine
 
-/// Zentrale Einstellungen für die LaTeX-Formel-Darstellung.
-/// Persistiert in UserDefaults, broadcastet Änderungen via NotificationCenter.
+/// Einstellungen der LaTeX-Formel-Darstellung — und nur die (Akzent, Zeilenabstand, Schrift
+/// liegen seit dem Settings-Umbau in `ThemeStore`). Persistiert in UserDefaults; jede Änderung
+/// postet `didChange`, worauf der `OverlayController` alle Formeln neu rendert.
 final class FormulaSettings: ObservableObject {
 
     static let shared = FormulaSettings()
-
-    /// Notification, die nach jeder Einstellungsänderung gepostet wird.
-    /// `userInfo[changeKey]` trägt als `Change`, **welche** Einstellung sich geändert
-    /// hat — Observer reagieren nur auf die für sie relevanten Änderungen (#18).
     static let didChange = Notification.Name("FormulaSettings.didChange")
-    static let changeKey = "change"
-
-    /// Welche Einstellung sich geändert hat. `affectsFormulas` steuert, ob der
-    /// OverlayController alle Formeln verwerfen und neu rendern muss — die
-    /// Akzentfarbe (Caret + Kachelrahmen) betrifft Formeln nicht.
-    nonisolated enum Change {
-        case formulaColor, accentColor, isAdaptiveAccent, formulasEnabled, extraLineSpacing, formulaScale
-
-        var affectsFormulas: Bool {
-            switch self {
-            case .formulaColor, .formulasEnabled, .extraLineSpacing, .formulaScale: return true
-            case .accentColor, .isAdaptiveAccent: return false
-            }
-        }
-    }
 
     // MARK: - UserDefaults Keys
 
@@ -34,13 +16,7 @@ final class FormulaSettings: ObservableObject {
         static let formulaColorGreen = "LatexTerm.formulaColor.green"
         static let formulaColorBlue  = "LatexTerm.formulaColor.blue"
         static let formulaColorAlpha = "LatexTerm.formulaColor.alpha"
-        static let accentColorRed    = "LatexTerm.accentColor.red"
-        static let accentColorGreen  = "LatexTerm.accentColor.green"
-        static let accentColorBlue   = "LatexTerm.accentColor.blue"
-        static let accentColorAlpha  = "LatexTerm.accentColor.alpha"
-        static let isAdaptiveAccent  = "LatexTerm.isAdaptiveAccent"
         static let formulasEnabled   = "LatexTerm.formulasEnabled"
-        static let extraLineSpacing  = "LatexTerm.extraLineSpacing"
         static let formulaScale      = "LatexTerm.formulaScale"
     }
 
@@ -48,58 +24,37 @@ final class FormulaSettings: ObservableObject {
 
     /// Formeln ohne eigene Farbwahl folgen dem Theme-Vordergrund.
     static var defaultFormulaColor: NSColor { ThemeStore.shared.theme.foreground }
-    static let defaultAccentColor    = NSColor(red: 232/255.0, green: 94/255.0, blue: 62/255.0, alpha: 1.0)
-    /// 0 wie Ghostty: Zellhöhe = Font-Metrik (JetBrains Mono bringt ~1,2 Zeilenhöhe mit).
-    static let defaultLineSpacing: CGFloat = 0
     static let defaultFormulaScale: CGFloat = 1.0
-    static let minLineSpacing: CGFloat = 0
-    static let maxLineSpacing: CGFloat = 40
     static let minFormulaScale: CGFloat = 0.5
     static let maxFormulaScale: CGFloat = 2.0
-    static let lineSpacingStep: CGFloat = 2
     static let formulaScaleStep: CGFloat = 0.1
 
     // MARK: - Published Properties
 
-    @Published var formulaColor: NSColor {
-        didSet { saveColor(formulaColor); postChange(.formulaColor) }
+    @Published var formulaColor: NSColor = FormulaSettings.defaultFormulaColor {
+        didSet { guard !loading else { return }; saveColor(formulaColor); post() }
     }
 
-    @Published var accentColor: NSColor {
-        didSet { saveAccentColor(accentColor); postChange(.accentColor) }
+    @Published var formulasEnabled: Bool = true {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(formulasEnabled, forKey: Keys.formulasEnabled); post() }
     }
 
-    @Published var isAdaptiveAccent: Bool {
-        didSet {
-            UserDefaults.standard.set(isAdaptiveAccent, forKey: Keys.isAdaptiveAccent)
-            postChange(.isAdaptiveAccent)
-        }
-    }
-
-    @Published var formulasEnabled: Bool {
-        didSet {
-            UserDefaults.standard.set(formulasEnabled, forKey: Keys.formulasEnabled)
-            postChange(.formulasEnabled)
-        }
-    }
-
-    @Published var extraLineSpacing: CGFloat {
-        didSet {
-            UserDefaults.standard.set(Double(extraLineSpacing), forKey: Keys.extraLineSpacing)
-            postChange(.extraLineSpacing)
-        }
-    }
-
-    @Published var formulaScale: CGFloat {
-        didSet {
-            UserDefaults.standard.set(Double(formulaScale), forKey: Keys.formulaScale)
-            postChange(.formulaScale)
-        }
+    @Published var formulaScale: CGFloat = FormulaSettings.defaultFormulaScale {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(Double(formulaScale), forKey: Keys.formulaScale); post() }
     }
 
     // MARK: - Init
 
-    private init() {
+    /// Während `load()` schreiben/posten die Setter nicht (sonst würde z. B. die Theme-FG
+    /// als „eigene“ Formelfarbe gespeichert).
+    private var loading = false
+
+    private init() { load() }
+
+    /// Aus UserDefaults (neu) lesen — Start und „Alle Einstellungen zurücksetzen“.
+    func load() {
+        loading = true
+        defer { loading = false }
         let d = UserDefaults.standard
 
         // Formelfarbe laden (ohne gespeicherte Wahl: Theme-Vordergrund)
@@ -116,34 +71,16 @@ final class FormulaSettings: ObservableObject {
         // geladener NSColor wäre nie `==`/komponentengleich zu den gespeicherten Werten.
         formulaColor = NSColor(srgbRed: r, green: g, blue: b, alpha: a)
 
-        // Akzentfarbe laden
-        let ar = d.object(forKey: Keys.accentColorRed) != nil
-            ? CGFloat(d.double(forKey: Keys.accentColorRed)) : CGFloat(232/255.0)
-        let ag = d.object(forKey: Keys.accentColorGreen) != nil
-            ? CGFloat(d.double(forKey: Keys.accentColorGreen)) : CGFloat(94/255.0)
-        let ab = d.object(forKey: Keys.accentColorBlue) != nil
-            ? CGFloat(d.double(forKey: Keys.accentColorBlue)) : CGFloat(62/255.0)
-        let aa = d.object(forKey: Keys.accentColorAlpha) != nil
-            ? CGFloat(d.double(forKey: Keys.accentColorAlpha)) : CGFloat(1.0)
-        accentColor = NSColor(srgbRed: ar, green: ag, blue: ab, alpha: aa)
-
-        // isAdaptiveAccent laden (default: false)
-        isAdaptiveAccent = d.object(forKey: Keys.isAdaptiveAccent) != nil
-            ? d.bool(forKey: Keys.isAdaptiveAccent) : false
-
         // formulasEnabled laden (default: true)
         formulasEnabled = d.object(forKey: Keys.formulasEnabled) != nil
             ? d.bool(forKey: Keys.formulasEnabled) : true
-
-        // Zeilenabstand laden (default: 0)
-        let spacing = d.object(forKey: Keys.extraLineSpacing) != nil
-            ? CGFloat(d.double(forKey: Keys.extraLineSpacing)) : Self.defaultLineSpacing
-        extraLineSpacing = max(Self.minLineSpacing, min(Self.maxLineSpacing, spacing))
 
         // Formelgröße laden (default: 1.0)
         let scale = d.object(forKey: Keys.formulaScale) != nil
             ? CGFloat(d.double(forKey: Keys.formulaScale)) : Self.defaultFormulaScale
         formulaScale = max(Self.minFormulaScale, min(Self.maxFormulaScale, scale))
+        loading = false
+        post()
     }
 
     // MARK: - Helpers
@@ -157,33 +94,11 @@ final class FormulaSettings: ObservableObject {
         d.set(Double(rgb.alphaComponent), forKey: Keys.formulaColorAlpha)
     }
 
-    private func saveAccentColor(_ c: NSColor) {
-        guard let rgb = c.usingColorSpace(.sRGB) else { return }
-        let d = UserDefaults.standard
-        d.set(Double(rgb.redComponent),   forKey: Keys.accentColorRed)
-        d.set(Double(rgb.greenComponent), forKey: Keys.accentColorGreen)
-        d.set(Double(rgb.blueComponent),  forKey: Keys.accentColorBlue)
-        d.set(Double(rgb.alphaComponent), forKey: Keys.accentColorAlpha)
-    }
-
-    private func postChange(_ change: Change) {
-        NotificationCenter.default.post(name: Self.didChange, object: self,
-                                        userInfo: [Self.changeKey: change])
+    private func post() {
+        NotificationCenter.default.post(name: Self.didChange, object: self)
     }
 
     // MARK: - Mutating Actions (für Menüleiste)
-
-    func increaseLineSpacing() {
-        extraLineSpacing = min(Self.maxLineSpacing, extraLineSpacing + Self.lineSpacingStep)
-    }
-
-    func decreaseLineSpacing() {
-        extraLineSpacing = max(Self.minLineSpacing, extraLineSpacing - Self.lineSpacingStep)
-    }
-
-    func resetLineSpacing() {
-        extraLineSpacing = Self.defaultLineSpacing
-    }
 
     func increaseFormulaScale() {
         formulaScale = min(Self.maxFormulaScale,
@@ -199,48 +114,6 @@ final class FormulaSettings: ObservableObject {
         formulaScale = Self.defaultFormulaScale
     }
 
-    func openColorPicker(for target: FormulaColorProxy.ColorTarget) {
-        FormulaColorProxy.shared.currentTarget = target
-        let panel = NSColorPanel.shared
-        panel.color = target == .formula ? formulaColor : accentColor
-        panel.isContinuous = true
-        panel.showsAlpha = false
-        panel.orderFront(nil)
-
-        // NSColorPanel target/action auf AppDelegate-Proxy setzen
-        NSColorPanel.shared.setTarget(FormulaColorProxy.shared)
-        NSColorPanel.shared.setAction(#selector(FormulaColorProxy.colorChanged(_:)))
-    }
-
-    func openColorPicker() {
-        openColorPicker(for: .formula)
-    }
-
-    func openAccentColorPicker() {
-        openColorPicker(for: .accent)
-    }
-}
-
-// MARK: - Proxy für NSColorPanel-Callback
-
-/// NSColorPanel braucht ein Objective-C-kompatibles target/action.
-/// Dieser Proxy leitet die Farbänderung an FormulaSettings weiter.
-final class FormulaColorProxy: NSObject {
-    enum ColorTarget {
-        case formula
-        case accent
-    }
-
-    static let shared = FormulaColorProxy()
-    var currentTarget: ColorTarget = .formula
-
-    @objc func colorChanged(_ sender: NSColorPanel) {
-        if currentTarget == .formula {
-            FormulaSettings.shared.formulaColor = sender.color
-        } else {
-            FormulaSettings.shared.accentColor = sender.color
-        }
-    }
 }
 
 // MARK: - Double rounding helper

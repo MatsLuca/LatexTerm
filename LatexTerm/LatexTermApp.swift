@@ -104,8 +104,7 @@ struct LatexTermApp: App {
     @ObservedObject private var settings = FormulaSettings.shared
     @ObservedObject private var homeFocus = HomeFocus.shared
     @ObservedObject private var themeStore = ThemeStore.shared
-    /// Reduzierter Baum (nur Projekte und die Ordner dorthin) — gilt für alle Home-Kacheln.
-    @AppStorage("LatexTerm.homeOnlyProjects") private var onlyProjects = false
+    @ObservedObject private var cockpit = CockpitSettings.shared
 
     var body: some Scene {
         WindowGroup("LatexTerm") {
@@ -154,9 +153,7 @@ struct LatexTermApp: App {
                     .keyboardShortcut("e", modifiers: .command)
                     .disabled(aus)
                 Divider()
-                Toggle("Nur Projekte", isOn: Binding(
-                    get: { onlyProjects },
-                    set: { onlyProjects = $0; NotificationCenter.default.post(name: .latexTermHomeTreeChanged, object: nil) }))
+                Toggle("Nur Projekte", isOn: $cockpit.homeOnlyProjects)
                     .keyboardShortcut("b", modifiers: [.command, .shift])
                     .disabled(aus)
                 Button("Alles ausklappen") { HomeFocus.shared.active?.menuExpandAll() }
@@ -189,10 +186,6 @@ struct LatexTermApp: App {
                 Toggle("LaTeX-Formeln anzeigen", isOn: $settings.formulasEnabled)
                     .keyboardShortcut("l", modifiers: .command)
 
-                Button("Formelfarbe…") {
-                    settings.openColorPicker()
-                }
-
                 Menu("Formelgröße") {
                     Button("Erhöhen") {
                         settings.increaseFormulaScale()
@@ -212,38 +205,34 @@ struct LatexTermApp: App {
 
                 Divider()
 
-                // MARK: Terminal-Optionen
-                Toggle("Automatische Akzentfarbe", isOn: $settings.isAdaptiveAccent)
+                // MARK: Terminal-Optionen — das Menü trägt nur die Tastenkürzel; alles
+                // Weitere (Farben, Schrift, Cursor …) steht im Einstellungen-Fenster (⌘,).
+                Toggle("Automatische Akzentfarbe", isOn: $themeStore.isAdaptiveAccent)
                     .keyboardShortcut("a", modifiers: [.command, .control])
 
-                Button("Terminal-Akzentfarbe…") {
-                    settings.openAccentColorPicker()
-                }
-                .disabled(settings.isAdaptiveAccent)
-
                 Menu("Zeilenabstand") {
-                    Button("Erhöhen") {
-                        settings.increaseLineSpacing()
-                    }
-                    .keyboardShortcut("+", modifiers: [.command, .shift])
-
-                    Button("Verringern") {
-                        settings.decreaseLineSpacing()
-                    }
-                    .keyboardShortcut("-", modifiers: [.command, .shift])
-
-                    Button("Zurücksetzen  (aktuell: \(Int(settings.extraLineSpacing)) px)") {
-                        settings.resetLineSpacing()
+                    Button("Erhöhen") { themeStore.increaseLineSpacing() }
+                        .keyboardShortcut("+", modifiers: [.command, .shift])
+                    Button("Verringern") { themeStore.decreaseLineSpacing() }
+                        .keyboardShortcut("-", modifiers: [.command, .shift])
+                    Button("Zurücksetzen  (aktuell: \(Int(themeStore.lineSpacing)) px)") {
+                        themeStore.resetLineSpacing()
                     }
                     .keyboardShortcut("0", modifiers: [.command, .shift])
+                }
+
+                Divider()
+
+                Button("Einstellungen…") {
+                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
                 }
             }
         }
 
         // Natives Einstellungen-Fenster (⌘, — der Menüpunkt "Einstellungen…" im
-        // App-Menü kommt mit der Settings-Szene automatisch).
+        // App-Menü kommt mit der Settings-Szene automatisch). Aufbau: `Settings/`.
         Settings {
-            SettingsView()
+            SettingsWindow()
         }
     }
 }

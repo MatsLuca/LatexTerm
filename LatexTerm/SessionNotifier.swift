@@ -17,7 +17,6 @@ final class SessionNotifier: NSObject, UNUserNotificationCenterDelegate {
     /// Letzter Post je Pane: Bell (sofort) und passive Erkennung (~1,5 s später)
     /// melden denselben Moment — der Cooldown verhindert das Doppel-Banner.
     private var lastPost: [UUID: Date] = [:]
-    private static let cooldown: TimeInterval = 5
 
     private override init() {
         super.init()
@@ -25,7 +24,9 @@ final class SessionNotifier: NSObject, UNUserNotificationCenterDelegate {
     }
 
     func notify(paneID: UUID, title: String, body: String?) {
-        if let last = lastPost[paneID], Date().timeIntervalSince(last) < Self.cooldown {
+        let cockpit = CockpitSettings.shared
+        guard cockpit.notificationsEnabled else { return }
+        if let last = lastPost[paneID], Date().timeIntervalSince(last) < cockpit.notificationCooldown {
 #if DEBUG
             TerminalPane.statusLog("POST skipped (cooldown)")
 #endif

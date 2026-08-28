@@ -42,15 +42,8 @@ final class OverlayHost: NSView {
 }
 
 final class LatexTerminalView: LocalProcessTerminalView {
-    static let fontSizeKey = "LatexTerm.fontSize"
-    /// Ghostty-Standard (Runde 27): JetBrains Mono NL (gebündelt, `AppFonts`) in 20 pt.
-    static let defaultFontSize: CGFloat = 20
-    static let minFontSize: CGFloat = 6
-    static let maxFontSize: CGFloat = 48
-    /// Schriftgröße ist global: eine Kachel ändert sie, alle übernehmen sie (Cmd ±/0
-    /// wirkt damit gleichzeitig über alle Splits). userInfo["size"] = neue Größe.
-    static let fontDidChange = Notification.Name("LatexTerm.fontDidChange")
-
+    /// Schrift (Familie + Größe) kommt aus `ThemeStore` — global, eine Kachel ändert per
+    /// ⌘±/0, alle übernehmen über `ThemeStore.didChange(.font)`.
     private var fontObserver: NSObjectProtocol?
 
     let overlay = OverlayHost()
@@ -85,15 +78,12 @@ final class LatexTerminalView: LocalProcessTerminalView {
         overlay.frame = bounds
         overlay.autoresizingMask = [.width, .height]
         addSubview(overlay)
-        font = AppFonts.mono(size: Self.storedFontSize())
-        // Größen-/Familienänderung einer beliebigen Kachel auch hier anwenden → alle synchron.
-        // Ohne "size" im userInfo (Familienwechsel) bleibt die Größe, die Familie wird neu gelesen.
+        font = AppFonts.mono(size: ThemeStore.shared.fontSize)
         fontObserver = NotificationCenter.default.addObserver(
-            forName: Self.fontDidChange, object: nil, queue: .main
+            forName: ThemeStore.didChange, object: nil, queue: .main
         ) { [weak self] note in
-            guard let self else { return }
-            let size = note.userInfo?["size"] as? CGFloat ?? self.font.pointSize
-            self.applyFont(size: size)
+            guard let self, note.userInfo?[ThemeStore.changeKey] as? ThemeStore.Change == .font else { return }
+            self.applyFont(size: ThemeStore.shared.fontSize)
         }
     }
 
@@ -258,7 +248,7 @@ final class LatexTerminalView: LocalProcessTerminalView {
             adjustFont(by: -1); return true
         }
         if !shifted, a == "0" || b == "0" {
-            setFont(size: Self.defaultFontSize); return true
+            ThemeStore.shared.fontSize = ThemeStore.defaultFontSize; return true
         }
         return super.performKeyEquivalent(with: event)
     }
@@ -267,26 +257,9 @@ final class LatexTerminalView: LocalProcessTerminalView {
         return lineCellSize
     }
 
-    /// Aktuelle Terminal-Schriftgröße (⌘+/−, persistiert) — auch die Home-Kachel zieht sie.
-    static func storedFontSize() -> CGFloat {
-        let v = UserDefaults.standard.double(forKey: fontSizeKey)
-        guard v > 0 else { return defaultFontSize }
-        return CGFloat(min(max(v, Double(minFontSize)), Double(maxFontSize)))
-    }
-
+    /// ⌘±: global über den Store (der clampt und broadcastet, `applyFont` übernimmt hier).
     private func adjustFont(by delta: CGFloat) {
-        let new = max(Self.minFontSize, min(Self.maxFontSize, font.pointSize + delta))
-        setFont(size: new)
-    }
-
-    /// Vom Shortcut ausgelöst: global persistieren und an alle Kacheln broadcasten
-    /// (inkl. dieser – die Übernahme passiert im `fontDidChange`-Observer via `applyFont`).
-    private func setFont(size: CGFloat) {
-        guard size != font.pointSize else { return }
-        UserDefaults.standard.set(Double(size), forKey: Self.fontSizeKey)
-        NotificationCenter.default.post(
-            name: Self.fontDidChange, object: nil, userInfo: ["size": size]
-        )
+        ThemeStore.shared.fontSize += delta
     }
 
     /// Wendet Größe + gewählte Familie lokal an (vom Broadcast) und scannt die Overlays neu.

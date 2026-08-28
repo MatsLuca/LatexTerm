@@ -10,8 +10,8 @@ enum AppearanceMigration {
     static func run() {
         let d = UserDefaults.standard
         guard !d.bool(forKey: marker) else { return }
-        d.set(20.0, forKey: LatexTerminalView.fontSizeKey)
-        d.set(0.0, forKey: "LatexTerm.extraLineSpacing")
+        d.set(20.0, forKey: ThemeStore.Keys.fontSize)
+        d.set(0.0, forKey: ThemeStore.Keys.lineSpacing)
         d.set(true, forKey: marker)
     }
 }

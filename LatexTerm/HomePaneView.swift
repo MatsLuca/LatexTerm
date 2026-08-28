@@ -148,11 +148,9 @@ struct LaunchRequest {
 
 /// Lädt die Projektliste über das externe CLI `projekte` (Werkstatt-Datenschicht).
 /// Die App kennt keine Pfade: Login-Shell (`zsh -lc`) liefert PATH/.local/bin; der
-/// Befehl ist per UserDefaults `LatexTerm.projekteCommand` übersteuerbar.
+/// Befehl steht in den Einstellungen (Allgemein → Home-Kachel, `CockpitSettings`).
 enum ProjekteLoader {
-    static var command: String {
-        UserDefaults.standard.string(forKey: "LatexTerm.projekteCommand") ?? "projekte --json"
-    }
+    static var command: String { CockpitSettings.shared.projekteCommand }
 
     static func load(completion: @escaping (Result<ProjekteData, LoaderError>) -> Void) {
         DispatchQueue.global(qos: .userInitiated).async {
@@ -207,9 +205,7 @@ struct LimitsData: Decodable {
 }
 
 enum LimitsLoader {
-    static var command: String {
-        UserDefaults.standard.string(forKey: "LatexTerm.limitsCommand") ?? "projekte limits --json"
-    }
+    static var command: String { CockpitSettings.shared.limitsCommand }
 
     /// Still: schlägt der Befehl fehl (kein Token, kein Netz, Befehl gar nicht da), liefert er nil
     /// und die Zeile bleibt einfach leer — Kontingente sind Beiwerk, kein Grund für eine Fehlermeldung.
@@ -443,7 +439,7 @@ final class HomePaneView: NSView {
     /// Reduzierter Baum: nur Projekte/Bereiche (CLAUDE.md oder Sessions) und die Ordner, die zu
     /// ihnen führen. Alles andere ist grau und im Weg — `relevant` hält Projektpfade + Elternpfade.
     private var relevant: Set<String> = []
-    private var onlyProjects = UserDefaults.standard.bool(forKey: "LatexTerm.homeOnlyProjects")
+    private var onlyProjects = CockpitSettings.shared.homeOnlyProjects
     private var allFolders: [Node] = []          // flacher Index für die Suche (bis Tiefe 4)
     private var actions: [Action] = [] { didSet { primaryCount = Self.primaryCount(actions) } }
     /// Zeilen vor der ersten Listenzeile sind Knöpfe (höher, mit Fläche).
@@ -494,12 +490,12 @@ final class HomePaneView: NSView {
     static var orange: NSColor { claudePalette["orange"].flatMap { NSColor(ghostty: $0) } ?? NSColor(hex: 0xd97757) }
     static var pink: NSColor { claudePalette["pink"].flatMap { NSColor(ghostty: $0) } ?? NSColor(hex: 0xc46686) }
     /// Folgt der Terminalgröße, aber gedeckelt: der Baum soll bei 20 pt Terminal nicht mitwachsen.
-    static var base: CGFloat { min(LatexTerminalView.storedFontSize(), 18) }
+    static var base: CGFloat { min(ThemeStore.shared.fontSize, 18) }
     static func mono(_ delta: CGFloat = 0, _ w: NSFont.Weight = .regular) -> NSFont {
         AppFonts.mono(size: base + delta, weight: w)
     }
     static let treeExcludes: Set<String> = ["node_modules", ".build", "venv", "DerivedData", "7_AppData", "__pycache__", "Library"]
-    private var accent: NSColor { FormulaSettings.shared.accentColor }
+    private var accent: NSColor { ThemeStore.shared.accentColor }
 
     override init(frame: NSRect) {
         super.init(frame: frame)
@@ -1308,7 +1304,7 @@ final class HomePaneView: NSView {
 
     /// Umschalten kommt als Notification (die Einstellung gilt für alle Home-Kacheln).
     private func applyTreeMode() {
-        let want = UserDefaults.standard.bool(forKey: "LatexTerm.homeOnlyProjects")
+        let want = CockpitSettings.shared.homeOnlyProjects
         guard want != onlyProjects else { return }
         onlyProjects = want
         let keep = selectedNode?.path

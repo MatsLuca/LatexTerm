@@ -11,7 +11,6 @@ import CoreText
 /// für Bold/Italic nutzt.
 enum AppFonts {
     static let bundledFamily = "JetBrains Mono NL"
-    static let fontFamilyKey = "LatexTerm.fontFamily"
 
     /// Einmal pro Prozess: alle `.ttf` im Bundle registrieren.
     static let registerBundled: Void = {
@@ -25,11 +24,8 @@ enum AppFonts {
         }
     }()
 
-    /// Gewählte Familie; leer = System-Monospace (SF Mono).
-    static var storedFamily: String {
-        get { UserDefaults.standard.string(forKey: fontFamilyKey) ?? bundledFamily }
-        set { UserDefaults.standard.set(newValue, forKey: fontFamilyKey) }
-    }
+    /// Gewählte Familie (`ThemeStore.fontFamily`); leer = System-Monospace (SF Mono).
+    static var storedFamily: String { ThemeStore.shared.fontFamily }
 
     /// Terminal-/UI-Schrift in der gewählten Familie. Gewichte ≥ semibold nehmen den Bold-Schnitt;
     /// fehlt die Familie (nicht installiert, Tippfehler), fällt alles auf SF Mono zurück.

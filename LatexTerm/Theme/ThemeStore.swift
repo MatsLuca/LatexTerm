@@ -1,10 +1,11 @@
 import AppKit
 import Combine
 
-/// Einzige Wahrheit für die Darstellung: aktuelles Theme + die Darstellungs-Schalter,
-/// die nicht zur Formel-Welt (`FormulaSettings`) gehören. Persistiert in UserDefaults,
-/// meldet Änderungen per `didChange` — jede Kachel, das Fenster und die Home-Kachel
-/// hängen daran.
+/// Einzige Wahrheit für die Darstellung: Theme, Schrift (Familie/Größe/Zeilenabstand),
+/// Kachel-Akzent, Cursor, Prompt-Stil — alles, was nicht Formel (`FormulaSettings`) oder
+/// Cockpit-Verhalten (`CockpitSettings`) ist. Persistiert in UserDefaults, meldet Änderungen
+/// per `didChange`; `userInfo[changeKey]` sagt als `Change`, **was** sich geändert hat, damit
+/// Kacheln nicht bei jeder (adaptiv gesetzten) Akzentfarbe das ganze Theme neu installieren.
 ///
 /// Themes kommen aus drei Quellen, in dieser Reihenfolge: eingebaut (`Dark+`, `Ember`),
 /// `~/.config/ghostty/themes/<Name>`, Ghostty.app-Bundle (`…/Resources/ghostty/themes/`).
@@ -12,6 +13,13 @@ import Combine
 final class ThemeStore: ObservableObject {
     static let shared = ThemeStore()
     static let didChange = Notification.Name("LatexTerm.ThemeStore.didChange")
+    static let changeKey = "change"
+
+    /// Was sich geändert hat. Observer filtern darauf (Kachel: Theme neu installieren nur bei
+    /// `.theme`/`.appearance`, Schrift nur bei `.font`, …).
+    nonisolated enum Change {
+        case theme, appearance, font, lineSpacing, accent, adaptiveAccent, prompt, panes
+    }
 
     enum Keys {
         static let theme = "LatexTerm.theme"
@@ -30,6 +38,12 @@ final class ThemeStore: ObservableObject {
         static let promptColoredColor = "LatexTerm.promptColoredColor"   // "#rrggbb"
         /// Ghostty-Config-Theme (Basis + Overrides) als `key = value`-Zeilen.
         static let customTheme = "LatexTerm.customTheme"
+        static let fontFamily = "LatexTerm.fontFamily"           // leer = SF Mono
+        static let fontSize = "LatexTerm.fontSize"
+        static let lineSpacing = "LatexTerm.extraLineSpacing"
+        static let accentColor = "LatexTerm.accentColor"         // + .red/.green/.blue/.alpha (historisch)
+        static let isAdaptiveAccent = "LatexTerm.isAdaptiveAccent"
+        static let focusDimming = "LatexTerm.focusDimming"
     }
 
     /// Name des aus `~/.config/ghostty/config` gebauten Themes (Basis-Theme + Farb-Overrides).
@@ -37,8 +51,16 @@ final class ThemeStore: ObservableObject {
 
     static let defaultPadding: CGFloat = 12
     static let paddingRange: ClosedRange<CGFloat> = 0...24
+    /// Ghostty-Standard (Runde 27): JetBrains Mono NL in 20 pt.
+    static let defaultFontSize: CGFloat = 20
+    static let fontSizeRange: ClosedRange<CGFloat> = 6...48
+    /// 0 wie Ghostty: Zellhöhe = Font-Metrik (JetBrains Mono bringt ~1,2 Zeilenhöhe mit).
+    static let defaultLineSpacing: CGFloat = 0
+    static let lineSpacingRange: ClosedRange<CGFloat> = 0...40
+    static let lineSpacingStep: CGFloat = 2
+    static let defaultAccentColor = NSColor(hex: 0xe85e3e)
 
-    @Published private(set) var theme: TerminalTheme
+    @Published private(set) var theme: TerminalTheme = .darkPlus
 
     /// Name des gewählten Themes (Menü/Settings binden hieran).
     var themeName: String {
@@ -47,34 +69,34 @@ final class ThemeStore: ObservableObject {
             guard newValue != theme.name, let t = Self.resolve(name: newValue) else { return }
             theme = t
             UserDefaults.standard.set(newValue, forKey: Keys.theme)
-            post()
+            post(.theme)
         }
     }
 
     /// Fetter Text in ANSI 0–7 springt auf die helle Palette (Terminal.app-Art). Ghostty: aus.
-    @Published var boldIsBright: Bool {
-        didSet { UserDefaults.standard.set(boldIsBright, forKey: Keys.boldIsBright); post() }
+    @Published var boldIsBright: Bool = false {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(boldIsBright, forKey: Keys.boldIsBright); post(.appearance) }
     }
 
     /// Block-Cursor blinkt. Ghostty: aus.
-    @Published var cursorBlink: Bool {
-        didSet { UserDefaults.standard.set(cursorBlink, forKey: Keys.cursorBlink); post() }
+    @Published var cursorBlink: Bool = false {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(cursorBlink, forKey: Keys.cursorBlink); post(.appearance) }
     }
 
     /// Cursor in der Theme-Cursorfarbe (Ghostty: Weiß) statt in der Projekt-/Akzentfarbe.
-    @Published var cursorThemeColor: Bool {
-        didSet { UserDefaults.standard.set(cursorThemeColor, forKey: Keys.cursorThemeColor); post() }
+    @Published var cursorThemeColor: Bool = false {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(cursorThemeColor, forKey: Keys.cursorThemeColor); post(.appearance) }
     }
 
     /// macOS-Font-Smoothing („Schrift verstärken“, Ghostty `font-thicken`): Striche ~1 Subpixel dicker.
-    @Published var fontThicken: Bool {
-        didSet { UserDefaults.standard.set(fontThicken, forKey: Keys.fontThicken); post() }
+    @Published var fontThicken: Bool = false {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(fontThicken, forKey: Keys.fontThicken); post(.appearance) }
     }
 
     /// Farbige Akzentrahmen + Hüll-Tint der Kacheln (Session-Kennung). Aus = nur der Grund; Caret,
     /// HUD-Punkt und Home-Ring tragen die Projektfarbe weiter.
-    @Published var paneBorders: Bool {
-        didSet { UserDefaults.standard.set(paneBorders, forKey: Keys.paneBorders); post() }
+    @Published var paneBorders: Bool = true {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(paneBorders, forKey: Keys.paneBorders); post(.panes) }
     }
 
     /// Experimentell: getippter Text in Claude Codes Eingabe-Box (`PromptBoxLocator` findet die
@@ -91,40 +113,92 @@ final class ThemeStore: ObservableObject {
             }
         }
     }
-    @Published var promptTintMode: PromptTintMode {
-        didSet { UserDefaults.standard.set(promptTintMode.rawValue, forKey: Keys.promptTintMode); post() }
+    @Published var promptTintMode: PromptTintMode = .off {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(promptTintMode.rawValue, forKey: Keys.promptTintMode); post(.prompt) }
     }
     var promptTint: Bool { promptTintMode != .off }
 
     /// Glühender Prompt-Text (weicher Schein in der Textfarbe), kombinierbar mit jedem Modus.
-    @Published var promptGlow: Bool {
-        didSet { UserDefaults.standard.set(promptGlow, forKey: Keys.promptGlow); post() }
+    @Published var promptGlow: Bool = false {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(promptGlow, forKey: Keys.promptGlow); post(.prompt) }
     }
 
     /// Eigene Prompt-Farbe (Modus „Eigene Farbe“).
-    @Published var promptColor: NSColor {
-        didSet { UserDefaults.standard.set(promptColor.ghosttyHex, forKey: Keys.promptColor); post() }
+    @Published var promptColor: NSColor = NSColor(hex: 0x29b8db) {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(promptColor.ghosttyHex, forKey: Keys.promptColor); post(.prompt) }
     }
 
     /// Auch von Claude Code selbst gefärbten Prompt-Text (Slash-Commands, @-Erwähnungen) übersteuern.
-    @Published var promptOverrideColored: Bool {
-        didSet { UserDefaults.standard.set(promptOverrideColored, forKey: Keys.promptOverrideColored); post() }
+    @Published var promptOverrideColored: Bool = false {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(promptOverrideColored, forKey: Keys.promptOverrideColored); post(.prompt) }
     }
     /// … dafür eine eigene Farbe statt der Prompt-Farbe nehmen.
-    @Published var promptColoredOwnColor: Bool {
-        didSet { UserDefaults.standard.set(promptColoredOwnColor, forKey: Keys.promptColoredOwnColor); post() }
+    @Published var promptColoredOwnColor: Bool = false {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(promptColoredOwnColor, forKey: Keys.promptColoredOwnColor); post(.prompt) }
     }
-    @Published var promptColoredColor: NSColor {
-        didSet { UserDefaults.standard.set(promptColoredColor.ghosttyHex, forKey: Keys.promptColoredColor); post() }
+    @Published var promptColoredColor: NSColor = NSColor(hex: 0xd670d6) {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(promptColoredColor.ghosttyHex, forKey: Keys.promptColoredColor); post(.prompt) }
+    }
+
+    /// Terminal-Schriftfamilie (gebündelte JetBrains Mono NL, installierte Monospace-Familie
+    /// oder leer = SF Mono). Alle Kacheln, Home und Pillen folgen (`AppFonts.mono`).
+    @Published var fontFamily: String = AppFonts.bundledFamily {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(fontFamily, forKey: Keys.fontFamily); post(.font) }
+    }
+
+    /// Schriftgröße ist global: ⌘±/0 in einer Kachel ändert sie, alle übernehmen sie.
+    @Published var fontSize: CGFloat = ThemeStore.defaultFontSize {
+        didSet {guard !loading else { return }; 
+            let c = Self.clamp(fontSize, Self.fontSizeRange)
+            if c != fontSize { fontSize = c; return }
+            UserDefaults.standard.set(Double(fontSize), forKey: Keys.fontSize); post(.font)
+        }
+    }
+
+    /// Zusätzlicher Zeilenabstand in px (SwiftTerm `extraLineSpacing`).
+    @Published var lineSpacing: CGFloat = ThemeStore.defaultLineSpacing {
+        didSet {guard !loading else { return }; 
+            let c = Self.clamp(lineSpacing, Self.lineSpacingRange)
+            if c != lineSpacing { lineSpacing = c; return }
+            UserDefaults.standard.set(Double(lineSpacing), forKey: Keys.lineSpacing); post(.lineSpacing)
+        }
+    }
+
+    /// Globale Akzentfarbe (Caret, Kachelrahmen, Home-Ring), solange keine Kachel eine eigene
+    /// trägt (OSC-Override / Projektfarbe). Bei adaptivem Akzent schreibt die Kontrastanalyse hierher.
+    @Published var accentColor: NSColor = ThemeStore.defaultAccentColor {
+        didSet { guard !loading else { return }; Self.saveColor(accentColor, key: Keys.accentColor); post(.accent) }
+    }
+
+    /// Akzentfarbe aus dem Kachelinhalt ableiten (Kontrastanalyse) statt fester Wahl.
+    @Published var isAdaptiveAccent: Bool = false {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(isAdaptiveAccent, forKey: Keys.isAdaptiveAccent); post(.adaptiveAccent) }
+    }
+
+    /// Unfokussierte Kacheln abdunkeln (Alpha 0,65). Aus = alle Kacheln voll sichtbar,
+    /// Fokus zeigt nur noch der Rahmen.
+    @Published var focusDimming: Bool = true {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(focusDimming, forKey: Keys.focusDimming); post(.panes) }
     }
 
     /// Innenabstand Terminal-Text ↔ Kachelrand (Ghostty `window-padding` 15; hier 12, weil bei
     /// mehreren Kacheln der 8-px-Steg dazukommt).
-    @Published var padding: CGFloat {
-        didSet { UserDefaults.standard.set(Double(padding), forKey: Keys.padding); post() }
+    @Published var padding: CGFloat = ThemeStore.defaultPadding {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(Double(padding), forKey: Keys.padding); post(.appearance) }
     }
 
-    private init() {
+    /// Während `load()` schreiben/posten die Setter nicht (sonst würde z. B. die Theme-FG
+    /// als „eigene“ Formelfarbe gespeichert).
+    private var loading = false
+
+    private init() { load() }
+
+    /// Alles aus UserDefaults (neu) lesen — beim Start und nach „Alle Einstellungen zurücksetzen“.
+    /// Läuft über die normalen Setter (schreibt Defaults zurück, postet Änderungen) — bewusst, damit
+    /// alle Kacheln nach einem Reset denselben Weg gehen wie bei jeder Einzeländerung.
+    func load() {
+        loading = true
+        defer { loading = false }
         let d = UserDefaults.standard
         let name = d.string(forKey: Keys.theme) ?? TerminalTheme.darkPlus.name
         theme = Self.resolve(name: name) ?? .darkPlus
@@ -144,11 +218,53 @@ final class ThemeStore: ObservableObject {
         promptColoredOwnColor = d.object(forKey: Keys.promptColoredOwnColor) != nil ? d.bool(forKey: Keys.promptColoredOwnColor) : false
         promptColoredColor = d.string(forKey: Keys.promptColoredColor).flatMap { NSColor(ghostty: $0) } ?? NSColor(hex: 0xd670d6)
         let pad = d.object(forKey: Keys.padding) != nil ? CGFloat(d.double(forKey: Keys.padding)) : Self.defaultPadding
-        padding = min(max(pad, Self.paddingRange.lowerBound), Self.paddingRange.upperBound)
+        padding = Self.clamp(pad, Self.paddingRange)
+        fontFamily = d.string(forKey: Keys.fontFamily) ?? AppFonts.bundledFamily
+        let size = d.double(forKey: Keys.fontSize)
+        fontSize = size > 0 ? Self.clamp(CGFloat(size), Self.fontSizeRange) : Self.defaultFontSize
+        let spacing = d.object(forKey: Keys.lineSpacing) != nil ? CGFloat(d.double(forKey: Keys.lineSpacing)) : Self.defaultLineSpacing
+        lineSpacing = Self.clamp(spacing, Self.lineSpacingRange)
+        accentColor = Self.loadColor(key: Keys.accentColor, default: Self.defaultAccentColor)
+        isAdaptiveAccent = d.object(forKey: Keys.isAdaptiveAccent) != nil ? d.bool(forKey: Keys.isAdaptiveAccent) : false
+        focusDimming = d.object(forKey: Keys.focusDimming) != nil ? d.bool(forKey: Keys.focusDimming) : true
+        loading = false
+        for c: Change in [.theme, .font, .lineSpacing, .accent, .prompt, .panes] { post(c) }
     }
 
-    private func post() {
-        NotificationCenter.default.post(name: Self.didChange, object: self)
+    // MARK: Menü-Aktionen (Schritte wie die Tastenkürzel)
+
+    func increaseLineSpacing() { lineSpacing += Self.lineSpacingStep }
+    func decreaseLineSpacing() { lineSpacing -= Self.lineSpacingStep }
+    func resetLineSpacing() { lineSpacing = Self.defaultLineSpacing }
+
+    private func post(_ change: Change) {
+        NotificationCenter.default.post(name: Self.didChange, object: self,
+                                        userInfo: [Self.changeKey: change])
+    }
+
+    private static func clamp(_ v: CGFloat, _ r: ClosedRange<CGFloat>) -> CGFloat {
+        min(max(v, r.lowerBound), r.upperBound)
+    }
+
+    /// Farbe als vier sRGB-Komponenten unter `<key>.red/.green/.blue/.alpha` (Format der
+    /// alten `FormulaSettings`, damit gespeicherte Akzentfarben unverändert weitergelten).
+    static func saveColor(_ c: NSColor, key: String) {
+        guard let rgb = c.usingColorSpace(.sRGB) else { return }
+        let d = UserDefaults.standard
+        d.set(Double(rgb.redComponent),   forKey: key + ".red")
+        d.set(Double(rgb.greenComponent), forKey: key + ".green")
+        d.set(Double(rgb.blueComponent),  forKey: key + ".blue")
+        d.set(Double(rgb.alphaComponent), forKey: key + ".alpha")
+    }
+
+    static func loadColor(key: String, default def: NSColor) -> NSColor {
+        let d = UserDefaults.standard
+        guard d.object(forKey: key + ".red") != nil else { return def }
+        // sRGB laden, weil in sRGB gespeichert — sonst wäre die Farbe nie komponentengleich.
+        return NSColor(srgbRed: CGFloat(d.double(forKey: key + ".red")),
+                       green: CGFloat(d.double(forKey: key + ".green")),
+                       blue: CGFloat(d.double(forKey: key + ".blue")),
+                       alpha: d.object(forKey: key + ".alpha") != nil ? CGFloat(d.double(forKey: key + ".alpha")) : 1)
     }
 
     // MARK: Auflösung
@@ -157,7 +273,7 @@ final class ThemeStore: ObservableObject {
     func installCustomTheme(_ t: TerminalTheme) {
         let text = t.ghosttyPairs.map { "\($0.0) = \($0.1)" }.joined(separator: "\n")
         UserDefaults.standard.set(text, forKey: Keys.customTheme)
-        if theme.name == Self.customThemeName { theme = t; post() }
+        if theme.name == Self.customThemeName { theme = t; post(.theme) }
     }
 
     private static var storedCustomTheme: TerminalTheme? {

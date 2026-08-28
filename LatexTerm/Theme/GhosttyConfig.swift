@@ -115,8 +115,9 @@ struct GhosttyConfig {
             }
         }
         if let s = value("font-size"), let size = Double(s) {
-            let clamped = CGFloat(min(max(size, Double(LatexTerminalView.minFontSize)), Double(LatexTerminalView.maxFontSize)))
-            if clamped != LatexTerminalView.storedFontSize() { p.fontSize = clamped }
+            let r = ThemeStore.fontSizeRange
+            let clamped = CGFloat(min(max(size, Double(r.lowerBound)), Double(r.upperBound)))
+            if clamped != store.fontSize { p.fontSize = clamped }
         }
 
         // Padding: Ghostty kennt x/y, LatexTerm einen Wert — Mittel, gedeckelt.
@@ -168,13 +169,8 @@ struct GhosttyConfig {
         if let b = p.fontThicken { store.fontThicken = b }
         if let b = p.cursorBlink { store.cursorBlink = b }
         if let pad = p.padding { store.padding = pad }
-        if let f = p.fontFamily { AppFonts.storedFamily = f }
-        if let s = p.fontSize { UserDefaults.standard.set(Double(s), forKey: LatexTerminalView.fontSizeKey) }
-        if p.fontFamily != nil || p.fontSize != nil {
-            var info: [String: Any] = [:]
-            if let s = p.fontSize { info["size"] = s }
-            NotificationCenter.default.post(name: LatexTerminalView.fontDidChange, object: nil, userInfo: info)
-        }
+        if let f = p.fontFamily { store.fontFamily = f }
+        if let s = p.fontSize { store.fontSize = s }
     }
 }
 
