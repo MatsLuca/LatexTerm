@@ -1444,9 +1444,9 @@ extension TerminalView {
                     if let glow = runAttributes[.latexTermGlow] as? TTColor {
                         // Soft glow: two shadow passes (wide + tight), then the crisp glyphs on top.
                         context.saveGState()
-                        context.setShadow(offset: .zero, blur: 10, color: glow.withAlphaComponent(0.9).cgColor)
+                        context.setShadow(offset: .zero, blur: 8, color: glow.withAlphaComponent(0.65).cgColor)
                         CTFontDrawGlyphs(runFont, runGlyphs, &positions, positions.count, context)
-                        context.setShadow(offset: .zero, blur: 3, color: glow.cgColor)
+                        context.setShadow(offset: .zero, blur: 2.5, color: glow.withAlphaComponent(0.8).cgColor)
                         CTFontDrawGlyphs(runFont, runGlyphs, &positions, positions.count, context)
                         context.restoreGState()
                     }

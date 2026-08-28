@@ -794,7 +794,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         if wanted, rainbowTimer == nil {
             rainbowTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 12, repeats: true) { [weak self] _ in
                 guard let self else { return }
-                self.rainbowPhase -= 0.6
+                self.rainbowPhase -= 0.4   // 12 Hz × 0,4 Zellen ≈ ein Zyklus (28 Zellen) in ~6 s
                 self.view.needsDisplay = true
             }
         } else if !wanted, let t = rainbowTimer {
