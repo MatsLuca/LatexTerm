@@ -58,6 +58,7 @@ struct SettingsView: View {
                 Toggle("Cursor blinkt", isOn: $themeStore.cursorBlink)
                 Toggle("Cursor in Theme-Farbe statt Projektfarbe", isOn: $themeStore.cursorThemeColor)
                 Toggle("Kachel-Akzentrahmen", isOn: $themeStore.paneBorders)
+                Toggle("Prompt-Text in Projektfarbe (experimentell)", isOn: $themeStore.promptTint)
                 // Ghostty-Config übernehmen: Theme, Schrift, Größe, Padding, Cursor, Bold — nur auf
                 // Knopfdruck, mit Vorschau. Ohne Config-Datei ausgegraut.
                 LabeledContent("Ghostty") {

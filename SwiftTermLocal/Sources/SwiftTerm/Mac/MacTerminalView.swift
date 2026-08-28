@@ -450,6 +450,11 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// Controls weather to use high ansi colors, if false terminal will use bold text instead of high ansi colors
     public var useBrightColors: Bool = true
 
+    /// Host hook: returns a replacement foreground for cells that use the *default* color in the
+    /// given absolute buffer row (nil = no change). Used by LatexTerm to tint the text typed into
+    /// Claude Code's prompt box in the session accent. Dim cells are left alone.
+    public var rowForegroundOverride: ((_ absoluteRow: Int) -> NSColor?)?
+
     /// macOS font smoothing (slightly thicker glyphs). Default off = Ghostty look.
     public var fontSmoothing: Bool = false {
         didSet { if oldValue != fontSmoothing { needsDisplay = true } }

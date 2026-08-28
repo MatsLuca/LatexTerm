@@ -91,6 +91,22 @@ Kontext: Werkstatt-Plan `claude-werkstatt/plans/terminal-optik_2026-08-28.md`. M
   und kein Hüll-Tint in `applyAccent`; Caret, HUD-Punkt, Home-Ring und Claude-Box tragen die Projektfarbe
   weiter. Einen zweiten Schalter „Randloses Fenster“ (Ampel + HUD weg) hatte ich gebaut — Mats: „Ampel weg
   braucht's gar nicht“ → wieder entfernt, nur der Rahmen-Schalter bleibt.
+- **Prompt-Tint, Schritt 1: Box-Erkennung (28.08., Mats: „erst die Infrastruktur perfektionieren“):**
+  `Latex/PromptBoxLocator.swift` (reine Foundation-Logik, im Logic-Test-Target, 13 Fixture-Tests):
+  Trennlinie = Zeile nur aus `─` (U+2500) ab Spalte 0 mit ≥ 90 % Breite; untere Linie = unterste im
+  Fenster; obere Linie = nächste darüber, unter der eine Zeile mit `❯`/`>` als erstem Zeichen liegt;
+  Inhalt = alles dazwischen (Leerzeilen, Umbrüche, bis 60 Zeilen). Mats' Sorgen abgedeckt: `--`/`-->`
+  sind ASCII (U+002D) und zählen nie; eine selbst getippte `────`-Zeile in der Box hat darunter Text statt
+  Marker und wird übersprungen — zusätzlich `requireStyledRules` (Claudes Linien sind gefärbt, Nutzer-Text
+  ist Standard-FG); Dialog-Rahmen `╭──╮` haben Ecken ≠ `─`; Vorschlagslisten liegen unter der unteren
+  Linie. Im Pane: `updatePromptBox()` nach jedem `rangeChanged` (≤ 64 Live-Zeilen), Ergebnis als absolute
+  Buffer-Zeilen (`yBase + row`, dafür `Buffer.yBase` public), erst streng, dann Fallback ohne Farbprüfung;
+  DEBUG-Log `BOX rows a..<b` / `BOX none` in `/tmp/latexterm-status.log`.
+  **Schritt 2, Tint:** Fork-Hook `TerminalView.rowForegroundOverride(absoluteRow)` — in
+  `buildAttributedString` ersetzt er die FG von Zellen mit `.defaultColor` (nicht `dim`, damit der
+  Platzhalter grau bleibt); Pane liefert `effectiveAccent` für die Box-Zeilen. Schalter „Prompt-Text in
+  Projektfarbe (experimentell)“ (`LatexTerm.promptTint`, Default aus). Test-Dateien per `xcodeproj`-Gem
+  (nur `/usr/bin/ruby` hat es) ins Test-Target gehängt; 47 Tests grün.
 - **Cursor:** `steadyBlock` (Ghostty), Blinken als Schalter; Farbe bleibt Akzent/Projektfarbe (Mats:
   „wie vorgeschlagen“). Padding, Schrift (JetBrains Mono gebündelt, 20 pt, Zeilenabstand 0) und die
   Home-Palette folgen in Runden 27/28; Ghostty-Config-Import in Runde 29.

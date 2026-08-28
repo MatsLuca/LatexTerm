@@ -401,8 +401,14 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         term.onRangeChanged = { [weak self, weak controller] startY, endY in
             controller?.scheduleRescan(dirtyStart: startY, dirtyEnd: endY)
             self?.scheduleContrastAnalysis()
+            self?.updatePromptBox()
         }
         term.onNeedsFullRescan = { [weak controller] in controller?.scheduleRescan() }
+        // Prompt-Tint (experimentell): Standard-FG-Zellen in den Box-Zeilen in Akzentfarbe.
+        term.rowForegroundOverride = { [weak self] row in
+            guard let self, ThemeStore.shared.promptTint, let box = self.promptBoxAbsolute, box.contains(row) else { return nil }
+            return self.effectiveAccent
+        }
         term.onScrolled = { [weak controller] in controller?.scheduleReposition() }
         term.onSplitRequested = { [weak self] in
             guard let self else { return }
@@ -727,6 +733,56 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                        + "\n  nonascii(bottom12): \(nonAscii.joined(separator: " "))")
 #endif
         return nil
+    }
+
+    // MARK: - Eingabe-Box (Prompt) live lokalisieren
+
+    /// Wie viele Live-Zeilen ab unten der Box-Scan betrachtet (mehrzeilige Eingaben wachsen nach oben).
+    private static let promptScanRows = 64
+    /// Zuletzt gefundene Box als absolute Buffer-Zeilen (`yBase + liveRow`) — so bleibt sie beim
+    /// Scrollen an ihrem Inhalt und verschwindet nicht „mit“, wenn der Nutzer hochscrollt.
+    private(set) var promptBoxAbsolute: Range<Int>?
+
+    /// Strukturscan der unteren Live-Zeilen (`PromptBoxLocator`), nach jedem Inhaltswechsel.
+    /// Kosten: ≤ 64 Zeilen × Spalten Zeichenvergleiche — im Rauschen des Rescans.
+    private func updatePromptBox() {
+        let term = view.getTerminal()
+        let cols = term.cols
+        guard cols >= 8, term.rows > 0 else { setPromptBox(nil); return }
+        let first = max(0, term.rows - Self.promptScanRows)
+        var rows: [[PromptBoxLocator.Cell]] = []
+        rows.reserveCapacity(term.rows - first)
+        for row in first..<term.rows {
+            guard let line = term.getLiveLine(row: row) else { rows.append(Array(repeating: .init(" "), count: cols)); continue }
+            var cells: [PromptBoxLocator.Cell] = []
+            cells.reserveCapacity(cols)
+            for col in 0..<cols {
+                let cd = line[col]
+                let isDefault: Bool
+                if case .defaultColor = cd.attribute.fg { isDefault = true } else { isDefault = false }
+                cells.append(.init(cd.getCharacter(), defaultFg: isDefault))
+            }
+            rows.append(cells)
+        }
+        // Erst streng (Linien müssen gefärbt sein — schließt getippte ────-Zeilen aus), sonst locker:
+        // sollte Claude Code die Linien einmal in Standard-FG zeichnen, bleibt die Erkennung erhalten.
+        guard let box = PromptBoxLocator.locate(rows: rows, requireStyledRules: true)
+                ?? PromptBoxLocator.locate(rows: rows, requireStyledRules: false) else { setPromptBox(nil); return }
+        let base = term.buffer.yBase + first
+        setPromptBox((base + box.contentRows.lowerBound)..<(base + box.contentRows.upperBound))
+    }
+
+    private func setPromptBox(_ range: Range<Int>?) {
+        guard range != promptBoxAbsolute else { return }
+        promptBoxAbsolute = range
+        if ThemeStore.shared.promptTint { view.needsDisplay = true }
+#if DEBUG
+        if let r = range {
+            Self.statusLog("BOX rows \(r.lowerBound)..<\(r.upperBound) (abs, yBase=\(view.getTerminal().buffer.yBase))")
+        } else {
+            Self.statusLog("BOX none")
+        }
+#endif
     }
 
     // MARK: - Passive Session-Statuserkennung (#30)

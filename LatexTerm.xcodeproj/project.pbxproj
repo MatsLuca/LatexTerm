@@ -9,15 +9,17 @@
 /* Begin PBXBuildFile section */
 		12D43261C12FC692BD8CB1EC /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 724FBA73B885EDFEB9248F0A /* Cocoa.framework */; };
 		25BCE7D96B7A11609419AA17 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = F42346E76C58A746C6FC3056 /* main.swift */; };
+		6001FE5F8DC793BB44E32755 /* PromptBoxLocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 996DD2B006B817A127C93492 /* PromptBoxLocator.swift */; };
 		830299A6F94AC2A7F6F1A748 /* LaTeXDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58303F442A1DB66FF9712BEF /* LaTeXDetector.swift */; };
 		845E18B3F3DD4D250DEA68BE /* ControlProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5F5490CD0233B73745FB519F /* ControlProtocol.swift */; };
 		8E39B3EB6E5CCDD2B01A80E9 /* LaTeXReadableTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2309BFE1D4C333D220190768 /* LaTeXReadableTests.swift */; };
 		A1996693AACFF2079350568B /* latexterm in Embed latexterm CLI */ = {isa = PBXBuildFile; fileRef = 3C6EE11AF5CEA3FC69B0099C /* latexterm */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		AA00000000000000000000B0 /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = AA00000000000000000000A1 /* SwiftTerm */; };
-		D75D4BE25F948E58E7452A4A /* LaTeXReadable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87B17461A01627511CE814CD /* LaTeXReadable.swift */; };
-		E353DA6194B0929725C7266C /* LaTeXDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 977EED528F0310FA6EFC07B0 /* LaTeXDetectorTests.swift */; };
+		B6ABA2E5D668CE946ED8AF53 /* PromptBoxLocatorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 111ECD37CE79AF702ABF98CA /* PromptBoxLocatorTests.swift */; };
 		D700000000000000000000B1 /* DockTilePlugIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = D700000000000000000000F1 /* DockTilePlugIn.swift */; };
 		D700000000000000000000B2 /* LatexTermDockTile.docktileplugin in Embed Dock Tile PlugIn */ = {isa = PBXBuildFile; fileRef = D700000000000000000000F2 /* LatexTermDockTile.docktileplugin */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
+		D75D4BE25F948E58E7452A4A /* LaTeXReadable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87B17461A01627511CE814CD /* LaTeXReadable.swift */; };
+		E353DA6194B0929725C7266C /* LaTeXDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 977EED528F0310FA6EFC07B0 /* LaTeXDetectorTests.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -63,6 +65,7 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
+		111ECD37CE79AF702ABF98CA /* PromptBoxLocatorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PromptBoxLocatorTests.swift; path = LatexTermTests/PromptBoxLocatorTests.swift; sourceTree = SOURCE_ROOT; };
 		2309BFE1D4C333D220190768 /* LaTeXReadableTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LaTeXReadableTests.swift; path = LatexTermTests/LaTeXReadableTests.swift; sourceTree = SOURCE_ROOT; };
 		3C6EE11AF5CEA3FC69B0099C /* latexterm */ = {isa = PBXFileReference; includeInIndex = 0; path = latexterm; sourceTree = BUILT_PRODUCTS_DIR; };
 		58303F442A1DB66FF9712BEF /* LaTeXDetector.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LaTeXDetector.swift; path = LatexTerm/Latex/LaTeXDetector.swift; sourceTree = SOURCE_ROOT; };
@@ -71,10 +74,11 @@
 		724FBA73B885EDFEB9248F0A /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX15.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		87B17461A01627511CE814CD /* LaTeXReadable.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LaTeXReadable.swift; path = LatexTerm/Latex/LaTeXReadable.swift; sourceTree = SOURCE_ROOT; };
 		977EED528F0310FA6EFC07B0 /* LaTeXDetectorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LaTeXDetectorTests.swift; path = LatexTermTests/LaTeXDetectorTests.swift; sourceTree = SOURCE_ROOT; };
+		996DD2B006B817A127C93492 /* PromptBoxLocator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PromptBoxLocator.swift; path = LatexTerm/Latex/PromptBoxLocator.swift; sourceTree = SOURCE_ROOT; };
 		AA0000000000000000000006 /* LatexTerm.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = LatexTerm.app; sourceTree = BUILT_PRODUCTS_DIR; };
-		F42346E76C58A746C6FC3056 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = main.swift; path = LatexTermCLI/main.swift; sourceTree = SOURCE_ROOT; };
 		D700000000000000000000F1 /* DockTilePlugIn.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = DockTilePlugIn.swift; path = LatexTermDockTile/DockTilePlugIn.swift; sourceTree = SOURCE_ROOT; };
 		D700000000000000000000F2 /* LatexTermDockTile.docktileplugin */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LatexTermDockTile.docktileplugin; sourceTree = BUILT_PRODUCTS_DIR; };
+		F42346E76C58A746C6FC3056 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = main.swift; path = LatexTermCLI/main.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -132,6 +136,8 @@
 				2309BFE1D4C333D220190768 /* LaTeXReadableTests.swift */,
 				58303F442A1DB66FF9712BEF /* LaTeXDetector.swift */,
 				87B17461A01627511CE814CD /* LaTeXReadable.swift */,
+				111ECD37CE79AF702ABF98CA /* PromptBoxLocatorTests.swift */,
+				996DD2B006B817A127C93492 /* PromptBoxLocator.swift */,
 			);
 			name = LatexTermTests;
 			sourceTree = SOURCE_ROOT;
@@ -237,6 +243,22 @@
 			productReference = AA0000000000000000000006 /* LatexTerm.app */;
 			productType = "com.apple.product-type.application";
 		};
+		D700000000000000000000A1 /* LatexTermDockTile */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = D700000000000000000000A3 /* Build configuration list for PBXNativeTarget "LatexTermDockTile" */;
+			buildPhases = (
+				D700000000000000000000D1 /* Sources */,
+				D700000000000000000000D2 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = LatexTermDockTile;
+			productName = LatexTermDockTile;
+			productReference = D700000000000000000000F2 /* LatexTermDockTile.docktileplugin */;
+			productType = "com.apple.product-type.bundle";
+		};
 		E497D94EC4CBE101C956AD14 /* LatexTermCLI */ = {
 			isa = PBXNativeTarget;
 			buildConfigurationList = B74045D77A203C3F67B27D33 /* Build configuration list for PBXNativeTarget "LatexTermCLI" */;
@@ -254,22 +276,6 @@
 			productReference = 3C6EE11AF5CEA3FC69B0099C /* latexterm */;
 			productType = "com.apple.product-type.tool";
 		};
-		D700000000000000000000A1 /* LatexTermDockTile */ = {
-			isa = PBXNativeTarget;
-			buildConfigurationList = D700000000000000000000A3 /* Build configuration list for PBXNativeTarget "LatexTermDockTile" */;
-			buildPhases = (
-				D700000000000000000000D1 /* Sources */,
-				D700000000000000000000D2 /* Frameworks */,
-			);
-			buildRules = (
-			);
-			dependencies = (
-			);
-			name = LatexTermDockTile;
-			productName = LatexTermDockTile;
-			productReference = D700000000000000000000F2 /* LatexTermDockTile.docktileplugin */;
-			productType = "com.apple.product-type.bundle";
-		};
 /* End PBXNativeTarget section */
 
 /* Begin PBXProject section */
@@ -283,10 +289,10 @@
 					AA0000000000000000000005 = {
 						CreatedOnToolsVersion = 26.2;
 					};
-					E497D94EC4CBE101C956AD14 = {
+					D700000000000000000000A1 = {
 						SuppressBuildableAutocreation = YES;
 					};
-					D700000000000000000000A1 = {
+					E497D94EC4CBE101C956AD14 = {
 						SuppressBuildableAutocreation = YES;
 					};
 				};
@@ -351,6 +357,8 @@
 				8E39B3EB6E5CCDD2B01A80E9 /* LaTeXReadableTests.swift in Sources */,
 				830299A6F94AC2A7F6F1A748 /* LaTeXDetector.swift in Sources */,
 				D75D4BE25F948E58E7452A4A /* LaTeXReadable.swift in Sources */,
+				B6ABA2E5D668CE946ED8AF53 /* PromptBoxLocatorTests.swift in Sources */,
+				6001FE5F8DC793BB44E32755 /* PromptBoxLocator.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -495,9 +503,9 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 74U49TS6SR;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 74U49TS6SR;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -525,9 +533,9 @@
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				CODE_SIGN_STYLE = Automatic;
-				DEVELOPMENT_TEAM = 74U49TS6SR;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 74U49TS6SR;
 				ENABLE_APP_SANDBOX = NO;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -545,20 +553,6 @@
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
 				SWIFT_DEFAULT_ACTOR_ISOLATION = MainActor;
 				SWIFT_EMIT_LOC_STRINGS = YES;
-				SWIFT_VERSION = 5.0;
-			};
-			name = Release;
-		};
-		E2459CD27AFE36111BA04678 /* Release */ = {
-			isa = XCBuildConfiguration;
-			buildSettings = {
-				CODE_SIGNING_ALLOWED = NO;
-				MACOSX_DEPLOYMENT_TARGET = 14.0;
-				PRODUCT_MODULE_NAME = LatexTermCLI;
-				PRODUCT_NAME = latexterm;
-				SDKROOT = macosx;
-				SKIP_INSTALL = YES;
-				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
@@ -594,6 +588,20 @@
 				SWIFT_EMIT_LOC_STRINGS = NO;
 				SWIFT_VERSION = 5.0;
 				WRAPPER_EXTENSION = docktileplugin;
+			};
+			name = Release;
+		};
+		E2459CD27AFE36111BA04678 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGNING_ALLOWED = NO;
+				MACOSX_DEPLOYMENT_TARGET = 14.0;
+				PRODUCT_MODULE_NAME = LatexTermCLI;
+				PRODUCT_NAME = latexterm;
+				SDKROOT = macosx;
+				SKIP_INSTALL = YES;
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_VERSION = 5.0;
 			};
 			name = Release;
 		};

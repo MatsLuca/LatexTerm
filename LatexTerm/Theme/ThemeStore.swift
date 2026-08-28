@@ -21,6 +21,7 @@ final class ThemeStore: ObservableObject {
         static let cursorThemeColor = "LatexTerm.cursorThemeColor"
         static let fontThicken = "LatexTerm.fontThicken"
         static let paneBorders = "LatexTerm.paneBorders"
+        static let promptTint = "LatexTerm.promptTint"
         /// Ghostty-Config-Theme (Basis + Overrides) als `key = value`-Zeilen.
         static let customTheme = "LatexTerm.customTheme"
     }
@@ -70,6 +71,12 @@ final class ThemeStore: ObservableObject {
         didSet { UserDefaults.standard.set(paneBorders, forKey: Keys.paneBorders); post() }
     }
 
+    /// Experimentell: getippter Text in Claude Codes Eingabe-Box in der Projekt-/Akzentfarbe
+    /// (`PromptBoxLocator` findet die Box, der Fork färbt Standard-FG-Zellen dieser Zeilen).
+    @Published var promptTint: Bool {
+        didSet { UserDefaults.standard.set(promptTint, forKey: Keys.promptTint); post() }
+    }
+
     /// Innenabstand Terminal-Text ↔ Kachelrand (Ghostty `window-padding` 15; hier 12, weil bei
     /// mehreren Kacheln der 8-px-Steg dazukommt).
     @Published var padding: CGFloat {
@@ -85,6 +92,7 @@ final class ThemeStore: ObservableObject {
         cursorThemeColor = d.object(forKey: Keys.cursorThemeColor) != nil ? d.bool(forKey: Keys.cursorThemeColor) : false
         fontThicken = d.object(forKey: Keys.fontThicken) != nil ? d.bool(forKey: Keys.fontThicken) : false
         paneBorders = d.object(forKey: Keys.paneBorders) != nil ? d.bool(forKey: Keys.paneBorders) : true
+        promptTint = d.object(forKey: Keys.promptTint) != nil ? d.bool(forKey: Keys.promptTint) : false
         let pad = d.object(forKey: Keys.padding) != nil ? CGFloat(d.double(forKey: Keys.padding)) : Self.defaultPadding
         padding = min(max(pad, Self.paddingRange.lowerBound), Self.paddingRange.upperBound)
     }

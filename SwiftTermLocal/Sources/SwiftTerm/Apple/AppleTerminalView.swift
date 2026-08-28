@@ -650,7 +650,7 @@ extension TerminalView {
                 lastIsSelected = isSelected
             }
 
-            let currentAttributes: [NSAttributedString.Key: Any]
+            var currentAttributes: [NSAttributedString.Key: Any]
             if isSelected {
                 var mutable = attributes
                 mutable[.selectionBackgroundColor] = selectedTextBackgroundColor
@@ -658,6 +658,13 @@ extension TerminalView {
             } else {
                 currentAttributes = attributes
             }
+            #if os(macOS)
+            // Host tint for default-colored, non-dim cells of this row (LatexTerm prompt box).
+            if case .defaultColor = attr.fg, !attr.style.contains(.dim),
+               let tint = rowForegroundOverride?(row) {
+                currentAttributes[.foregroundColor] = tint
+            }
+            #endif
             pendingAttrs = currentAttributes
 
             let character = ch.code == 0 ? " " : terminal.getCharacter(for: ch)
