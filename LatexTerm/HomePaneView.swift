@@ -51,9 +51,10 @@ struct ProjekteData: Decodable {
     }
     /// Akzentfarbe aus der Datenschicht (Runde 25): Farbe = Projekt, Familie = Bereich.
     struct Accent: Decodable {
-        var color: String          // "#rrggbb"
+        var name: String?          // Claude-Code-Farbname (/color): red blue green yellow purple orange pink cyan
+        var color: String          // "#rrggbb" — Claudes Dark-Theme-Wert zum Namen
         var family: String?
-        var hue: Double?
+        var alternatives: [String]?   // Ausweichfarben derselben Familie (Kollisionsschutz)
         var pinned: Bool?
         var nsColor: NSColor? { NSColor(srgbHex: color) }
     }
@@ -88,9 +89,16 @@ struct ProjekteData: Decodable {
         var placeCommand: String? // nur newProject: Ort offen → Start in der Wurzel mit --einordnen
         var followUp: String?     // nach dem Start tippen (compact: "/compact")
     }
+    /// Projektfarbe auch in Claudes Box: neue Session tippt `followUp` (/color …), Weiter stellt
+    /// `resumePrefix` (Farbzeile ins Transkript) vor das Kommando. {color}/{session} füllt die App.
+    struct ColorTemplate: Decodable {
+        var followUp: String?
+        var resumePrefix: String?
+    }
     struct Actions: Decodable {
         var resume: ActionTemplate
         var newProject: ActionTemplate
+        var color: ColorTemplate?
         var compact: ActionTemplate?
         var pin: ActionTemplate?
         var unpin: ActionTemplate?
@@ -110,6 +118,8 @@ struct ProjekteData: Decodable {
         var accent: Accent?
     }
     var quickstarts: [Quickstart]?
+    /// Claude-Code-Farbpalette (Name → "#rrggbb") aus der Datenschicht.
+    var accentPalette: [String: String]?
     var wiedervorlagen: [Wiedervorlage]?
     /// Hintergrund-Sync von mats-tools + Klonen (Datenschicht `sync_status()`): nur zeigen, was hakt oder neu ist.
     struct Sync: Decodable {
@@ -132,6 +142,8 @@ struct LaunchRequest {
     var label: String        // fürs Start-Overlay
     var followUp: String?    // wird getippt, sobald die Session steht (z. B. "/compact")
     var accent: NSColor? = nil   // Projektfarbe aus der Datenschicht — Ring, Rahmen, HUD-Punkt der Kachel
+    var accentName: String? = nil    // Claude-Code-Farbname dazu (Kollisionsschutz merkt ihn sich)
+    var colorFollowUp: String? = nil // "/color <name>" für neue Sessions — VOR dem eigentlichen followUp
 }
 
 /// Lädt die Projektliste über das externe CLI `projekte` (Werkstatt-Datenschicht).
@@ -985,14 +997,40 @@ final class HomePaneView: NSView {
     /// der SessionStart-Hook spielt die fällige Datei ohnehin ein, der Prompt sagt nur „die hier, jetzt".
     /// Projektfarbe für einen Pfad — der Ordner selbst oder das nächste Projekt darüber
     /// (nackte Unterordner erben die Farbe ihres Projekts). nil = Wurzel/unbekannt → globale Farbe.
-    private func accentFor(_ path: String) -> NSColor? {
+    private func accentInfo(for path: String) -> ProjekteData.Accent? {
         var p = path
         while !p.isEmpty, p != "/" {
-            if let a = byPath[p]?.accent?.nsColor { return a }
+            if let a = byPath[p]?.accent { return a }
             if p == root?.path { return nil }
             p = (p as NSString).deletingLastPathComponent
         }
         return nil
+    }
+
+    /// Split-View löst Kollisionen auf: (gewünschter Name, Alternativen, Palette) → vergebener Name.
+    var resolveAccentName: ((String, [String], [String]) -> String)?
+
+    /// Projektfarbe an einen Start hängen (Runde 25): Kachelfarbe + Claudes Box in derselben Farbe.
+    /// Nur Claude-Starts (`command` gesetzt) — eine nackte Shell bekommt nur die Kachelfarbe.
+    /// Weiter (`session`): Farbzeile per `resumePrefix` ins Transkript, unsichtbar hinter dem Vorhang;
+    /// neu: `/color <name>` als erster Folgebefehl (eine Systemzeile in der TUI).
+    private func colored(_ req: LaunchRequest, session: String?) -> LaunchRequest {
+        guard let info = accentInfo(for: req.path), let wanted = info.name else { return req }
+        let palette = data?.accentPalette ?? [:]
+        let name = resolveAccentName?(wanted, info.alternatives ?? [], Array(palette.keys).sorted()) ?? wanted
+        var out = req
+        out.accentName = name
+        out.accent = NSColor(srgbHex: palette[name] ?? info.color)
+        guard let cmd = req.command, !cmd.isEmpty, let tpl = templates.color else { return out }
+        func fill(_ s: String) -> String {
+            s.replacingOccurrences(of: "{color}", with: name).replacingOccurrences(of: "{session}", with: session ?? "")
+        }
+        if session != nil, let prefix = tpl.resumePrefix, !prefix.isEmpty {
+            out.command = fill(prefix) + cmd
+        } else if session == nil, let fu = tpl.followUp, !fu.isEmpty {
+            out.colorFollowUp = fill(fu)
+        }
+        return out
     }
 
     private func startWiedervorlage(_ w: ProjekteData.Wiedervorlage) {
@@ -1138,13 +1176,13 @@ final class HomePaneView: NSView {
         switch a {
         case .resume(let s, let path, let title, _, let project):
             let cmd = (templates.resume.command ?? "").replacingOccurrences(of: "{session}", with: s.id)
-            onLaunch?(LaunchRequest(path: path, command: cmd, label: "\(project ?? (path as NSString).lastPathComponent) · \(title)", followUp: nil, accent: accentFor(path)))
+            onLaunch?(colored(LaunchRequest(path: path, command: cmd, label: "\(project ?? (path as NSString).lastPathComponent) · \(title)", followUp: nil), session: s.id))
         case .compact(let s, let path):
             guard let t = templates.compact else { return }
             let cmd = (t.command ?? "").replacingOccurrences(of: "{session}", with: s.id)
-            onLaunch?(LaunchRequest(path: path, command: cmd, label: "\((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp, accent: accentFor(path)))
+            onLaunch?(colored(LaunchRequest(path: path, command: cmd, label: "\((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp), session: s.id))
         case .run(let t, let path):
-            onLaunch?(LaunchRequest(path: path, command: t.command, label: "\((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp, accent: accentFor(path)))
+            onLaunch?(colored(LaunchRequest(path: path, command: t.command, label: "\((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp), session: nil))
         case .togglePin(let s, let pinned):
             setPin(s.id, pinned: !pinned)
         case .rename(let s):
@@ -1491,7 +1529,7 @@ final class HomePaneView: NSView {
             cmd += " && " + fill(ac)
         }
         if let c = t.command { cmd += " && " + fill(c) }
-        onLaunch?(LaunchRequest(path: place, command: cmd, label: "\(name) · \(t.label)", followUp: nil, accent: accentFor(place)))
+        onLaunch?(colored(LaunchRequest(path: place, command: cmd, label: "\(name) · \(t.label)", followUp: nil), session: nil))
     }
 
     /// Text, der in einem einfach-quotierten Shell-Argument landet (der Zweck-Satz): Apostrophe

@@ -193,7 +193,14 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         home.autoresizingMask = [.width, .height]
         home.otherPanes = otherPanes
         home.onFocusPane = focusPane
-        home.onLaunch = { [weak self] req in self?.launch(in: req.path, command: req.command, label: req.label, followUp: req.followUp, accent: req.accent) }
+        home.onLaunch = { [weak self] req in
+            self?.launch(in: req.path, command: req.command, label: req.label,
+                         followUps: [req.colorFollowUp, req.followUp].compactMap { $0 },
+                         accent: req.accent, accentName: req.accentName)
+        }
+        home.resolveAccentName = { [weak self] wanted, alternatives, palette in
+            self?.resolveLaunchAccentName?(wanted, alternatives, palette) ?? wanted
+        }
         home.onClose = { [weak self] in
             guard let self else { return }
             self.onCloseRequested?(self)
@@ -214,12 +221,13 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     /// Home → Terminal: Shell in `directory` starten und `command` tippen (Kernel puffert,
     /// die Shell liest es nach dem Prompt — gleicher Pfad wie `new-pane --exec`).
-    func launch(in directory: String, command: String?, label: String? = nil, followUp: String? = nil, accent: NSColor? = nil) {
+    func launch(in directory: String, command: String?, label: String? = nil, followUps: [String] = [],
+                accent: NSColor? = nil, accentName: String? = nil) {
         guard !isStarted else { return }   // ein Prozess pro Kachel — kein zweiter Start ins laufende Terminal
         // Projektfarbe (Runde 25): vor dem Start setzen, damit Ring, Rahmen und HUD-Punkt von der
-        // ersten Sekunde an die Session-Farbe tragen. Die Split-View rückt sie ab, wenn eine
-        // andere offene Kachel schon fast dieselbe trägt.
-        if let accent { accentOverride = resolveLaunchAccent?(accent) ?? accent }
+        // ersten Sekunde an die Session-Farbe tragen — dieselbe Palette, in der Claude seine Box malt.
+        if let accent { accentOverride = accent }
+        self.accentName = accentName
         start(in: directory)
         guard let command, !command.isEmpty, let home = homeView else {
             // Nur Shell: sofort zeigen.
@@ -258,12 +266,15 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             self.revealTerminal(success: ready)
             Self.startTimerLog(t0: t0, curtain: curtain,
                                reason: self.launchReady ? "signal" : (ready ? "passiv" : "timeout"))
-            // Folgebefehl (z. B. /compact): Text in die Claude-TUI, Enter separat nach 1 s —
+            // Folgebefehle (z. B. /color, /compact): Text in die Claude-TUI, Enter separat nach 1 s —
             // ein mitgesendetes Enter wird beim Paste geschluckt (Regel aus dem latexterm-Skill).
-            if let followUp, !followUp.isEmpty, ready {
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                    self?.view.send(txt: followUp)
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.view.send(txt: "\r") }
+            // Mehrere nacheinander im 2-s-Takt, damit jeder Befehl vor dem nächsten verarbeitet ist.
+            if ready {
+                for (i, followUp) in followUps.filter({ !$0.isEmpty }).enumerated() {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 + 2.0 * Double(i)) { [weak self] in
+                        self?.view.send(txt: followUp)
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.view.send(txt: "\r") }
+                    }
                 }
             }
         }
@@ -271,8 +282,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private var launchTimer: Timer?
     /// `status=ready` vom SessionStart-Hook (settings.json) ist angekommen — Session steht.
     private var launchReady = false
-    /// Split-View: gewünschte Projektfarbe → tatsächlich vergebene (Abstand zu offenen Kacheln).
-    var resolveLaunchAccent: ((NSColor) -> NSColor)?
+    /// Claude-Code-Farbname dieser Kachel (Runde 25) — Kollisionsschutz der Split-View liest ihn.
+    private(set) var accentName: String?
+    /// Split-View: (gewünschter Name, Alternativen, Palette) → vergebener Name (frei unter den offenen Kacheln).
+    var resolveLaunchAccentName: ((String, [String], [String]) -> String)?
 
     // MARK: Erwartete Startdauer (für den Ring im Vorhang)
 
@@ -1149,30 +1162,19 @@ final class TerminalSplitView: NSView {
         let fresh = (panes.count == 1 && panes[0].isHome && !panes[0].isStarted) ? panes[0] : nil
         let pane = fresh ?? addPane(home: true)
         focusPane(pane)
-        pane.launch(in: q.path, command: q.command, label: q.label, accent: q.accent?.nsColor)
+        // Quickstart: nur die Kachelfarbe — der Prompt startet sofort einen Turn, ein getipptes
+        // /color würde dort als Eingabe in die Warteschlange fallen.
+        pane.launch(in: q.path, command: q.command, label: q.label, accent: q.accent?.nsColor, accentName: q.accent?.name)
     }
 
-    /// Kollisionsschutz für Projektfarben (Runde 25): liegt der Farbton zu nah an einer
-    /// anderen offenen Kachel mit eigener Farbe (< 24°), rückt er in 30°-Schritten auf den
-    /// nächsten freien Ton — nur für diese Kachel, nichts wird gespeichert.
-    private func distinctAccent(_ wanted: NSColor, excluding me: TerminalPane?) -> NSColor {
-        guard let c = wanted.usingColorSpace(.sRGB) else { return wanted }
-        let taken: [CGFloat] = panes.compactMap { p in
-            guard p !== me, let a = p.paneAccent?.usingColorSpace(.sRGB) else { return nil }
-            return a.hueComponent * 360
-        }
-        func distance(_ h: CGFloat) -> CGFloat {
-            taken.map { abs(($0 - h + 540).truncatingRemainder(dividingBy: 360) - 180) }.min() ?? 360
-        }
-        let hue = c.hueComponent * 360
-        if distance(hue) >= 24 { return wanted }
-        for step in [30, -30, 60, -60, 90, -90, 120, -120, 150, -150, 180] {
-            let h = (hue + CGFloat(step) + 360).truncatingRemainder(dividingBy: 360)
-            if distance(h) >= 24 {
-                return NSColor(hue: h / 360, saturation: c.saturationComponent, brightness: c.brightnessComponent, alpha: 1)
-            }
-        }
-        return wanted
+    /// Kollisionsschutz für Projektfarben (Runde 25): trägt eine andere offene Kachel den Namen
+    /// schon, kommt die erste freie Alternative der Familie dran, danach der Rest der Palette
+    /// (ohne red — das bleibt der Hand vorbehalten). Nur für diese Kachel, nichts wird gespeichert.
+    private func distinctAccentName(_ wanted: String, alternatives: [String], palette: [String],
+                                    excluding me: TerminalPane?) -> String {
+        let taken = Set(panes.compactMap { $0 !== me ? $0.accentName : nil })
+        let order = [wanted] + alternatives + palette.filter { $0 != "red" }
+        return order.first { !taken.contains($0) } ?? wanted
     }
 
     /// Home-Kacheln sind flüchtig: nur gestartete Shells landen im Snapshot. Sind es
@@ -1248,7 +1250,7 @@ final class TerminalSplitView: NSView {
         pane.onCloseRequested = { [weak self] p in self?.closePane(p) }
         pane.onEnsurePaneCount = { [weak self] n in self?.ensurePaneCount(n) }
         pane.onZoomRequested = { [weak self] p in self?.toggleZoom(p) }
-        pane.resolveLaunchAccent = { [weak self, weak pane] c in self?.distinctAccent(c, excluding: pane) ?? c }
+        pane.resolveLaunchAccentName = { [weak self, weak pane] w, alts, pal in self?.distinctAccentName(w, alternatives: alts, palette: pal, excluding: pane) ?? w }
         pane.onStyleChanged = { [weak self] in self?.updateTitlebarHUD() }
         pane.onSessionAwaitingInput = { [weak self] p in self?.notifySessionAwaiting(p) }
         pane.onAttentionSignal = { [weak self] p, title, body in
