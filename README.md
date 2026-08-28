@@ -71,6 +71,23 @@ printf '\e]5522;accent=#e85e3e\a'   # set this pane's accent
 printf '\e]5522;accent=reset\a'     # back to global/adaptive
 ```
 
+### Appearance — themes, font, padding
+
+LatexTerm renders like Ghostty out of the box: theme **Dark+**, bundled **JetBrains Mono NL** at 20 pt,
+xterm-256 colors, bold stays bold, steady block cursor, 12 px padding. Everything lives in
+*Settings → Darstellung* (⌘,) and the *Terminal → Theme* menu:
+
+- **Themes** are Ghostty theme files. `Dark+` and `Ember` (the old warm black) are built in; if Ghostty is
+  installed, all of its ~460 themes appear in the picker. Every surface follows the theme — panes, home
+  pane, launch ring, status pills, formula overlays.
+- **Font**: any installed monospace family or the bundled JetBrains Mono NL (no ligatures on purpose —
+  the renderer is cell-exact and formula overlays sit on cell coordinates).
+- **Import from Ghostty**: one button reads `~/.config/ghostty/config` (theme, font, size, padding,
+  cursor blink, bold-is-bright) and previews the changes before applying. Color overrides in the config
+  become the theme „Ghostty (Config)“.
+
+![Ghostty and LatexTerm side by side](docs/optik-side-by-side.png)
+
 ### The `latexterm` CLI
 
 Agents (or you) can drive the terminal from any shell — the app listens on a per-user socket (0600 + peer check, see [SECURITY.md](SECURITY.md)):
@@ -139,8 +156,8 @@ xcodebuild test -project LatexTerm.xcodeproj -scheme LatexTerm \
 
 - A formula whose opener is scrolled off above the viewport (or that wraps past the bottom) isn't detected; multi-line `$$` blocks need each delimiter alone on its line.
 - Two bare `$` in prose (`echo $PATH and $HOME`) still pair into a false formula — every safe heuristic broke legit math, so math correctness wins.
-- No live theme sync; colors are captured per rescan.
+- Ligatures are off by design (bundled font is the NL variant); a ligature font can still be chosen, but glyphs then may not align with cells.
 
 ## License
 
-MIT — © 2026 Mats Luca Dagott. Bundles [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT, vendored fork at `SwiftTermLocal/`) and [KaTeX](https://katex.org) 0.16.9 (MIT; fonts under SIL OFL 1.1) — see [`NOTICE`](NOTICE). The demo above is rendered programmatically with [Remotion](https://remotion.dev) (`demo-video/`).
+MIT — © 2026 Mats Luca Dagott. Bundles [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT, vendored fork at `SwiftTermLocal/`) and [KaTeX](https://katex.org) 0.16.9 (MIT; fonts under SIL OFL 1.1) and [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) NL 2.304 (SIL OFL 1.1) — see [`NOTICE`](NOTICE). The demo above is rendered programmatically with [Remotion](https://remotion.dev) (`demo-video/`).

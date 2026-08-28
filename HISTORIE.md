@@ -70,6 +70,17 @@ Kontext: Werkstatt-Plan `claude-werkstatt/plans/terminal-optik_2026-08-28.md`. M
   `fontDidChange`). Neu: Schalter „Cursor in Theme-Farbe statt Projektfarbe“ (`LatexTerm.cursorThemeColor`,
   `applyAccent` entscheidet). Nebenfund: `applyTheme` setzte die Hülle auf den nackten Grund und verlor den
   Akzent-Tint — jetzt ruft es `applyAccent()`. Auto-Folgen der Config (29b) bewusst nicht gebaut.
+- **Runde 30 — Abnahme (28.08.):** `docs/optik-probe.sh` (identische Ausgabe: Kopf, Bold/Italic/…, ANSI-16,
+  256er-Würfel, Statusline-Nachbau) in einem Ghostty-Fenster (`open -na Ghostty --args
+  --window-save-state=never -e bash -c …` — **ohne** `--window-save-state=never` bringt jede neue Instanz
+  ihre gespeicherten Fenster mit, daher vorhin die „vielen Ghosttys“) und in einer gezoomten LatexTerm-Kachel
+  auf demselben Fensterrahmen, `screencapture -l <windowID>` je Fenster, Montage mit `magick +append` →
+  `docs/optik-side-by-side.png`. Ergebnis: bis auf die Ligaturen (Ghostty `<=> -> =>`, LatexTerm NL) nicht
+  zu unterscheiden — Zellhöhe, Farben, Statusline identisch. Zwei Fallen: (1) Bildschirmaufnahme scheiterte
+  trotz grünem Schalter — der TCC-Grant klebte am alten Debug-Build (`reference/latexterm-tcc.md`), Fix
+  `tccutil reset ScreenCapture com.mats.LatexTerm` + neu einschalten + Neustart; (2) das Zoomen der
+  Probe-Kachel verdeckte Mats' Session — sah aus wie ein Absturz. Regel: Zoom nur angekündigt und nur
+  Sekunden. Doku: README „Appearance“, CLAUDE.md-Dateitabelle `Theme/`, Fork-Abschnitt (`mapColor`).
 - **Cursor:** `steadyBlock` (Ghostty), Blinken als Schalter; Farbe bleibt Akzent/Projektfarbe (Mats:
   „wie vorgeschlagen“). Padding, Schrift (JetBrains Mono gebündelt, 20 pt, Zeilenabstand 0) und die
   Home-Palette folgen in Runden 27/28; Ghostty-Config-Import in Runde 29.
