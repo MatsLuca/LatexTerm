@@ -30,7 +30,15 @@ nächste Option hätte keinen Platz gehabt.
   grep (Build als Verifikation, nicht nur grep).
 - **Bewusst nicht:** Sidebar-Settings, Suchfeld, Session-Restore-Schalter (kein heutiger Bedarf),
   Vorhang-Timeout als Option.
-- Tests: 47 grün (13 PromptBoxLocator). Abnahme durch Mats offen (Xcode ⌘R, alle sechs Tabs).
+- **Nachträge nach erstem Durchklicken:** `projekte`-Befehle von Allgemein nach Erweitert („braucht man das als
+  normaler Nutzer?“ — nein); Status-Pille als Option (aus / nur Status / mit Werkzeug, `CockpitSettings.statusBadgeMode`);
+  Menüleiste: „Terminal“-Menü gestrichen, neues „Kachel“-Menü als Kürzel-Nachschlagewerk (`PaneCommand` →
+  `.latexTermPaneCommand` → fokussierte Kachel im Key-Fenster), „Ablage → Neue Terminal-Kachel ⌘T“. Prinzip:
+  Menüs = Aktionen, ⌘, = Einstellungen. „Nur Projekte“ bleibt im Home-Menü, weil ⌘⇧B nur dort hängt. ⌘W bewusst
+  ohne Menükürzel (SwiftUIs „Schließen“ trägt es schon) — Eintrag zeigt „(⌘W)“ im Titel.
+- **Build-Regel seit heute:** Claude baut selbst (`xcodebuild … build` ohne `-derivedDataPath`, signiert), Mats
+  startet nur neu — `~/.claude/reference/latexterm-build.md`.
+- Tests: 47 grün (13 PromptBoxLocator). Abnahme durch Mats offen (⌘Q + Neustart, alle sechs Tabs + Menü „Kachel“).
 
 ## Stand (2026-08-28 — Terminal-Optik Runde 26: Theme-Modell, Dark+, xterm-256)
 
