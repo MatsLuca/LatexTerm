@@ -7,6 +7,14 @@ Hier liegen die Arbeits-Erkenntnisse: Debug-Funde, Entscheidungen mit Begründun
 
 ---
 
+## Stand (2026-08-28, Nacht — Launcher Runde 26: Vorhang schützt Folgebefehle)
+
+Mats' erstes Tippen fiel in den noch offenen `/color`-Folgebefehl („cyanist es“). Ursache in
+`TerminalPane.launch`: Reveal + Fokus sofort bei `status=ready`, Folgebefehl 1 s später, Enter 1 s danach.
+Jetzt `sendFollowUps` unter dem Vorhang (Text +0,4 s, Enter +0,6 s, nächster +1 s; Reveal 0,4 s nach dem
+letzten Enter), `DispatchWorkItem`s mit `isStarted`-Guard, `terminate()` bricht ab. Ring-ETA misst weiter bis
+„bereit“, Log-Zeile `bereit=…/vorhang=…`. Lehren in `claude-werkstatt/launcher/HISTORIE.md` (Runde 26).
+
 ## Stand (2026-08-28, Nacht — Einstellungen neu, Runden 31–34)
 
 Kontext: Werkstatt-Plan `claude-werkstatt/plans/settings-neu_2026-08-28.md`. Nach R26–R30 war

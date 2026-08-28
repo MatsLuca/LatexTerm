@@ -267,25 +267,53 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             guard ready || timeout else { return }
             t.invalidate()
             self.launchTimer = nil
-            let curtain = Date().timeIntervalSince(started)
-            if ready { Self.recordLaunch(curtain) }
-            self.revealTerminal(success: ready)
-            Self.startTimerLog(t0: t0, curtain: curtain,
-                               reason: self.launchReady ? "signal" : (ready ? "passiv" : "timeout"))
-            // Folgebefehle (z. B. /color, /compact): Text in die Claude-TUI, Enter separat nach 1 s —
-            // ein mitgesendetes Enter wird beim Paste geschluckt (Regel aus dem latexterm-Skill).
-            // Mehrere nacheinander im 2-s-Takt, damit jeder Befehl vor dem nächsten verarbeitet ist.
-            if ready {
-                for (i, followUp) in followUps.filter({ !$0.isEmpty }).enumerated() {
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.0 + 2.0 * Double(i)) { [weak self] in
-                        self?.view.send(txt: followUp)
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in self?.view.send(txt: "\r") }
-                    }
-                }
+            let bereit = Date().timeIntervalSince(started)
+            if ready { Self.recordLaunch(bereit) }
+            let reason = self.launchReady ? "signal" : (ready ? "passiv" : "timeout")
+            // Folgebefehle (z. B. /color, /compact) nur bei echter Session. Runde 26: der Vorhang
+            // bleibt liegen, bis der letzte Folgebefehl abgeschickt ist — vorher landete Mats'
+            // erstes Tippen mitten im noch offenen „/color …" („cyanist es"). Text in die
+            // Claude-TUI, Enter separat (ein mitgesendetes Enter wird beim Paste geschluckt —
+            // Regel aus dem latexterm-Skill), nacheinander mit Abstand, dann erst Reveal.
+            let queue = ready ? followUps.filter { !$0.isEmpty } : []
+            guard !queue.isEmpty else {
+                self.revealTerminal(success: ready)
+                Self.startTimerLog(t0: t0, ready: bereit, curtain: bereit, reason: reason)
+                return
+            }
+            self.sendFollowUps(queue) { [weak self] in
+                guard let self else { return }
+                self.revealTerminal(success: true)
+                Self.startTimerLog(t0: t0, ready: bereit, curtain: Date().timeIntervalSince(started), reason: reason)
             }
         }
     }
     private var launchTimer: Timer?
+    /// Laufende Folgebefehl-Schritte (Runde 26) — ⌘W mitten im Start bricht sie ab.
+    private var followUpWork: [DispatchWorkItem] = []
+    /// Folgebefehle unter dem Vorhang: je Befehl Text (+0,4 s), Enter (+0,6 s später), nächster
+    /// Befehl 1 s nach dem Enter; `done` 0,4 s nach dem letzten Enter, wenn Claude ihn verarbeitet hat.
+    private func sendFollowUps(_ commands: [String], done: @escaping () -> Void) {
+        followUpWork.forEach { $0.cancel() }
+        followUpWork = []
+        var steps: [(TimeInterval, () -> Void)] = []
+        var t: TimeInterval = 0.4
+        for cmd in commands {
+            steps.append((t, { [weak self] in self?.view.send(txt: cmd) }))
+            t += 0.6
+            steps.append((t, { [weak self] in self?.view.send(txt: "\r") }))
+            t += 1.0
+        }
+        steps.append((t - 1.0 + 0.4, done))
+        for (delay, action) in steps {
+            let item = DispatchWorkItem { [weak self] in
+                guard let self, self.isStarted else { return }   // Prozess weg → nichts mehr tippen
+                action()
+            }
+            followUpWork.append(item)
+            DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: item)
+        }
+    }
     /// `status=ready` vom SessionStart-Hook (settings.json) ist angekommen — Session steht.
     private var launchReady = false
     /// Claude-Code-Farbname dieser Kachel (Runde 25) — Kollisionsschutz der Split-View liest ihn.
@@ -311,13 +339,13 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     /// Vorhang-Zeile ins Start-Timer-Log (gleiches Log wie hooks/start-timer.sh; t0 verknüpft beide).
-    private static func startTimerLog(t0: Int, curtain: TimeInterval, reason: String) {
+    private static func startTimerLog(t0: Int, ready: TimeInterval, curtain: TimeInterval, reason: String) {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let dir = home.appendingPathComponent(".cache/mats-tools")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("start-timer.log")
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        let line = "\(f.string(from: Date()))  t0=\(t0) vorhang=\(Int(curtain * 1000)) grund=\(reason)  (LatexTerm: Tastendruck bis Vorhang weg)\n"
+        let line = "\(f.string(from: Date()))  t0=\(t0) bereit=\(Int(ready * 1000)) vorhang=\(Int(curtain * 1000)) grund=\(reason)  (LatexTerm: Tastendruck bis Session steht / bis Vorhang weg; Differenz = Folgebefehle)\n"
         guard let data = line.data(using: .utf8) else { return }
         if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(data); try? h.close() }
         else { try? data.write(to: url) }
@@ -1135,6 +1163,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// → `onClosed` und entfernt die Kachel auf demselben Pfad wie ein `exit`.
     func terminate() {
         launchTimer?.invalidate(); launchTimer = nil   // ⌘W mitten im Start: kein Reveal ins Leere
+        followUpWork.forEach { $0.cancel() }; followUpWork = []   // … und keine Folgebefehle ins Nichts
         guard isStarted else { return }   // Home-Kachel hat keinen Prozess
         view.terminate()
     }
