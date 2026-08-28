@@ -125,6 +125,41 @@ Kontext: Werkstatt-Plan `claude-werkstatt/plans/terminal-optik_2026-08-28.md`. M
 
 ---
 
+## Stand 2026-08-24, Zusammenfassung (aus der CLAUDE.md ausgelagert am 2026-08-28)
+
+Roadmap #13 (LaTeX-Terminal) komplett; Cockpit-Roadmap **#29**: #24/#25/#26/#27/#30 und #28 v1
+(Socket + CLI) zu, **#28 v2 offen**. Name bleibt LatexTerm (#31 zu, 12.07.). **Neu 24.08.: Home-Kachel
+(⌘N, Projekt-Launcher)** — Welle 5 des Werkstatt-Plans `projekt-launcher_2026-08-24.md`; gebaut,
+kompiliert, **noch nicht live verifiziert** (Claude lief selbst in LatexTerm → kein Neustart aus der
+Session). Verlauf, Debug-Funde und Entscheidungen mit Begründung: `HISTORIE.md`; Feature-Sicht:
+`CHANGELOG.md` (Unreleased seit 0.1.0); Nutzer-Doku: `README.md`.
+
+- **Home-Kachel (Stand 24.08., Runden 1–10 in `HISTORIE.md`):** Fokusziel ist die Tabelle selbst
+  (`focusTarget`; nie in `becomeFirstResponder` umleiten); Fokus-Optik (Dimmung, Akzentbalken, Kachel-
+  Dimmung) aus **einer** Wahrheit — KVO auf `window.firstResponder` → `focusDidChange()`. Aufklapp-Zustand
+  in eigener `expandedPaths`-Menge (UserDefaults `LatexTerm.homeExpanded`), `reloadData()` darf ihn nicht
+  überschreiben. Tasten: ⇥ Spalte, ⇧⇥ Pin-Screen, ⌘P pin, ⌘E umbenennen, ⌘⇧N neues Projekt, ⌘⏎ Zoom,
+  ⌘R reload; Tippen sucht in beiden Spalten. Mats-spezifische Befehle leben **nur** in den Templates von
+  `projekte --json` (Werkstatt) — Swift kennt keine Aliase/Skills. Schreibende Aufrufe über
+  `runProjekte(args)` mit `"$@"`, nie String-Interpolation. ⌘W läuft über `HomePaneView.performKeyEquivalent`;
+  `list-panes` meldet Home-Kacheln mit `cwd: null`. Layouts (mehrere Kacheln je Projekt) bewusst nicht gebaut.
+  Mats' Urteil nach Runde 10: „erstmal zufrieden".
+
+- **#28 v2 — Fernsteuerung vom Handy** (Plan als Kommentar in #28): Claude-App → Cloudflare
+  Worker (OAuth via `workers-oauth-provider`, nur MatsLuca) → Cloudflare Tunnel → MCP-Bridge auf
+  localhost → bestehender `control.sock`. Etappen E1–E4 (lokale Bridge → Tunnel → OAuth+Connector
+  → Bestätigungs-UX/Kill-Switch/Audit/SECURITY.md). Sicherheits-Kern: `send_text` = RCE auf dem
+  Mac → OAuth nicht selbst bauen, Mac nie direkt im Netz, Lease-Bestätigung für schreibende
+  Remote-Aktionen. Vor E3 zu entscheiden: Login-Provider, Bestätigungs-Modus, Bridge-Lebenszyklus.
+- **Claude-for-OSS-Bewerbung** (07.07., Long Shot ohne erfüllte Kategorie) — Antwort ausstehend;
+  Hintergrund in `HISTORIE.md` → „Nebengleis".
+- **Bekannte Reste:** `list-panes`-Status hinkt bei laufender Claude-TUI sichtbar hinterher
+  (Beobachtung 06.07., kein Issue). Stretch-Ideen ohne Issue: Rand-Vorrendern beim Scrollen (#14),
+  echter SVG-Export (#5). Theming ist seit R26 da (`ThemeStore`) — #12 damit freigeschaltet.
+
+
+---
+
 ## Stand (2026-08-24 — Home-Kachel gebaut, Welle 5 des Projekt-Launchers)
 
 Kontext: Werkstatt-Plan `claude-werkstatt/plans/projekt-launcher_2026-08-24.md` (Datenschicht
