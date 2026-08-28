@@ -7,6 +7,22 @@ Hier liegen die Arbeits-Erkenntnisse: Debug-Funde, Entscheidungen mit Begründun
 
 ---
 
+## Stand (2026-08-29, spät — Fullscreen-TUI: Mausrad/Trackpad-Reporting, 120 Hz)
+
+Anlass: Claude Codes `/tui fullscreen` (Alt-Screen, Research Preview). Alles in LatexTerm war kompatibel
+(Prompt-Stil scannt den aktiven Buffer, Overlay/`yDisp` = 0, Vorhang hängt an Enter) — **außer dem Rad**:
+`MacTerminalView.scrollWheel` bewegte nur SwiftTerms Scrollback und meldete nie Wheel-Events; im Alt-Screen
+gibt es keinen Scrollback → totes Rad. Fix `reportWheel`: bei `mouseMode != .off` Rad **und** Trackpad als
+Buttons 64/65 (`encodeButton` 4/5) senden; Trackpad-Deltas (Punkte) in Zeilenhöhe akkumulieren, Rest
+behalten, beim Gestenstart ¾ Zeile in Bewegungsrichtung vorladen (sonst ~18 px Totzone). Dazu
+`AppleTerminalView.displayFrameDelayNanos`: Repaint-Throttle an `maximumFramesPerSecond` des Screens statt
+fix 60 fps (MBP ProMotion → 8,3 ms). Claude-Seite in `~/.claude/settings.json`: `CLAUDE_CODE_SCROLL_SPEED=1`
++ `wheelScrollAccelerationEnabled=false` → eine Fingerzeile = eine Textzeile. Grenze: Alt-Screen-Scrollen
+ist zeilenquantisiert, Pixel-Interpolation gibt das Protokoll nicht her (gilt für Ghostty/iTerm ebenso).
+Nebenwirkung, gewollt: `less`/vim reagieren jetzt auch aufs Trackpad. Von Mats live abgenommen.
+
+---
+
 ## Stand (2026-08-29 — Launcher Runden 27+28: Pfeiltasten, Home-Kopf entrümpelt)
 
 R27 (`HomePaneView.treeKey/listKey`): → / ← wechseln nur noch die Spalte, ⏎ im Baum klappt Ordner auf/zu,

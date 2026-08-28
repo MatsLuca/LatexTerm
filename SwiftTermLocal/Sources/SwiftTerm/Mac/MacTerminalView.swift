@@ -2218,7 +2218,15 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
     
+    /// Rest-Delta des Trackpads (Punkte), das noch keine volle Zeile ergab — macht Präzisions-Scrollen
+    /// flüssig statt „ein Event pro Fingerzucken“.
+    private var wheelReportAccumulator: CGFloat = 0
+
     public override func scrollWheel(with event: NSEvent) {
+        if allowMouseReporting && terminal.mouseMode != .off {
+            reportWheel(event)
+            return
+        }
         if event.deltaY == 0 {
             return
         }
@@ -2230,6 +2238,43 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         }
     }
     
+    /// Rad/Trackpad als Wheel-Buttons (64/65) an die Anwendung melden, sobald sie Maus-Tracking
+    /// eingeschaltet hat (Alt-Screen-TUIs wie `claude --tui fullscreen`, `less`, vim). Ohne das
+    /// scrollte SwiftTerm nur den eigenen Scrollback — im Alt-Screen gibt es keinen, das Rad war tot.
+    /// Trackpad-Deltas (Punkte) werden zeilenweise akkumuliert, Maus-Ticks 1:1 durchgereicht.
+    private func reportWheel (_ event: NSEvent)
+    {
+        var lines: Int
+        if event.hasPreciseScrollingDeltas {
+            let cellH = max (cellDimension.height, 1)
+            if event.phase == .began {
+                // Gestenstart: Akkumulator in Bewegungsrichtung vorladen, damit die erste Zeile sofort
+                // kommt statt erst nach einer vollen Zeilenhöhe Fingerweg (spürbare Totzone).
+                let dir: CGFloat = event.scrollingDeltaY >= 0 ? 1 : -1
+                wheelReportAccumulator = dir * cellH * 0.75
+            }
+            wheelReportAccumulator += event.scrollingDeltaY
+            lines = Int (wheelReportAccumulator / cellH)
+            if lines == 0 { return }
+            wheelReportAccumulator -= CGFloat (lines) * cellH
+        } else {
+            wheelReportAccumulator = 0
+            if event.deltaY == 0 { return }
+            lines = Int (event.deltaY.rounded (.awayFromZero))
+        }
+        // deltaY > 0 = Finger/Rad nach „oben“ (Inhalt wandert runter) → Wheel-Up = Button 4 (64)
+        let button = lines > 0 ? 4 : 5
+        let flags = event.modifierFlags
+        let code = terminal.encodeButton (button: button, release: false,
+                                          shift: flags.contains(.shift), meta: flags.contains(.option), control: flags.contains(.control))
+        let displayBuffer = terminal.displayBuffer
+        let hit = calculateMouseHit (with: event)
+        let screenRow = max (0, min (displayBuffer.rows - 1, hit.grid.row - displayBuffer.yDisp))
+        for _ in 0..<min (abs (lines), 40) {
+            terminal.sendEvent (buttonFlags: code, x: hit.grid.col, y: screenRow, pixelX: hit.pixels.col, pixelY: hit.pixels.row)
+        }
+    }
+
     private func calcScrollingVelocity (delta: Int) -> Int
     {
         if delta > 9 {

@@ -1748,13 +1748,22 @@ extension TerminalView {
     // the update for a 1/600th of a second.
     //
     // It is also cheap, so should be called when new data has been posted or received.
+    /// Ein Frame in Nanosekunden, an die Bildwiederholrate des aktuellen Screens gekoppelt
+    /// (ProMotion 120 Hz → 8,3 ms statt fix 16,7 ms). Fallback 60 Hz.
+    var displayFrameDelayNanos: Int {
+        #if os(macOS)
+        let hz = window?.screen?.maximumFramesPerSecond ?? NSScreen.main?.maximumFramesPerSecond ?? 60
+        #else
+        let hz = 60
+        #endif
+        return 1_000_000_000 / max (30, hz)
+    }
+
     func queuePendingDisplay ()
     {
         // throttle
         if !pendingDisplay {
-            let fps60 = 16670000
-            // let fps30 = 16670000*2
-            let fpsDelay = fps60
+            let fpsDelay = displayFrameDelayNanos
             pendingDisplay = true
             DispatchQueue.main.asyncAfter(
                 deadline: DispatchTime (uptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + UInt64 (fpsDelay)),
@@ -1775,8 +1784,7 @@ extension TerminalView {
             return
         }
         if !pendingMetalDisplay {
-            let fps60 = 16670000
-            let fpsDelay = fps60
+            let fpsDelay = displayFrameDelayNanos
             pendingMetalDisplay = true
             DispatchQueue.main.asyncAfter(
                 deadline: DispatchTime (uptimeNanoseconds: DispatchTime.now().uptimeNanoseconds + UInt64 (fpsDelay))) { [weak self] in
