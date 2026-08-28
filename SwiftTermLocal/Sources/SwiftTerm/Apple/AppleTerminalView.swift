@@ -648,8 +648,10 @@ extension TerminalView {
             #if os(macOS)
             // Host style for default-colored, non-dim cells (LatexTerm prompt box tint/glow).
             var override: CellStyleOverride? = nil
-            if case .defaultColor = attr.fg, !attr.style.contains(.dim) {
-                override = cellStyleOverride?(row, col)
+            if !attr.style.contains(.dim), let hook = cellStyleOverride {
+                let isDefault: Bool
+                if case .defaultColor = attr.fg { isDefault = true } else { isDefault = false }
+                override = hook(row, col, isDefault)
             }
             let overrideChanged = override != lastOverride
             #else

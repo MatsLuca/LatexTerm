@@ -115,6 +115,10 @@ Kontext: Werkstatt-Plan `claude-werkstatt/plans/terminal-optik_2026-08-28.md`. M
   (off/accent/custom/rainbow, Migration vom alten Bool), `promptGlow`, `promptColor` (Hex). Regenbogen:
   Hue über die Spalten (Zyklus 28 Zellen), Phase per 12-Hz-Timer im Pane, nur solange Box + Modus.
   Settings: Picker „Prompt-Text“, ColorPicker (nur bei „Eigene Farbe“), Toggle „glüht“.
+- **Prompt-Stil, Schritt 4 (Mats: Slash-Commands ausgenommen?):** Claude Code färbt Commands/@-Erwähnungen
+  selbst (Nicht-Standard-FG) — der Tint ließ sie bewusst in Ruhe. Jetzt Schalter „Auch von Claude gefärbten
+  Text übersteuern“ (+ optional eigene Farbe): Fork-Hook bekommt `isDefaultFg` und wird für alle
+  Nicht-dim-Zellen gerufen; Pane übersteuert gefärbte Zellen nur ab Spalte 2 (Marker `❯` bleibt).
 - **Cursor:** `steadyBlock` (Ghostty), Blinken als Schalter; Farbe bleibt Akzent/Projektfarbe (Mats:
   „wie vorgeschlagen“). Padding, Schrift (JetBrains Mono gebündelt, 20 pt, Zeilenabstand 0) und die
   Home-Palette folgen in Runden 27/28; Ghostty-Config-Import in Runde 29.

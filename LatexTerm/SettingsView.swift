@@ -66,6 +66,12 @@ struct SettingsView: View {
                     .disabled(themeStore.promptTintMode != .custom)
                 Toggle("Prompt-Text glüht", isOn: $themeStore.promptGlow)
                     .disabled(themeStore.promptTintMode == .off)
+                Toggle("Auch von Claude gefärbten Text übersteuern (Slash-Commands, @-Erwähnungen)", isOn: $themeStore.promptOverrideColored)
+                    .disabled(themeStore.promptTintMode == .off)
+                Toggle("… in eigener Farbe", isOn: $themeStore.promptColoredOwnColor)
+                    .disabled(themeStore.promptTintMode == .off || !themeStore.promptOverrideColored)
+                ColorPicker("Farbe für gefärbten Text", selection: promptColoredColor, supportsOpacity: false)
+                    .disabled(themeStore.promptTintMode == .off || !themeStore.promptOverrideColored || !themeStore.promptColoredOwnColor)
                 // Ghostty-Config übernehmen: Theme, Schrift, Größe, Padding, Cursor, Bold — nur auf
                 // Knopfdruck, mit Vorschau. Ohne Config-Datei ausgegraut.
                 LabeledContent("Ghostty") {
@@ -149,6 +155,11 @@ struct SettingsView: View {
     private var promptColor: Binding<Color> {
         Binding(get: { Color(nsColor: themeStore.promptColor) },
                 set: { themeStore.promptColor = NSColor($0).usingColorSpace(.sRGB) ?? NSColor($0) })
+    }
+
+    private var promptColoredColor: Binding<Color> {
+        Binding(get: { Color(nsColor: themeStore.promptColoredColor) },
+                set: { themeStore.promptColoredColor = NSColor($0).usingColorSpace(.sRGB) ?? NSColor($0) })
     }
 
     private var padding: Binding<Double> {

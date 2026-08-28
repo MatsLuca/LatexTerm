@@ -25,6 +25,9 @@ final class ThemeStore: ObservableObject {
         static let promptTintMode = "LatexTerm.promptTintMode"
         static let promptGlow = "LatexTerm.promptGlow"
         static let promptColor = "LatexTerm.promptColor"        // "#rrggbb"
+        static let promptOverrideColored = "LatexTerm.promptOverrideColored"
+        static let promptColoredOwnColor = "LatexTerm.promptColoredOwnColor"
+        static let promptColoredColor = "LatexTerm.promptColoredColor"   // "#rrggbb"
         /// Ghostty-Config-Theme (Basis + Overrides) als `key = value`-Zeilen.
         static let customTheme = "LatexTerm.customTheme"
     }
@@ -103,6 +106,18 @@ final class ThemeStore: ObservableObject {
         didSet { UserDefaults.standard.set(promptColor.ghosttyHex, forKey: Keys.promptColor); post() }
     }
 
+    /// Auch von Claude Code selbst gefärbten Prompt-Text (Slash-Commands, @-Erwähnungen) übersteuern.
+    @Published var promptOverrideColored: Bool {
+        didSet { UserDefaults.standard.set(promptOverrideColored, forKey: Keys.promptOverrideColored); post() }
+    }
+    /// … dafür eine eigene Farbe statt der Prompt-Farbe nehmen.
+    @Published var promptColoredOwnColor: Bool {
+        didSet { UserDefaults.standard.set(promptColoredOwnColor, forKey: Keys.promptColoredOwnColor); post() }
+    }
+    @Published var promptColoredColor: NSColor {
+        didSet { UserDefaults.standard.set(promptColoredColor.ghosttyHex, forKey: Keys.promptColoredColor); post() }
+    }
+
     /// Innenabstand Terminal-Text ↔ Kachelrand (Ghostty `window-padding` 15; hier 12, weil bei
     /// mehreren Kacheln der 8-px-Steg dazukommt).
     @Published var padding: CGFloat {
@@ -125,6 +140,9 @@ final class ThemeStore: ObservableObject {
         }
         promptGlow = d.object(forKey: Keys.promptGlow) != nil ? d.bool(forKey: Keys.promptGlow) : false
         promptColor = d.string(forKey: Keys.promptColor).flatMap { NSColor(ghostty: $0) } ?? NSColor(hex: 0x29b8db)
+        promptOverrideColored = d.object(forKey: Keys.promptOverrideColored) != nil ? d.bool(forKey: Keys.promptOverrideColored) : false
+        promptColoredOwnColor = d.object(forKey: Keys.promptColoredOwnColor) != nil ? d.bool(forKey: Keys.promptColoredOwnColor) : false
+        promptColoredColor = d.string(forKey: Keys.promptColoredColor).flatMap { NSColor(ghostty: $0) } ?? NSColor(hex: 0xd670d6)
         let pad = d.object(forKey: Keys.padding) != nil ? CGFloat(d.double(forKey: Keys.padding)) : Self.defaultPadding
         padding = min(max(pad, Self.paddingRange.lowerBound), Self.paddingRange.upperBound)
     }

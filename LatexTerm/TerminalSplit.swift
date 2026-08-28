@@ -406,9 +406,18 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         }
         term.onNeedsFullRescan = { [weak controller] in controller?.scheduleRescan() }
         // Prompt-Tint (experimentell): Standard-FG-Zellen in den Box-Zeilen stylen.
-        term.cellStyleOverride = { [weak self] row, col in
+        term.cellStyleOverride = { [weak self] row, col, isDefaultFg in
             guard let self, let box = self.promptBoxAbsolute, box.contains(row) else { return nil }
             let store = ThemeStore.shared
+            guard store.promptTintMode != .off else { return nil }
+            if !isDefaultFg {
+                // Von Claude gefärbt (Slash-Command, @-Erwähnung, Marker ❯): nur auf Wunsch übersteuern,
+                // und nie die Marker-Spalten 0–1 (Nutzertext beginnt in Claude Code bei Spalte 2).
+                guard store.promptOverrideColored, col >= 2 else { return nil }
+                if store.promptColoredOwnColor {
+                    return CellStyleOverride(color: store.promptColoredColor, glow: store.promptGlow)
+                }
+            }
             let color: NSColor
             switch store.promptTintMode {
             case .off: return nil
