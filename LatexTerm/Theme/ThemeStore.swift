@@ -58,7 +58,9 @@ final class ThemeStore: ObservableObject {
     static let defaultLineSpacing: CGFloat = 0
     static let lineSpacingRange: ClosedRange<CGFloat> = 0...40
     static let lineSpacingStep: CGFloat = 2
-    static let defaultAccentColor = NSColor(hex: 0xe85e3e)
+    /// Neutral hell (Dark+-Vordergrund, leicht abgesenkt): Farbe = Projekt (Launcher), der Ruhezustand
+    /// ohne Projekt bleibt unbunt — wie Ghostty, das Cursor/Rahmen in der Vordergrundfarbe zeichnet.
+    static let defaultAccentColor = NSColor(hex: 0xc8c8c8)
 
     @Published private(set) var theme: TerminalTheme = .darkPlus
 
@@ -166,13 +168,25 @@ final class ThemeStore: ObservableObject {
 
     /// Globale Akzentfarbe (Caret, Kachelrahmen, Home-Ring), solange keine Kachel eine eigene
     /// trägt (OSC-Override / Projektfarbe). Bei adaptivem Akzent schreibt die Kontrastanalyse hierher.
+    /// Gespeichert wird nur die feste Wahl; adaptive Werte sind flüchtig, sonst klebt nach dem
+    /// Abschalten die zuletzt analysierte Farbe (so kam ein Gelb in die Home-Kachel).
     @Published var accentColor: NSColor = ThemeStore.defaultAccentColor {
-        didSet { guard !loading else { return }; Self.saveColor(accentColor, key: Keys.accentColor); post(.accent) }
+        didSet {
+            guard !loading else { return }
+            if !isAdaptiveAccent { Self.saveColor(accentColor, key: Keys.accentColor) }
+            post(.accent)
+        }
     }
 
     /// Akzentfarbe aus dem Kachelinhalt ableiten (Kontrastanalyse) statt fester Wahl.
+    /// Aus → zurück auf die gespeicherte feste Farbe (oder den Default).
     @Published var isAdaptiveAccent: Bool = false {
-        didSet { guard !loading else { return }; UserDefaults.standard.set(isAdaptiveAccent, forKey: Keys.isAdaptiveAccent); post(.adaptiveAccent) }
+        didSet {
+            guard !loading else { return }
+            UserDefaults.standard.set(isAdaptiveAccent, forKey: Keys.isAdaptiveAccent)
+            if !isAdaptiveAccent { accentColor = Self.loadColor(key: Keys.accentColor, default: Self.defaultAccentColor) }
+            post(.adaptiveAccent)
+        }
     }
 
     /// Unfokussierte Kacheln abdunkeln (Alpha 0,65). Aus = alle Kacheln voll sichtbar,
