@@ -349,9 +349,9 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private func applyTheme() {
         let theme = ThemeStore.shared.theme
         Self.applyTheme(theme, to: view)
-        container.layer?.backgroundColor = view.nativeBackgroundColor.cgColor
         // Padding-Änderung: Inhalt neu einpassen (setFrameSize rechnet den Inset frisch).
         container.setFrameSize(container.frame.size)
+        applyAccent()   // Hüll-Tint auf dem neuen Grund, Caret (Akzent oder Theme-Cursor)
         homeView?.applyTheme(theme)
         view.needsDisplay = true
     }
@@ -559,7 +559,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Bewusst nur die Hülle (das 4px-Inset-Band): der Terminal-BG selbst muss
     /// unangetastet bleiben, die Formel-Masken malen exakt in seiner Farbe.
     private func applyAccent() {
-        view.caretColor = effectiveAccent
+        view.caretColor = ThemeStore.shared.cursorThemeColor ? ThemeStore.shared.theme.cursor : effectiveAccent
         container.layer?.borderColor = effectiveAccent.withAlphaComponent(0.65).cgColor
         let bg = view.nativeBackgroundColor
         let hull = paneAccent.flatMap { bg.blended(withFraction: 0.12, of: $0) } ?? bg

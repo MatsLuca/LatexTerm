@@ -14,6 +14,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Innenabstand (Runde 28).** Einstellungen → Darstellung → „Innenabstand“ (Standard 12 px, wie Ghosttys Padding abzüglich Steg); Status-Pille und Ring rechnen mit.
 
+- **Ghostty-Import (Runde 29).** Einstellungen → Darstellung → „Aus Ghostty übernehmen…“ liest `~/.config/ghostty/config` (Theme, Schrift, Größe, Padding, Cursor-Blinken, Bold) und zeigt vorher, was sich ändert; Farb-Overrides der Config werden zum Theme „Ghostty (Config)“. Dazu der Schalter „Cursor in Theme-Farbe statt Projektfarbe“.
+
 ### Changed
 - Home-Kachel, Hinweise, Status-Pille, HUD-Punkte und die automatische Akzenterkennung nehmen ihre Farben aus dem Theme (helle ANSI-Farben) bzw. aus Claudes `/color`-Palette — kein fester Farbwert mehr außerhalb von `TerminalTheme`; ein Theme-Wechsel färbt auch die Home-Kachel sofort um.
 - 256-Farben folgen dem xterm-Würfel (`ansi256PaletteStrategy = .xterm`) statt der LAB-Interpolation aus den 16 Basisfarben — TUI-Farben (Claude Code) sehen jetzt aus wie in jedem anderen Emulator.

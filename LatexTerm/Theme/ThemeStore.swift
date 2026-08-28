@@ -18,7 +18,13 @@ final class ThemeStore: ObservableObject {
         static let boldIsBright = "LatexTerm.boldIsBright"
         static let cursorBlink = "LatexTerm.cursorBlink"
         static let padding = "LatexTerm.padding"
+        static let cursorThemeColor = "LatexTerm.cursorThemeColor"
+        /// Ghostty-Config-Theme (Basis + Overrides) als `key = value`-Zeilen.
+        static let customTheme = "LatexTerm.customTheme"
     }
+
+    /// Name des aus `~/.config/ghostty/config` gebauten Themes (Basis-Theme + Farb-Overrides).
+    static let customThemeName = "Ghostty (Config)"
 
     static let defaultPadding: CGFloat = 12
     static let paddingRange: ClosedRange<CGFloat> = 0...24
@@ -46,6 +52,11 @@ final class ThemeStore: ObservableObject {
         didSet { UserDefaults.standard.set(cursorBlink, forKey: Keys.cursorBlink); post() }
     }
 
+    /// Cursor in der Theme-Cursorfarbe (Ghostty: Weiß) statt in der Projekt-/Akzentfarbe.
+    @Published var cursorThemeColor: Bool {
+        didSet { UserDefaults.standard.set(cursorThemeColor, forKey: Keys.cursorThemeColor); post() }
+    }
+
     /// Innenabstand Terminal-Text ↔ Kachelrand (Ghostty `window-padding` 15; hier 12, weil bei
     /// mehreren Kacheln der 8-px-Steg dazukommt).
     @Published var padding: CGFloat {
@@ -58,6 +69,7 @@ final class ThemeStore: ObservableObject {
         theme = Self.resolve(name: name) ?? .darkPlus
         boldIsBright = d.object(forKey: Keys.boldIsBright) != nil ? d.bool(forKey: Keys.boldIsBright) : false
         cursorBlink = d.object(forKey: Keys.cursorBlink) != nil ? d.bool(forKey: Keys.cursorBlink) : false
+        cursorThemeColor = d.object(forKey: Keys.cursorThemeColor) != nil ? d.bool(forKey: Keys.cursorThemeColor) : false
         let pad = d.object(forKey: Keys.padding) != nil ? CGFloat(d.double(forKey: Keys.padding)) : Self.defaultPadding
         padding = min(max(pad, Self.paddingRange.lowerBound), Self.paddingRange.upperBound)
     }
@@ -68,9 +80,26 @@ final class ThemeStore: ObservableObject {
 
     // MARK: Auflösung
 
-    /// Eingebaut zuerst, dann die Ghostty-Verzeichnisse.
+    /// Ghostty-Config-Theme persistieren und aktivierbar machen (`resolve` findet es unter seinem Namen).
+    func installCustomTheme(_ t: TerminalTheme) {
+        let text = t.ghosttyPairs.map { "\($0.0) = \($0.1)" }.joined(separator: "\n")
+        UserDefaults.standard.set(text, forKey: Keys.customTheme)
+        if theme.name == Self.customThemeName { theme = t; post() }
+    }
+
+    private static var storedCustomTheme: TerminalTheme? {
+        guard let text = UserDefaults.standard.string(forKey: Keys.customTheme) else { return nil }
+        let pairs: [(String, String)] = text.split(separator: "\n").compactMap { line in
+            guard let eq = line.firstIndex(of: "=") else { return nil }
+            return (line[..<eq].trimmingCharacters(in: .whitespaces), line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces))
+        }
+        return TerminalTheme(ghosttyPairs: pairs, name: customThemeName)
+    }
+
+    /// Eingebaut zuerst, dann das Config-Theme, dann die Ghostty-Verzeichnisse.
     static func resolve(name: String) -> TerminalTheme? {
         if let t = TerminalTheme.builtIn.first(where: { $0.name == name }) { return t }
+        if name == customThemeName { return storedCustomTheme }
         for dir in ghosttyThemeDirectories {
             let url = dir.appendingPathComponent(name)
             if let t = TerminalTheme(ghosttyFile: url, name: name) { return t }
@@ -82,6 +111,7 @@ final class ThemeStore: ObservableObject {
     static var availableNames: [String] {
         var seen = Set(TerminalTheme.builtIn.map(\.name))
         var names = TerminalTheme.builtIn.map(\.name)
+        if storedCustomTheme != nil { names.append(customThemeName); seen.insert(customThemeName) }
         var external: [String] = []
         for dir in ghosttyThemeDirectories {
             let entries = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []

@@ -45,6 +45,12 @@ enum AppFonts {
         return base
     }
 
+    /// Gibt es die Familie (installiert oder gebündelt)?
+    static func familyExists(_ family: String) -> Bool {
+        _ = registerBundled
+        return NSFont(name: family, size: 12) != nil || familyFont(family, size: 12) != nil
+    }
+
     /// `NSFont(name:)` will einen PostScript-/Display-Namen; Familiennamen wie „JetBrains Mono NL“
     /// gehen über den Font-Manager (Regular-Schnitt).
     private static func familyFont(_ family: String, size: CGFloat) -> NSFont? {

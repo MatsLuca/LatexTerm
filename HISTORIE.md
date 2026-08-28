@@ -57,6 +57,19 @@ Kontext: Werkstatt-Plan `claude-werkstatt/plans/terminal-optik_2026-08-28.md`. M
   FG) statt der Neon-Palette; Status-Pille = `badgeBackground` (Grund +3 %), HUD-Fokusring = FG 0.8.
   `HomePaneView.applyTheme` färbt Titel/Untertitel/Divider/Tastenhilfe um und lädt Baum + Liste neu.
   Verbleibende feste Werte: keine (nur der Pixel-Mittelwert der Kontrastanalyse).
+- **Runde 29 — Ghostty-Import + Einstellungen komplett (28.08., R28 „sieht gut aus bis hierhin“):**
+  `Theme/GhosttyConfig.swift` liest `~/.config/ghostty/config` (Fallback Application Support,
+  `config-file`-Includes eine Ebene, `?`-Präfix, später gewinnt) und baut einen `Plan`: `theme`
+  (auch `light:X,dark:Y` → dark), `font-family` (nicht installiert → `+ " NL"` probieren, sonst Hinweis),
+  `font-size`, `window-padding-x/y` (Mittel, 0–24), `cursor-style-blink`, `bold-is-bright`;
+  `cursor-style ≠ block` nur als Hinweis. Direkte Farb-Overrides in der Config (background/palette …)
+  ergeben ein Theme „Ghostty (Config)“ = Basis-Theme-Paare + Overrides, persistiert als Zeilen in
+  `LatexTerm.customTheme` (`TerminalTheme.ghosttyPairs` ist der Rückweg). Settings: Knopf „Aus Ghostty
+  übernehmen…“ mit Alert-Vorschau (Zeile je Änderung + Hinweise; „Übernehmen“ nur, wenn etwas zu tun ist),
+  ohne Config ausgegraut. `apply` geht über dieselben Setter wie die Settings (Store, `AppFonts.storedFamily`,
+  `fontDidChange`). Neu: Schalter „Cursor in Theme-Farbe statt Projektfarbe“ (`LatexTerm.cursorThemeColor`,
+  `applyAccent` entscheidet). Nebenfund: `applyTheme` setzte die Hülle auf den nackten Grund und verlor den
+  Akzent-Tint — jetzt ruft es `applyAccent()`. Auto-Folgen der Config (29b) bewusst nicht gebaut.
 - **Cursor:** `steadyBlock` (Ghostty), Blinken als Schalter; Farbe bleibt Akzent/Projektfarbe (Mats:
   „wie vorgeschlagen“). Padding, Schrift (JetBrains Mono gebündelt, 20 pt, Zeilenabstand 0) und die
   Home-Palette folgen in Runden 27/28; Ghostty-Config-Import in Runde 29.

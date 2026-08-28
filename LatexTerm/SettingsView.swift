@@ -15,6 +15,9 @@ struct SettingsView: View {
     private let themeNames = ThemeStore.availableNames
     private let fontFamilies = AppFonts.availableMonospaceFamilies
     @AppStorage(AppFonts.fontFamilyKey) private var fontFamily: String = AppFonts.bundledFamily
+    @State private var ghosttyPlan: GhosttyConfig.Plan?
+    @State private var showGhosttyPreview = false
+    private let ghosttyConfig = GhosttyConfig.load()
     @AppStorage(LatexTerminalView.fontSizeKey)
     private var fontSize: Double = Double(LatexTerminalView.defaultFontSize)
 
@@ -52,6 +55,22 @@ struct SettingsView: View {
                 }
                 Toggle("Fett als helle Farbe", isOn: $themeStore.boldIsBright)
                 Toggle("Cursor blinkt", isOn: $themeStore.cursorBlink)
+                Toggle("Cursor in Theme-Farbe statt Projektfarbe", isOn: $themeStore.cursorThemeColor)
+                // Ghostty-Config übernehmen: Theme, Schrift, Größe, Padding, Cursor, Bold — nur auf
+                // Knopfdruck, mit Vorschau. Ohne Config-Datei ausgegraut.
+                LabeledContent("Ghostty") {
+                    HStack {
+                        Button("Aus Ghostty übernehmen…") {
+                            guard let cfg = ghosttyConfig else { return }
+                            ghosttyPlan = cfg.plan()
+                            showGhosttyPreview = true
+                        }
+                        .disabled(ghosttyConfig == nil)
+                        if ghosttyConfig == nil {
+                            Text("keine ~/.config/ghostty/config").foregroundStyle(.secondary).font(.caption)
+                        }
+                    }
+                }
             }
 
             Section("Terminal") {
@@ -92,6 +111,14 @@ struct SettingsView: View {
         // Schriftgröße geht nicht über FormulaSettings, sondern über den bestehenden
         // Broadcast — jede Kachel übernimmt sie in `applyFont` (dort gegen den
         // aktuellen Wert geguardet, der Slider-Drag ist also nicht teuer).
+        .alert("Aus Ghostty übernehmen", isPresented: $showGhosttyPreview, presenting: ghosttyPlan) { plan in
+            if !plan.isEmpty {
+                Button("Übernehmen") { GhosttyConfig.apply(plan) }
+            }
+            Button("Abbrechen", role: .cancel) {}
+        } message: { plan in
+            Text(GhosttyConfig.describe(plan).joined(separator: "\n"))
+        }
         .onChange(of: fontFamily) { _, _ in
             NotificationCenter.default.post(name: LatexTerminalView.fontDidChange, object: nil)
         }
