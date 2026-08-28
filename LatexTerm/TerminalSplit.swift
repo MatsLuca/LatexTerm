@@ -226,7 +226,9 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         guard !isStarted else { return }   // ein Prozess pro Kachel — kein zweiter Start ins laufende Terminal
         // Projektfarbe (Runde 25): vor dem Start setzen, damit Ring, Rahmen und HUD-Punkt von der
         // ersten Sekunde an die Session-Farbe tragen — dieselbe Palette, in der Claude seine Box malt.
-        if let accent { accentOverride = accent }
+        // Bewusst in den „erkannt"-Slot, nicht als OSC-Override: tippt Mats später von Hand /color,
+        // zieht die passive Rahmenerkennung die Kachel nach — Box und Rahmen bleiben eins.
+        if let accent { borderAccent = accent }
         self.accentName = accentName
         start(in: directory)
         guard let command, !command.isEmpty, let home = homeView else {
