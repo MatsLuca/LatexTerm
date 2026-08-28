@@ -1,13 +1,31 @@
 import SwiftUI
 import AppKit
 
-/// Erweitert: Steuerkanal, Diagnose, Zurücksetzen.
+/// Erweitert: Datenquelle der Home-Kachel, Steuerkanal, Diagnose, Zurücksetzen.
 struct AdvancedPage: View {
+    @ObservedObject private var cockpit = CockpitSettings.shared
     @State private var confirmReset = false
     @State private var socketActive = FileManager.default.fileExists(atPath: ControlProtocol.socketPath)
 
     var body: some View {
         Form {
+            SettingsGroup("Datenquelle der Home-Kachel",
+                          help: "Die Projektliste und die Kontingent-Zeile kommen aus dem externen CLI „projekte“ (claude-werkstatt), ausgeführt in der Login-Shell. Nur ändern, wenn das CLI anders heißt oder woanders liegt; der Kontingent-Befehl darf fehlschlagen — die Zeile bleibt dann leer.") {
+                TextField("Projekte-Befehl", text: $cockpit.projekteCommand)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Kontingent-Befehl", text: $cockpit.limitsCommand)
+                    .textFieldStyle(.roundedBorder)
+                HStack {
+                    Spacer()
+                    Button("Standardbefehle") {
+                        cockpit.projekteCommand = CockpitSettings.defaultProjekteCommand
+                        cockpit.limitsCommand = CockpitSettings.defaultLimitsCommand
+                    }
+                    .disabled(cockpit.projekteCommand == CockpitSettings.defaultProjekteCommand
+                              && cockpit.limitsCommand == CockpitSettings.defaultLimitsCommand)
+                }
+            }
+
             SettingsGroup("Steuerkanal",
                           help: "Die CLI „latexterm“ und die Claude-Code-Hooks sprechen über diesen Unix-Socket mit der App (nur der eigene Benutzer, Modus 0600). Jede Shell kennt ihre Kachel über $LATEXTERM_PANE_ID.") {
                 LabeledContent("Socket") {

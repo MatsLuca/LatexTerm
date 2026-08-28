@@ -32,12 +32,12 @@ enum SettingsPage: String, CaseIterable, Identifiable {
 
     var height: CGFloat {
         switch self {
-        case .general: return 420
+        case .general: return 300
         case .appearance: return 600
         case .panes: return 330
         case .claude: return 560
         case .formulas: return 260
-        case .advanced: return 380
+        case .advanced: return 560
         }
     }
 

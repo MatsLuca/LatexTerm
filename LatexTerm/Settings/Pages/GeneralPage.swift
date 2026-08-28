@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Allgemein: Home-Launcher (Datenquelle) und die Ghostty-Übernahme.
+/// Allgemein: Home-Kachel-Ansicht und die Ghostty-Übernahme. (Die Datenquellen-Befehle stehen unter „Erweitert“.)
 struct GeneralPage: View {
     @ObservedObject private var cockpit = CockpitSettings.shared
     @State private var ghosttyPlan: GhosttyConfig.Plan?
@@ -10,21 +10,8 @@ struct GeneralPage: View {
     var body: some View {
         Form {
             SettingsGroup("Home-Kachel",
-                          help: "Die Projektliste kommt aus dem externen CLI „projekte“ (claude-werkstatt); die Befehle laufen in einer Login-Shell. Der Kontingent-Befehl darf fehlschlagen — die Zeile bleibt dann leer.") {
-                TextField("Projekte-Befehl", text: $cockpit.projekteCommand)
-                    .textFieldStyle(.roundedBorder)
-                TextField("Kontingent-Befehl", text: $cockpit.limitsCommand)
-                    .textFieldStyle(.roundedBorder)
+                          help: "Reduziert den Ordnerbaum auf Projekte und die Ordner dorthin (⌘⇧B in der Kachel).") {
                 Toggle("Nur Projekte im Ordnerbaum", isOn: $cockpit.homeOnlyProjects)
-                HStack {
-                    Spacer()
-                    Button("Standardbefehle") {
-                        cockpit.projekteCommand = CockpitSettings.defaultProjekteCommand
-                        cockpit.limitsCommand = CockpitSettings.defaultLimitsCommand
-                    }
-                    .disabled(cockpit.projekteCommand == CockpitSettings.defaultProjekteCommand
-                              && cockpit.limitsCommand == CockpitSettings.defaultLimitsCommand)
-                }
             }
 
             SettingsGroup("Ghostty",

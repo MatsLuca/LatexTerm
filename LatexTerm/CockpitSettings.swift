@@ -13,7 +13,7 @@ final class CockpitSettings: ObservableObject {
         static let notificationsEnabled = "LatexTerm.notificationsEnabled"
         static let notifyOnlyUnobserved = "LatexTerm.notifyOnlyUnobserved"
         static let notificationCooldown = "LatexTerm.notificationCooldown"
-        /// Historische Keys (vorher nur per `defaults write` erreichbar) — Namen bleiben.
+        /// Historische Keys (vorher nur per `defaults write` erreichbar) — Namen bleiben; UI unter „Erweitert“.
         static let projekteCommand = "LatexTerm.projekteCommand"
         static let limitsCommand = "LatexTerm.limitsCommand"
         static let homeOnlyProjects = "LatexTerm.homeOnlyProjects"
