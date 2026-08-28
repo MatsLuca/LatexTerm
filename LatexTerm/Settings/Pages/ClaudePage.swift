@@ -17,6 +17,13 @@ struct ClaudePage: View {
                     .disabled(!cockpit.notificationsEnabled)
             }
 
+            SettingsGroup("Status-Pille",
+                          help: "Kleine Pille oben rechts in der Kachel: „arbeitet…“ / „braucht Input“, mit Werkzeug auch das aktuelle Tool (z. B. „Bash“) — das kommt live aus den Claude-Code-Hooks. Der pulsierende Punkt in der Titelleiste bleibt in jedem Modus.") {
+                Picker("Anzeigen", selection: $cockpit.statusBadgeMode) {
+                    ForEach(CockpitSettings.StatusBadgeMode.allCases) { Text($0.label).tag($0) }
+                }
+            }
+
             SettingsGroup("Prompt-Text (experimentell)",
                           help: "Färbt den getippten Text in Claude Codes Eingabe-Box (Erkennung der Box über ihre Rahmenlinien). Hängt an Claude Codes Zeichnung — kann nach einem Update aussetzen.") {
                 Picker("Farbe", selection: $store.promptTintMode) {

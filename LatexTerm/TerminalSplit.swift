@@ -88,6 +88,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     let container: PaneContainerView
     private let controller: OverlayController
     private var themeObserver: NSObjectProtocol?
+    private var cockpitObserver: NSObjectProtocol?
     /// Aktueller Fokus-Zustand (vom `onFocusChanged`-Callback gepflegt).
     private var hasFocus = false
     /// Fokus-Rahmen nur zeigen, wenn es mehrere Kacheln gibt — bei einer einzelnen
@@ -147,11 +148,13 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     /// Text der Kachel-Pille aus Zustand + Detail ableiten. nil = Pille weg.
     private func updateStatusBadge() {
+        let mode = CockpitSettings.shared.statusBadgeMode
+        let detail = mode == .detail ? statusDetail : nil
         let text: String?
         switch sessionState {
         case .none: text = nil
-        case .working: text = statusDetail ?? "arbeitet…"
-        case .awaitingInput: text = statusDetail ?? "braucht Input"
+        case .working: text = mode == .off ? nil : (detail ?? "arbeitet…")
+        case .awaitingInput: text = mode == .off ? nil : (detail ?? "braucht Input")
         }
         container.statusBadge.update(text: text, accent: effectiveAccent,
                                      pulsing: sessionState == .working)
@@ -474,6 +477,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             }
         }
 
+        cockpitObserver = NotificationCenter.default.addObserver(
+            forName: CockpitSettings.didChange, object: nil, queue: .main
+        ) { [weak self] _ in self?.updateStatusBadge() }
+
         // Darstellungs-Änderungen, nach Art gefiltert: das volle Theme-Installieren nur, wenn
         // Theme/Grund-Schalter sich ändern — nicht bei jeder (adaptiv gesetzten) Akzentfarbe.
         themeObserver = NotificationCenter.default.addObserver(
@@ -517,6 +524,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     deinit {
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+        if let cockpitObserver { NotificationCenter.default.removeObserver(cockpitObserver) }
         rainbowTimer?.invalidate()
     }
 

@@ -13,6 +13,7 @@ final class CockpitSettings: ObservableObject {
         static let notificationsEnabled = "LatexTerm.notificationsEnabled"
         static let notifyOnlyUnobserved = "LatexTerm.notifyOnlyUnobserved"
         static let notificationCooldown = "LatexTerm.notificationCooldown"
+        static let statusBadgeMode = "LatexTerm.statusBadgeMode"
         /// Historische Keys (vorher nur per `defaults write` erreichbar) — Namen bleiben; UI unter „Erweitert“.
         static let projekteCommand = "LatexTerm.projekteCommand"
         static let limitsCommand = "LatexTerm.limitsCommand"
@@ -37,6 +38,22 @@ final class CockpitSettings: ObservableObject {
     @Published var notificationCooldown: TimeInterval = CockpitSettings.defaultCooldown {
         didSet { guard !loading else { return }; UserDefaults.standard.set(notificationCooldown, forKey: Keys.notificationCooldown); post() }
     }
+    /// Status-Pille oben rechts in der Kachel („arbeitet…“, „braucht Input“, Tool-Name).
+    enum StatusBadgeMode: String, CaseIterable, Identifiable {
+        case off, status, detail
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .off: return "Aus"
+            case .status: return "Nur Status"
+            case .detail: return "Status + Werkzeug"
+            }
+        }
+    }
+    @Published var statusBadgeMode: StatusBadgeMode = .detail {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(statusBadgeMode.rawValue, forKey: Keys.statusBadgeMode); post() }
+    }
+
     /// Befehl, der die Projektliste als JSON liefert (Login-Shell, `zsh -lc`).
     @Published var projekteCommand: String = CockpitSettings.defaultProjekteCommand {
         didSet { guard !loading else { return }; UserDefaults.standard.set(projekteCommand, forKey: Keys.projekteCommand); post() }
@@ -65,6 +82,7 @@ final class CockpitSettings: ObservableObject {
         notifyOnlyUnobserved = d.object(forKey: Keys.notifyOnlyUnobserved) != nil ? d.bool(forKey: Keys.notifyOnlyUnobserved) : true
         let cd = d.object(forKey: Keys.notificationCooldown) != nil ? d.double(forKey: Keys.notificationCooldown) : Self.defaultCooldown
         notificationCooldown = min(max(cd, Self.cooldownRange.lowerBound), Self.cooldownRange.upperBound)
+        statusBadgeMode = d.string(forKey: Keys.statusBadgeMode).flatMap(StatusBadgeMode.init(rawValue:)) ?? .detail
         projekteCommand = d.string(forKey: Keys.projekteCommand) ?? Self.defaultProjekteCommand
         limitsCommand = d.string(forKey: Keys.limitsCommand) ?? Self.defaultLimitsCommand
         homeOnlyProjects = d.bool(forKey: Keys.homeOnlyProjects)
