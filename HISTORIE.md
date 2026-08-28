@@ -81,6 +81,11 @@ Kontext: Werkstatt-Plan `claude-werkstatt/plans/terminal-optik_2026-08-28.md`. M
   `tccutil reset ScreenCapture com.mats.LatexTerm` + neu einschalten + Neustart; (2) das Zoomen der
   Probe-Kachel verdeckte Mats' Session — sah aus wie ein Absturz. Regel: Zoom nur angekündigt und nur
   Sekunden. Doku: README „Appearance“, CLAUDE.md-Dateitabelle `Theme/`, Fork-Abschnitt (`mapColor`).
+- **Nachtrag R30 (Mats: „Schrift minimal fetter, wie eine Pixel-Outline mehr“):** Treffer — der Fork
+  zeichnete mit `setShouldSmoothFonts(true)`/`setAllowsFontSmoothing(true)` (macOS-Font-Smoothing, verdickt
+  Striche ~1 Subpixel); Ghostty hat `font-thicken = false`. Jetzt `public var fontSmoothing` auf
+  `TerminalView` (Default aus), in LatexTerm als `ThemeStore.fontThicken` → Schalter „Schrift verstärken
+  (Font-Smoothing)“ und im Ghostty-Import (`font-thicken`).
 - **Cursor:** `steadyBlock` (Ghostty), Blinken als Schalter; Farbe bleibt Akzent/Projektfarbe (Mats:
   „wie vorgeschlagen“). Padding, Schrift (JetBrains Mono gebündelt, 20 pt, Zeilenabstand 0) und die
   Home-Palette folgen in Runden 27/28; Ghostty-Config-Import in Runde 29.

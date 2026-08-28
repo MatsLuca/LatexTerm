@@ -1370,8 +1370,11 @@ extension TerminalView {
             context.setShouldAntialias(true)
             context.setAllowsAntialiasing(true)
             #if os(macOS)
-            context.setShouldSmoothFonts(true)
-            context.setAllowsFontSmoothing(true)
+            // Font smoothing thickens strokes by roughly a subpixel (macOS "font smoothing").
+            // Off by default to match Ghostty (`font-thicken = false`); host apps opt in via
+            // `fontSmoothing`.
+            context.setShouldSmoothFonts(fontSmoothing)
+            context.setAllowsFontSmoothing(fontSmoothing)
             #endif
 
             // Glyph drawing loop — reuses cached CTLines

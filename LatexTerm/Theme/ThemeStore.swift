@@ -19,6 +19,7 @@ final class ThemeStore: ObservableObject {
         static let cursorBlink = "LatexTerm.cursorBlink"
         static let padding = "LatexTerm.padding"
         static let cursorThemeColor = "LatexTerm.cursorThemeColor"
+        static let fontThicken = "LatexTerm.fontThicken"
         /// Ghostty-Config-Theme (Basis + Overrides) als `key = value`-Zeilen.
         static let customTheme = "LatexTerm.customTheme"
     }
@@ -57,6 +58,11 @@ final class ThemeStore: ObservableObject {
         didSet { UserDefaults.standard.set(cursorThemeColor, forKey: Keys.cursorThemeColor); post() }
     }
 
+    /// macOS-Font-Smoothing („Schrift verstärken“, Ghostty `font-thicken`): Striche ~1 Subpixel dicker.
+    @Published var fontThicken: Bool {
+        didSet { UserDefaults.standard.set(fontThicken, forKey: Keys.fontThicken); post() }
+    }
+
     /// Innenabstand Terminal-Text ↔ Kachelrand (Ghostty `window-padding` 15; hier 12, weil bei
     /// mehreren Kacheln der 8-px-Steg dazukommt).
     @Published var padding: CGFloat {
@@ -70,6 +76,7 @@ final class ThemeStore: ObservableObject {
         boldIsBright = d.object(forKey: Keys.boldIsBright) != nil ? d.bool(forKey: Keys.boldIsBright) : false
         cursorBlink = d.object(forKey: Keys.cursorBlink) != nil ? d.bool(forKey: Keys.cursorBlink) : false
         cursorThemeColor = d.object(forKey: Keys.cursorThemeColor) != nil ? d.bool(forKey: Keys.cursorThemeColor) : false
+        fontThicken = d.object(forKey: Keys.fontThicken) != nil ? d.bool(forKey: Keys.fontThicken) : false
         let pad = d.object(forKey: Keys.padding) != nil ? CGFloat(d.double(forKey: Keys.padding)) : Self.defaultPadding
         padding = min(max(pad, Self.paddingRange.lowerBound), Self.paddingRange.upperBound)
     }

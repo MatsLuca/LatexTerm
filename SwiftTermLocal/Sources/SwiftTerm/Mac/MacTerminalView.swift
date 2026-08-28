@@ -450,6 +450,11 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// Controls weather to use high ansi colors, if false terminal will use bold text instead of high ansi colors
     public var useBrightColors: Bool = true
 
+    /// macOS font smoothing (slightly thicker glyphs). Default off = Ghostty look.
+    public var fontSmoothing: Bool = false {
+        didSet { if oldValue != fontSmoothing { needsDisplay = true } }
+    }
+
     /// When true, block element (U+2580-U+259F) and box drawing (U+2500-U+257F) characters use custom rendering.
     public var customBlockGlyphs: Bool = true {
         didSet {

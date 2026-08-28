@@ -53,6 +53,7 @@ struct SettingsView: View {
                             .frame(width: 40, alignment: .trailing)
                     }
                 }
+                Toggle("Schrift verstärken (Font-Smoothing)", isOn: $themeStore.fontThicken)
                 Toggle("Fett als helle Farbe", isOn: $themeStore.boldIsBright)
                 Toggle("Cursor blinkt", isOn: $themeStore.cursorBlink)
                 Toggle("Cursor in Theme-Farbe statt Projektfarbe", isOn: $themeStore.cursorThemeColor)

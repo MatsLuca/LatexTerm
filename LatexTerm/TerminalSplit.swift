@@ -342,6 +342,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         term.nativeBackgroundColor = theme.background.withAlphaComponent(1)
         term.selectedTextBackgroundColor = theme.selectionBackground
         term.useBrightColors = store.boldIsBright
+        term.fontSmoothing = store.fontThicken
         term.getTerminal().setCursorStyle(store.cursorBlink ? .blinkBlock : .steadyBlock)
     }
 

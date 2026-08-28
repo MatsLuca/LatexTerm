@@ -57,11 +57,12 @@ struct GhosttyConfig {
         var padding: CGFloat?
         var cursorBlink: Bool?
         var boldIsBright: Bool?
+        var fontThicken: Bool?
         var notes: [String] = []
 
         var isEmpty: Bool {
             themeName == nil && customTheme == nil && fontFamily == nil && fontSize == nil
-                && padding == nil && cursorBlink == nil && boldIsBright == nil
+                && padding == nil && cursorBlink == nil && boldIsBright == nil && fontThicken == nil
         }
     }
 
@@ -132,6 +133,7 @@ struct GhosttyConfig {
         }
         if let b = value("cursor-style-blink").flatMap(Self.bool) , b != store.cursorBlink { p.cursorBlink = b }
         if let b = value("bold-is-bright").flatMap(Self.bool), b != store.boldIsBright { p.boldIsBright = b }
+        if let b = value("font-thicken").flatMap(Self.bool), b != store.fontThicken { p.fontThicken = b }
         return p
     }
 
@@ -152,6 +154,7 @@ struct GhosttyConfig {
         if let pad = p.padding { lines.append("Innenabstand → \(Int(pad)) px") }
         if let b = p.cursorBlink { lines.append("Cursor blinkt → \(b ? "an" : "aus")") }
         if let b = p.boldIsBright { lines.append("Fett als helle Farbe → \(b ? "an" : "aus")") }
+        if let b = p.fontThicken { lines.append("Schrift verstärken → \(b ? "an" : "aus")") }
         if lines.isEmpty { lines.append("Alles stimmt bereits mit Ghostty überein.") }
         return lines + p.notes
     }
@@ -162,6 +165,7 @@ struct GhosttyConfig {
         if let custom = p.customTheme { store.installCustomTheme(custom) }
         if let t = p.themeName { store.themeName = t }
         if let b = p.boldIsBright { store.boldIsBright = b }
+        if let b = p.fontThicken { store.fontThicken = b }
         if let b = p.cursorBlink { store.cursorBlink = b }
         if let pad = p.padding { store.padding = pad }
         if let f = p.fontFamily { AppFonts.storedFamily = f }
