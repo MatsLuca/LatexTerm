@@ -4,7 +4,7 @@ import SwiftUI
 /// Nachschauens. **Neue Seite = ein Case hier + eine Datei in `Pages/`.** Die Höhe steht hier,
 /// weil SwiftUIs Settings-Fenster sich nicht selbst an den Tab-Inhalt anpasst.
 enum SettingsPage: String, CaseIterable, Identifiable {
-    case general, appearance, panes, claude, formulas, advanced
+    case general, appearance, panes, claude, statusline, formulas, advanced
 
     var id: String { rawValue }
 
@@ -14,6 +14,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .appearance: return "Darstellung"
         case .panes: return "Kacheln"
         case .claude: return "Claude"
+        case .statusline: return "Statuszeile"
         case .formulas: return "Formeln"
         case .advanced: return "Erweitert"
         }
@@ -25,6 +26,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .appearance: return "paintbrush"
         case .panes: return "rectangle.split.2x2"
         case .claude: return "sparkles"
+        case .statusline: return "rectangle.bottomthird.inset.filled"
         case .formulas: return "function"
         case .advanced: return "wrench.and.screwdriver"
         }
@@ -36,6 +38,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .appearance: return 600
         case .panes: return 330
         case .claude: return 640
+        case .statusline: return 400
         case .formulas: return 260
         case .advanced: return 560
         }
@@ -47,6 +50,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .appearance: AppearancePage()
         case .panes: PanesPage()
         case .claude: ClaudePage()
+        case .statusline: StatuslinePage()
         case .formulas: FormulasPage()
         case .advanced: AdvancedPage()
         }
