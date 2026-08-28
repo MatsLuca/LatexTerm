@@ -130,8 +130,13 @@ extension TerminalView {
         // Get the ascent + descent + leading from the font, already scaled for the font's size
         self.cellDimension = computeFontDimensions ()
         
-        let terminalOptions = TerminalOptions(cols: Int(width / cellDimension.width),
+        var terminalOptions = TerminalOptions(cols: Int(width / cellDimension.width),
                                               rows: Int(height / cellDimension.height))
+        if terminal != nil {
+            // Keep host-set options across a re-setup instead of falling back to the defaults.
+            terminalOptions.ansi256PaletteStrategy = terminal.options.ansi256PaletteStrategy
+            terminalOptions.cursorStyle = terminal.options.cursorStyle
+        }
         
         if terminal == nil {
             terminal = Terminal(delegate: self, options: terminalOptions)
@@ -244,12 +249,14 @@ extension TerminalView {
             }
         case .ansi256(let ansi):
             var midx: Int
-            // if high - bright colors are enabled we will represent bold text by using more intense colors
-            // otherwise we will reduce colors but use bold fonts
+            // useBrightColors = "bold is bright": bold text in the 8 base colors is drawn with the
+            // bright variant (index + 8). Off = every code keeps its own color (Ghostty/xterm
+            // default). The previous branch subtracted 8 from *every* code > 7 — that shifted the
+            // whole 256-color cube (77 green → 69 blue) and was never meant for 16..255.
             if useBrightColors {
-                midx = ansi < 7 ? (Int (ansi) + (isBold ? 8 : 0)) : Int (ansi)
+                midx = ansi < 8 ? (Int (ansi) + (isBold ? 8 : 0)) : Int (ansi)
             } else {
-                midx = ansi > 7 ? (Int (ansi) - 8) : Int(ansi)
+                midx = Int (ansi)
             }
             if let c = colors [midx] {
                 return c
@@ -435,11 +442,9 @@ extension TerminalView {
             }
         }
         
-        var useBoldForBrightColor: Bool = false
-        // if high - bright colors are disabled in settings we will use bold font instead
-        if case .ansi256(let code) = fg, code > 7, !useBrightColors {
-            useBoldForBrightColor = true
-        }
+        // Bright colors are never substituted by a bold font: with useBrightColors off, every
+        // code keeps its own color and only real bold attributes select the bold face.
+        let useBoldForBrightColor = false
         var tf: TTFont
         let isBold = flags.contains(.bold)
         

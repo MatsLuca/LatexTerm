@@ -27,6 +27,14 @@ Kontext: Werkstatt-Plan `claude-werkstatt/plans/terminal-optik_2026-08-28.md`. M
 - **Fallen:** `installColors` muss *nach* dem Umstellen von `terminal.options.ansi256PaletteStrategy`
   laufen — nur `installPalette` baut die 256er-Tabelle mit der Strategie neu. `Color(red8:)` im Fork ist
   internal → `swiftTermPalette` rechnet über die 16-Bit-Init. `Terminal.options` ist public settable.
+- **Nachtrag (Sichtprobe Mats, Statusline „random“):** die 256-Farben waren *verschoben*, nicht
+  vermischt — Fork-Bug in `AppleTerminalView.mapColor`: bei `useBrightColors = false` zog es von jedem
+  Code > 7 acht ab (77 grün → 69 blau, 214 orange → 206 magenta) und setzte alles fett
+  (`useBoldForBrightColor`). Gedacht war beides für die 16 Basisfarben. Jetzt: `useBrightColors` heißt
+  „Bold ist hell“ (nur 0–7 + Bold → +8), sonst behält jeder Code seine Farbe; kein Bold-Ersatz mehr.
+  Dazu im Fork: `TerminalOptions.default` auf `.xterm`, und `setupOptions` erhält gesetzte
+  `ansi256PaletteStrategy`/`cursorStyle` statt sie mit Defaults zu überschreiben. Fork-Dateien sind
+  `r--r--r--` — vor Edits `chmod u+w`.
 - **Cursor:** `steadyBlock` (Ghostty), Blinken als Schalter; Farbe bleibt Akzent/Projektfarbe (Mats:
   „wie vorgeschlagen“). Padding, Schrift (JetBrains Mono gebündelt, 20 pt, Zeilenabstand 0) und die
   Home-Palette folgen in Runden 27/28; Ghostty-Config-Import in Runde 29.
