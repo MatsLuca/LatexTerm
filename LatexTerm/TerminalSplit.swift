@@ -1436,7 +1436,7 @@ final class TerminalSplitView: NSView {
 
     private static func makeZoomPill(accent: NSColor) -> NSView {
         let label = NSTextField(labelWithString: "⤢ Zoom   ⌘⏎")
-        label.font = .monospacedSystemFont(ofSize: 11, weight: .semibold)
+        label.font = AppFonts.mono(size: 11, weight: .semibold)
         label.textColor = accent
         label.sizeToFit()
         let pill = NSView(frame: NSRect(x: 0, y: 0,
@@ -1718,7 +1718,7 @@ final class PaneStatusBadgeView: NSView {
         wantsLayer = true
         layer?.zPosition = 10          // über dem später hinzugefügten Terminal-View
         layer?.borderWidth = 1
-        label.font = .monospacedSystemFont(ofSize: 10.5, weight: .semibold)
+        label.font = AppFonts.mono(size: 10.5, weight: .semibold)
         label.lineBreakMode = .byTruncatingTail
         label.maximumNumberOfLines = 1
         addSubview(label)

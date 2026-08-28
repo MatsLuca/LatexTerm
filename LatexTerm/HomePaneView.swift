@@ -489,9 +489,10 @@ final class HomePaneView: NSView {
     static let yellow = NSColor(red: 0xff/255.0, green: 0xd7/255.0, blue: 0x00/255.0, alpha: 1)
     static let pink   = NSColor(red: 0xff/255.0, green: 0x5f/255.0, blue: 0xaf/255.0, alpha: 1)
     static let red    = NSColor(red: 0xff/255.0, green: 0x5f/255.0, blue: 0x5f/255.0, alpha: 1)
-    static var base: CGFloat { LatexTerminalView.storedFontSize() }
+    /// Folgt der Terminalgröße, aber gedeckelt: der Baum soll bei 20 pt Terminal nicht mitwachsen.
+    static var base: CGFloat { min(LatexTerminalView.storedFontSize(), 18) }
     static func mono(_ delta: CGFloat = 0, _ w: NSFont.Weight = .regular) -> NSFont {
-        NSFont.monospacedSystemFont(ofSize: base + delta, weight: w)
+        AppFonts.mono(size: base + delta, weight: w)
     }
     static let treeExcludes: Set<String> = ["node_modules", ".build", "venv", "DerivedData", "7_AppData", "__pycache__", "Library"]
     private var accent: NSColor { FormulaSettings.shared.accentColor }

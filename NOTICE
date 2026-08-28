@@ -16,3 +16,7 @@ This product bundles third-party software:
 
 3. KaTeX fonts — SIL Open Font License 1.1
    Bundled at `LatexTerm/katex/fonts/`. See LatexTerm/katex/LICENSE for details.
+
+4. JetBrains Mono (NL variant) v2.304 — SIL Open Font License 1.1
+   Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+   Bundled at `LatexTerm/Fonts/` (Regular, Bold, Italic, BoldItalic). Full license: LatexTerm/Fonts/JetBrainsMono-OFL.txt

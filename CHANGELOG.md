@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - **Themes (Runde 26, 28.08.).** Farbschema als eine Wahrheit (`ThemeStore`): Terminal-Grund, 16 ANSI-Farben, Cursor, Auswahl und alle Flächen drumherum (Fenster, Home-Kachel, Ring-Vorhang, Stege) hängen daran. Themes im Ghostty-Dateiformat — eingebaut `Dark+` (Standard) und `Ember` (das bisherige Rotschwarz), dazu automatisch alle Themes einer installierten Ghostty (`~/.config/ghostty/themes`, App-Bundle). Wechsel über „Terminal → Theme“ oder Einstellungen, wirkt sofort auf alle Kacheln. Neue Schalter: „Fett als helle Farbe“ (aus) und „Cursor blinkt“ (aus, Block-Cursor steht).
 
+- **Schrift (Runde 27).** JetBrains Mono NL ist gebündelt (OFL) und Standard — 20 pt, Zeilenabstand 0, wie Ghostty. Einstellungen → „Schrift“ wählt jede installierte Monospace-Familie oder SF Mono; Home-Kachel, Status-Pillen und Formel-Editor laufen in derselben Schrift. Bestehende Installationen werden einmalig auf 20 pt / Abstand 0 umgestellt.
+
 ### Changed
 - 256-Farben folgen dem xterm-Würfel (`ansi256PaletteStrategy = .xterm`) statt der LAB-Interpolation aus den 16 Basisfarben — TUI-Farben (Claude Code) sehen jetzt aus wie in jedem anderen Emulator.
 - Fetter Text bleibt in seiner Farbe (`useBrightColors = false`, Ghostty-Verhalten).

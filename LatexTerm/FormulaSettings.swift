@@ -49,7 +49,8 @@ final class FormulaSettings: ObservableObject {
     /// Formeln ohne eigene Farbwahl folgen dem Theme-Vordergrund.
     static var defaultFormulaColor: NSColor { ThemeStore.shared.theme.foreground }
     static let defaultAccentColor    = NSColor(red: 232/255.0, green: 94/255.0, blue: 62/255.0, alpha: 1.0)
-    static let defaultLineSpacing: CGFloat = 8
+    /// 0 wie Ghostty: Zellhöhe = Font-Metrik (JetBrains Mono bringt ~1,2 Zeilenhöhe mit).
+    static let defaultLineSpacing: CGFloat = 0
     static let defaultFormulaScale: CGFloat = 1.0
     static let minLineSpacing: CGFloat = 0
     static let maxLineSpacing: CGFloat = 40
@@ -134,7 +135,7 @@ final class FormulaSettings: ObservableObject {
         formulasEnabled = d.object(forKey: Keys.formulasEnabled) != nil
             ? d.bool(forKey: Keys.formulasEnabled) : true
 
-        // Zeilenabstand laden (default: 8)
+        // Zeilenabstand laden (default: 0)
         let spacing = d.object(forKey: Keys.extraLineSpacing) != nil
             ? CGFloat(d.double(forKey: Keys.extraLineSpacing)) : Self.defaultLineSpacing
         extraLineSpacing = max(Self.minLineSpacing, min(Self.maxLineSpacing, spacing))

@@ -43,7 +43,8 @@ final class OverlayHost: NSView {
 
 final class LatexTerminalView: LocalProcessTerminalView {
     static let fontSizeKey = "LatexTerm.fontSize"
-    static let defaultFontSize: CGFloat = 13
+    /// Ghostty-Standard (Runde 27): JetBrains Mono NL (gebündelt, `AppFonts`) in 20 pt.
+    static let defaultFontSize: CGFloat = 20
     static let minFontSize: CGFloat = 6
     static let maxFontSize: CGFloat = 48
     /// Schriftgröße ist global: eine Kachel ändert sie, alle übernehmen sie (Cmd ±/0
@@ -84,12 +85,14 @@ final class LatexTerminalView: LocalProcessTerminalView {
         overlay.frame = bounds
         overlay.autoresizingMask = [.width, .height]
         addSubview(overlay)
-        font = NSFont.monospacedSystemFont(ofSize: Self.storedFontSize(), weight: .regular)
-        // Größenänderung einer beliebigen Kachel auch hier anwenden → alle synchron.
+        font = AppFonts.mono(size: Self.storedFontSize())
+        // Größen-/Familienänderung einer beliebigen Kachel auch hier anwenden → alle synchron.
+        // Ohne "size" im userInfo (Familienwechsel) bleibt die Größe, die Familie wird neu gelesen.
         fontObserver = NotificationCenter.default.addObserver(
             forName: Self.fontDidChange, object: nil, queue: .main
         ) { [weak self] note in
-            guard let self, let size = note.userInfo?["size"] as? CGFloat else { return }
+            guard let self else { return }
+            let size = note.userInfo?["size"] as? CGFloat ?? self.font.pointSize
             self.applyFont(size: size)
         }
     }
@@ -286,10 +289,11 @@ final class LatexTerminalView: LocalProcessTerminalView {
         )
     }
 
-    /// Wendet eine Größe lokal an (vom Broadcast) und scannt die Overlays neu.
+    /// Wendet Größe + gewählte Familie lokal an (vom Broadcast) und scannt die Overlays neu.
     private func applyFont(size: CGFloat) {
-        guard size != font.pointSize else { return }
-        font = NSFont.monospacedSystemFont(ofSize: size, weight: .regular)
+        let desired = AppFonts.mono(size: size)
+        guard desired.fontName != font.fontName || size != font.pointSize else { return }
+        font = desired
         onNeedsFullRescan?()
     }
 

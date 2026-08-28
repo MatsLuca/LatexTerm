@@ -35,6 +35,18 @@ Kontext: Werkstatt-Plan `claude-werkstatt/plans/terminal-optik_2026-08-28.md`. M
   Dazu im Fork: `TerminalOptions.default` auf `.xterm`, und `setupOptions` erhält gesetzte
   `ansi256PaletteStrategy`/`cursorStyle` statt sie mit Defaults zu überschreiben. Fork-Dateien sind
   `r--r--r--` — vor Edits `chmod u+w`.
+- **Runde 27 — Schrift (28.08., nach Abnahme R26 „passt jetzt“):** JetBrains Mono **NL** v2.304
+  (Regular/Bold/Italic/BoldItalic, OFL, 840 KB) in `LatexTerm/Fonts/`, zur Laufzeit per
+  `CTFontManagerRegisterFontsForURL(.process)` registriert (`Theme/AppFonts.swift`) — Ressourcen der
+  synchronized group landen flach in `Contents/Resources`, deshalb kein `ATSApplicationFontsPath`.
+  NL statt der Ligatur-Variante: der Fork zeichnet zellgenau, `calt`-Ligaturen würden Glyphen über
+  Zellgrenzen ziehen und die Formel-Overlays (Zellkoordinaten) verschieben. Probe außerhalb der App:
+  `NSFontManager` löst Familie + alle vier Schnitte als echte Dateien auf (SwiftTerms Bold/Italic-Weg).
+  Neue Defaults: Familie `LatexTerm.fontFamily` (leer = SF Mono), 20 pt, `extraLineSpacing` 0;
+  `AppearanceMigration` setzt bestehende Installationen einmalig um (Marker-Key). Home-Kachel, Badges,
+  HUD-Pille und Formel-Editfeld nutzen `AppFonts.mono` — Home-Basisgröße gedeckelt auf 18, damit der
+  Baum bei 20 pt Terminal nicht mitwächst. Settings: Picker „Schrift“ (gebündelte zuerst, dann alle
+  fixed-pitch-Familien, „System (SF Mono)“); Familienwechsel = `fontDidChange` ohne `size`.
 - **Cursor:** `steadyBlock` (Ghostty), Blinken als Schalter; Farbe bleibt Akzent/Projektfarbe (Mats:
   „wie vorgeschlagen“). Padding, Schrift (JetBrains Mono gebündelt, 20 pt, Zeilenabstand 0) und die
   Home-Palette folgen in Runden 27/28; Ghostty-Config-Import in Runde 29.

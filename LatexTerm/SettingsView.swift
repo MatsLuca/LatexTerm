@@ -13,6 +13,8 @@ struct SettingsView: View {
     @ObservedObject private var settings = FormulaSettings.shared
     @ObservedObject private var themeStore = ThemeStore.shared
     private let themeNames = ThemeStore.availableNames
+    private let fontFamilies = AppFonts.availableMonospaceFamilies
+    @AppStorage(AppFonts.fontFamilyKey) private var fontFamily: String = AppFonts.bundledFamily
     @AppStorage(LatexTerminalView.fontSizeKey)
     private var fontSize: Double = Double(LatexTerminalView.defaultFontSize)
 
@@ -44,6 +46,10 @@ struct SettingsView: View {
             }
 
             Section("Terminal") {
+                Picker("Schrift", selection: $fontFamily) {
+                    ForEach(fontFamilies, id: \.self) { Text($0).tag($0) }
+                    Text("System (SF Mono)").tag("")
+                }
                 LabeledContent("Schriftgröße") {
                     HStack(spacing: 8) {
                         Slider(value: $fontSize,
@@ -77,6 +83,9 @@ struct SettingsView: View {
         // Schriftgröße geht nicht über FormulaSettings, sondern über den bestehenden
         // Broadcast — jede Kachel übernimmt sie in `applyFont` (dort gegen den
         // aktuellen Wert geguardet, der Slider-Drag ist also nicht teuer).
+        .onChange(of: fontFamily) { _, _ in
+            NotificationCenter.default.post(name: LatexTerminalView.fontDidChange, object: nil)
+        }
         .onChange(of: fontSize) { _, new in
             NotificationCenter.default.post(
                 name: LatexTerminalView.fontDidChange, object: nil,

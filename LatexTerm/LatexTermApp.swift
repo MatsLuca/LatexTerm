@@ -98,6 +98,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct LatexTermApp: App {
 
+    init() { AppearanceMigration.run() }
+
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @ObservedObject private var settings = FormulaSettings.shared
     @ObservedObject private var homeFocus = HomeFocus.shared

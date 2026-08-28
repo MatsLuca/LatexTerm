@@ -319,7 +319,7 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         buttonBar.addSubview(markdownButton)
         buttonBar.addSubview(editButton)
 
-        editField.font = NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        editField.font = AppFonts.mono(size: 12)
         editField.placeholderString = "LaTeX bearbeiten — Enter schreibt in die Prompt-Zeile"
         editField.delegate = self
         editField.target = self
