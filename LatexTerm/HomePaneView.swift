@@ -100,6 +100,12 @@ struct ProjekteData: Decodable {
     }
     var quickstarts: [Quickstart]?
     var wiedervorlagen: [Wiedervorlage]?
+    /// Hintergrund-Sync von mats-tools + Klonen (Datenschicht `sync_status()`): nur zeigen, was hakt oder neu ist.
+    struct Sync: Decodable {
+        struct Behind: Decodable { var name: String; var path: String; var count: Int }
+        var age: Int?; var lastResult: String?; var pluginNew: String?; var stale: Bool; var behind: [Behind]
+    }
+    var sync: Sync?
     var root: String
     var projects: [Project]
     var areas: [Area]
@@ -942,6 +948,23 @@ final class HomePaneView: NSView {
             notices.addArrangedSubview(noticeButton(glyph: "⏰", color: Self.yellow, text: w.title, hint: when) { [weak self] in
                 self?.startWiedervorlage(w)
             })
+        }
+        // Sync-Zustand: schweigt im Normalfall. Hängender Klon → Shell dort öffnen; Rest nur Info.
+        if let sy = data?.sync {
+            for b in sy.behind {
+                notices.addArrangedSubview(noticeButton(glyph: "⬇", color: Self.yellow, text: "\(b.name) hängt \(b.count) Commit\(b.count == 1 ? "" : "s") zurück",
+                                                        hint: "lokale Änderungen offen — selbst pullen · → Shell") { [weak self] in
+                    self?.onLaunch?(LaunchRequest(path: b.path, command: nil, label: "Shell · \(b.name)", followUp: nil))
+                })
+            }
+            if let v = sy.pluginNew {
+                notices.addArrangedSubview(noticeButton(glyph: "🆕", color: Self.blue, text: "mats-tools aktualisiert (\(v.prefix(7)))", hint: "nächste Session hat es") {})
+            }
+            if sy.stale {
+                let d = sy.age.map { $0 / 86400 }
+                let text = d.map { "Sync seit \($0) Tag\($0 == 1 ? "" : "en") nicht durchgekommen" } ?? "Sync noch nie gelaufen"
+                notices.addArrangedSubview(noticeButton(glyph: "⚠", color: Self.orange, text: text, hint: sy.lastResult ?? "offline?") {})
+            }
         }
         notices.isHidden = notices.arrangedSubviews.isEmpty
         // Abstand zum Baum nur, wenn etwas drinsteht
