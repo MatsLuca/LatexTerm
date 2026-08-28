@@ -47,6 +47,15 @@ struct ProjekteData: Decodable {
         var aliases: [String]
         var lastActivity: String?
         var lastSession: Session?
+        var accent: Accent?
+    }
+    /// Akzentfarbe aus der Datenschicht (Runde 25): Farbe = Projekt, Familie = Bereich.
+    struct Accent: Decodable {
+        var color: String          // "#rrggbb"
+        var family: String?
+        var hue: Double?
+        var pinned: Bool?
+        var nsColor: NSColor? { NSColor(srgbHex: color) }
     }
     struct Project: Decodable {
         var id: String
@@ -60,6 +69,7 @@ struct ProjekteData: Decodable {
         var sessions: [Session]
         var pinned: Bool?
         var claudeMd: ClaudeMd?
+        var accent: Accent?
         /// Kopfzeile der CLAUDE.md ohne „# " — als Untertitel in der Struktur-Ansicht.
         var claudeMdHeader: String? {
             guard let h = claudeMd?.header, !h.isEmpty else { return nil }
@@ -97,6 +107,7 @@ struct ProjekteData: Decodable {
     struct Quickstart: Decodable {
         var key: String; var label: String; var glyph: String; var hint: String?
         var path: String; var exists: Bool; var prompt: String?; var command: String?
+        var accent: Accent?
     }
     var quickstarts: [Quickstart]?
     var wiedervorlagen: [Wiedervorlage]?
@@ -120,6 +131,7 @@ struct LaunchRequest {
     var command: String?     // nil = nur Shell
     var label: String        // fürs Start-Overlay
     var followUp: String?    // wird getippt, sobald die Session steht (z. B. "/compact")
+    var accent: NSColor? = nil   // Projektfarbe aus der Datenschicht — Ring, Rahmen, HUD-Punkt der Kachel
 }
 
 /// Lädt die Projektliste über das externe CLI `projekte` (Werkstatt-Datenschicht).
@@ -529,10 +541,10 @@ final class HomePaneView: NSView {
     /// Vorhang zeigen. `eta` = erwartete Startdauer (TerminalPane mittelt die letzten Starts),
     /// gegen die sich der Ring füllt. Fokus wandert auf den Vorhang: die Tastatur bleibt still,
     /// aber die Kachel gilt weiter als fokussiert (keine Dimmung, kein Fokus-Flackern).
-    func beginLaunch(_ label: String, eta: TimeInterval) {
+    func beginLaunch(_ label: String, eta: TimeInterval, accent launchAccent: NSColor? = nil) {
         guard launchOverlay == nil else { return }
         _ = closeKeyHelpIfOpen()
-        let overlay = LaunchOverlayView(frame: bounds, label: label, accent: accent, fg: Self.fg, dim: Self.dim,
+        let overlay = LaunchOverlayView(frame: bounds, label: label, accent: launchAccent ?? accent, fg: Self.fg, dim: Self.dim,
                                         font: { Self.mono($0, $1) }, eta: eta)
         overlay.alphaValue = 0
         addSubview(overlay)
@@ -971,6 +983,18 @@ final class HomePaneView: NSView {
 
     /// Wiedervorlage: Session in der Wurzel, der Text der Datei geht als erster Prompt mit —
     /// der SessionStart-Hook spielt die fällige Datei ohnehin ein, der Prompt sagt nur „die hier, jetzt".
+    /// Projektfarbe für einen Pfad — der Ordner selbst oder das nächste Projekt darüber
+    /// (nackte Unterordner erben die Farbe ihres Projekts). nil = Wurzel/unbekannt → globale Farbe.
+    private func accentFor(_ path: String) -> NSColor? {
+        var p = path
+        while !p.isEmpty, p != "/" {
+            if let a = byPath[p]?.accent?.nsColor { return a }
+            if p == root?.path { return nil }
+            p = (p as NSString).deletingLastPathComponent
+        }
+        return nil
+    }
+
     private func startWiedervorlage(_ w: ProjekteData.Wiedervorlage) {
         guard let rootPath = data?.root else { return }
         let new = (templates.byLevel["router"] ?? templates.byLevel["ordner"] ?? []).first { $0.command != nil }
@@ -1114,13 +1138,13 @@ final class HomePaneView: NSView {
         switch a {
         case .resume(let s, let path, let title, _, let project):
             let cmd = (templates.resume.command ?? "").replacingOccurrences(of: "{session}", with: s.id)
-            onLaunch?(LaunchRequest(path: path, command: cmd, label: "\(project ?? (path as NSString).lastPathComponent) · \(title)", followUp: nil))
+            onLaunch?(LaunchRequest(path: path, command: cmd, label: "\(project ?? (path as NSString).lastPathComponent) · \(title)", followUp: nil, accent: accentFor(path)))
         case .compact(let s, let path):
             guard let t = templates.compact else { return }
             let cmd = (t.command ?? "").replacingOccurrences(of: "{session}", with: s.id)
-            onLaunch?(LaunchRequest(path: path, command: cmd, label: "\((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp))
+            onLaunch?(LaunchRequest(path: path, command: cmd, label: "\((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp, accent: accentFor(path)))
         case .run(let t, let path):
-            onLaunch?(LaunchRequest(path: path, command: t.command, label: "\((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp))
+            onLaunch?(LaunchRequest(path: path, command: t.command, label: "\((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp, accent: accentFor(path)))
         case .togglePin(let s, let pinned):
             setPin(s.id, pinned: !pinned)
         case .rename(let s):
@@ -1467,7 +1491,7 @@ final class HomePaneView: NSView {
             cmd += " && " + fill(ac)
         }
         if let c = t.command { cmd += " && " + fill(c) }
-        onLaunch?(LaunchRequest(path: place, command: cmd, label: "\(name) · \(t.label)", followUp: nil))
+        onLaunch?(LaunchRequest(path: place, command: cmd, label: "\(name) · \(t.label)", followUp: nil, accent: accentFor(place)))
     }
 
     /// Text, der in einem einfach-quotierten Shell-Argument landet (der Zweck-Satz): Apostrophe
@@ -1621,7 +1645,7 @@ extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
         if let pp = (item as? PinProjectItem)?.p {
             let glyph: String, gc: NSColor
             switch pp.level {
-            case "projekt", "unter-projekt": glyph = "▣"; gc = Self.cyan
+            case "projekt", "unter-projekt": glyph = "▣"; gc = pp.accent?.nsColor ?? Self.cyan
             case "router", "bereich": glyph = "▤"; gc = Self.violet
             case "ohne-claude-md": glyph = "◇"; gc = Self.yellow
             default: glyph = "·"; gc = Self.faint
@@ -1646,7 +1670,7 @@ extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
         let p = byPath[n.path]
         let glyph: String, glyphColor: NSColor, color: NSColor
         switch p?.level {
-        case "projekt", "unter-projekt": glyph = "▣"; glyphColor = Self.cyan;   color = Self.fg
+        case "projekt", "unter-projekt": glyph = "▣"; glyphColor = p?.accent?.nsColor ?? Self.cyan; color = Self.fg
         case "router", "bereich":        glyph = "▤"; glyphColor = Self.violet; color = Self.fg.withAlphaComponent(0.75)
         case "ohne-claude-md":           glyph = "◇"; glyphColor = Self.yellow; color = Self.fg
         default:                         glyph = "·"; glyphColor = Self.faint;  color = Self.dim
