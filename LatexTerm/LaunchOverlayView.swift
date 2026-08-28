@@ -17,12 +17,6 @@ final class LaunchOverlayView: NSView {
 
     private let track = CAShapeLayer()
     private let ring = CAShapeLayer()
-    /// Glanzpunkt: die letzten ~8 % des Bogens etwas heller — Tiefe ohne zweite Farbe.
-    private let head = CAShapeLayer()
-    private static let headLength: CGFloat = 0.08
-    /// Akzent, 40 % Richtung Weiß (Glanzpunkt) bzw. fast Weiß (Abschluss-Blitz).
-    private let glossColor: CGColor
-    private let flashColor: CGColor
     /// Eigene Ebene (nicht view-backed): Anker in der Mitte, damit der Puls um den
     /// Mittelpunkt skaliert — AppKit-Layer haben Anker (0,0) und setzen ihn zurück.
     private let dial = CALayer()
@@ -44,9 +38,6 @@ final class LaunchOverlayView: NSView {
 
     init(frame: NSRect, label: String, accent: NSColor, fg: NSColor, dim: NSColor,
          font: (CGFloat, NSFont.Weight) -> NSFont, eta: TimeInterval) {
-        let srgb = accent.usingColorSpace(.sRGB) ?? accent
-        glossColor = (srgb.blended(withFraction: 0.4, of: .white) ?? srgb).cgColor
-        flashColor = (srgb.blended(withFraction: 0.85, of: .white) ?? srgb).cgColor
         super.init(frame: frame)
         autoresizingMask = [.width, .height]
         wantsLayer = true
@@ -56,7 +47,7 @@ final class LaunchOverlayView: NSView {
         ringHost.translatesAutoresizingMaskIntoConstraints = false
         dial.anchorPoint = CGPoint(x: 0.5, y: 0.5)
         ringHost.layer?.addSublayer(dial)
-        for shape in [track, ring, head] {
+        for shape in [track, ring] {
             shape.fillColor = nil
             shape.lineCap = .round
             dial.addSublayer(shape)
@@ -64,9 +55,6 @@ final class LaunchOverlayView: NSView {
         track.strokeColor = fg.withAlphaComponent(0.10).cgColor
         ring.strokeColor = accent.cgColor
         ring.strokeEnd = 0
-        head.strokeColor = glossColor
-        head.strokeStart = 0
-        head.strokeEnd = 0
 
         title.stringValue = label
         title.font = font(1, .regular)
@@ -134,7 +122,7 @@ final class LaunchOverlayView: NSView {
                     startAngle: .pi / 2, endAngle: .pi / 2 - 2 * .pi, clockwise: true)
         CATransaction.begin(); CATransaction.setDisableActions(true)
         dial.frame = CGRect(x: 0, y: 0, width: d, height: d)
-        for shape in [track, ring, head] {
+        for shape in [track, ring] {
             shape.frame = CGRect(x: 0, y: 0, width: d, height: d)
             shape.path = path
             shape.lineWidth = width
@@ -153,19 +141,13 @@ final class LaunchOverlayView: NSView {
             let t = Self.horizon * Double(i) / Double(n)
             values.append(Self.ceiling * (1 - CGFloat(exp(-Double(Self.steepness) * t / eta))))
         }
-        func keyframes(_ path: String, _ v: [CGFloat]) -> CAKeyframeAnimation {
-            let a = CAKeyframeAnimation(keyPath: path)
-            a.values = v
-            a.duration = Self.horizon
-            a.calculationMode = .linear
-            a.fillMode = .forwards
-            a.isRemovedOnCompletion = false
-            return a
-        }
-        ring.add(keyframes("strokeEnd", values), forKey: "progress")
-        // Glanzpunkt läuft als kurzes Segment hinter dem Bogenkopf mit.
-        head.add(keyframes("strokeEnd", values), forKey: "progress")
-        head.add(keyframes("strokeStart", values.map { max(0, $0 - Self.headLength) }), forKey: "progressStart")
+        let anim = CAKeyframeAnimation(keyPath: "strokeEnd")
+        anim.values = values
+        anim.duration = Self.horizon
+        anim.calculationMode = .linear
+        anim.fillMode = .forwards
+        anim.isRemovedOnCompletion = false
+        ring.add(anim, forKey: "progress")
     }
 
     /// Session steht: Ring schließen, kurz pulsen, dann `completion` (Aufrufer blendet aus).
@@ -178,35 +160,27 @@ final class LaunchOverlayView: NSView {
 
         let current = ring.presentation()?.strokeEnd ?? ring.strokeEnd
         ring.removeAnimation(forKey: "progress")
-        head.removeAllAnimations()
         sub.stringValue = "bereit"
 
-        func ease(_ path: String, from: Any, to: Any, _ duration: TimeInterval) -> CABasicAnimation {
-            let a = CABasicAnimation(keyPath: path)
-            a.fromValue = from; a.toValue = to; a.duration = duration
-            a.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            return a
-        }
         CATransaction.begin()
         CATransaction.setCompletionBlock {
-            // Belohnung: ein Puls und ein Blitz — synchron, monochrom, dann Ruhe.
-            let pulse = ease("transform.scale", from: 1.0, to: 1.07, 0.11)
+            // Kurzer Puls des Rings — die Belohnung, nicht mehr.
+            let pulse = CABasicAnimation(keyPath: "transform.scale")
+            pulse.fromValue = 1.0; pulse.toValue = 1.07
+            pulse.duration = 0.11
             pulse.autoreverses = true
+            pulse.timingFunction = CAMediaTimingFunction(name: .easeOut)
             self.dial.add(pulse, forKey: "pulse")
-            for layer in [self.ring, self.head] {
-                let flash = ease("strokeColor", from: layer.strokeColor as Any, to: self.flashColor, 0.07)
-                flash.autoreverses = true
-                layer.add(flash, forKey: "flash")
-            }
             self.track.strokeColor = self.ring.strokeColor?.copy(alpha: 0.35)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.14, execute: completion)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: completion)
         }
+        let close = CABasicAnimation(keyPath: "strokeEnd")
+        close.fromValue = current
+        close.toValue = 1.0
+        close.duration = 0.16
+        close.timingFunction = CAMediaTimingFunction(name: .easeOut)
         ring.strokeEnd = 1.0
-        ring.add(ease("strokeEnd", from: current, to: 1.0, 0.16), forKey: "close")
-        head.strokeEnd = 1.0
-        head.strokeStart = 1.0 - Self.headLength
-        head.add(ease("strokeEnd", from: current, to: 1.0, 0.16), forKey: "closeEnd")
-        head.add(ease("strokeStart", from: max(0, current - Self.headLength), to: 1.0 - Self.headLength, 0.16), forKey: "closeStart")
+        ring.add(close, forKey: "close")
         CATransaction.commit()
     }
 
