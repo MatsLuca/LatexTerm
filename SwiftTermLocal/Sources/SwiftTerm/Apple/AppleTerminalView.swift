@@ -607,6 +607,9 @@ extension TerminalView {
         var lastAttr: Attribute? = nil
         var lastHasUrl = false
         var lastIsSelected = false
+        #if os(macOS)
+        var lastOverride: CellStyleOverride? = nil
+        #endif
 
         func flushPending() {
             if !pendingText.isEmpty, let attrs = pendingAttrs {
@@ -642,12 +645,26 @@ extension TerminalView {
 
             let isSelected = isColumnSelected(selectionColumns, column: col, width: width)
 
+            #if os(macOS)
+            // Host style for default-colored, non-dim cells (LatexTerm prompt box tint/glow).
+            var override: CellStyleOverride? = nil
+            if case .defaultColor = attr.fg, !attr.style.contains(.dim) {
+                override = cellStyleOverride?(row, col)
+            }
+            let overrideChanged = override != lastOverride
+            #else
+            let overrideChanged = false
+            #endif
+
             // Flush batch when attributes change
-            if attr != lastAttr || hasUrl != lastHasUrl || isSelected != lastIsSelected {
+            if attr != lastAttr || hasUrl != lastHasUrl || isSelected != lastIsSelected || overrideChanged {
                 flushPending()
                 lastAttr = attr
                 lastHasUrl = hasUrl
                 lastIsSelected = isSelected
+                #if os(macOS)
+                lastOverride = override
+                #endif
             }
 
             var currentAttributes: [NSAttributedString.Key: Any]
@@ -659,10 +676,9 @@ extension TerminalView {
                 currentAttributes = attributes
             }
             #if os(macOS)
-            // Host tint for default-colored, non-dim cells of this row (LatexTerm prompt box).
-            if case .defaultColor = attr.fg, !attr.style.contains(.dim),
-               let tint = rowForegroundOverride?(row) {
-                currentAttributes[.foregroundColor] = tint
+            if let o = override {
+                currentAttributes[.foregroundColor] = o.color
+                if o.glow { currentAttributes[.latexTermGlow] = o.color }
             }
             #endif
             pendingAttrs = currentAttributes
@@ -1424,6 +1440,17 @@ extension TerminalView {
                         context.setFillColor(cgColor)
                     }
 
+                    #if os(macOS)
+                    if let glow = runAttributes[.latexTermGlow] as? TTColor {
+                        // Soft glow: two shadow passes (wide + tight), then the crisp glyphs on top.
+                        context.saveGState()
+                        context.setShadow(offset: .zero, blur: 10, color: glow.withAlphaComponent(0.9).cgColor)
+                        CTFontDrawGlyphs(runFont, runGlyphs, &positions, positions.count, context)
+                        context.setShadow(offset: .zero, blur: 3, color: glow.cgColor)
+                        CTFontDrawGlyphs(runFont, runGlyphs, &positions, positions.count, context)
+                        context.restoreGState()
+                    }
+                    #endif
                     CTFontDrawGlyphs(runFont, runGlyphs, &positions, positions.count, context)
 
                     // Draw other attributes
@@ -2298,4 +2325,11 @@ extension TerminalView {
 }
 #endif
 
+#endif
+
+#if os(macOS)
+extension NSAttributedString.Key {
+    /// Glow color for a run (host style override); drawn as a shadow behind the glyphs.
+    public static let latexTermGlow = NSAttributedString.Key("latexTermGlow")
+}
 #endif

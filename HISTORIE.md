@@ -107,6 +107,14 @@ Kontext: Werkstatt-Plan `claude-werkstatt/plans/terminal-optik_2026-08-28.md`. M
   Platzhalter grau bleibt); Pane liefert `effectiveAccent` für die Box-Zeilen. Schalter „Prompt-Text in
   Projektfarbe (experimentell)“ (`LatexTerm.promptTint`, Default aus). Test-Dateien per `xcodeproj`-Gem
   (nur `/usr/bin/ruby` hat es) ins Test-Target gehängt; 47 Tests grün.
+- **Prompt-Stil, Schritt 3 (Mats: „krass, das funktioniert sogar“ → eigene Farbe, Glühen, Regenbogen):**
+  Fork-Hook jetzt zellgenau: `TerminalView.cellStyleOverride(absoluteRow, col) -> CellStyleOverride?`
+  (`color` + `glow`); `buildAttributedString` flusht den Run, sobald sich der Override ändert (nötig
+  für den Farbverlauf je Spalte), Glow als `NSAttributedString.Key.latexTermGlow` → im Draw-Loop zwei
+  Schatten-Pässe (`setShadow` blur 10 + 3) vor den scharfen Glyphen. `ThemeStore.promptTintMode`
+  (off/accent/custom/rainbow, Migration vom alten Bool), `promptGlow`, `promptColor` (Hex). Regenbogen:
+  Hue über die Spalten (Zyklus 28 Zellen), Phase per 12-Hz-Timer im Pane, nur solange Box + Modus.
+  Settings: Picker „Prompt-Text“, ColorPicker (nur bei „Eigene Farbe“), Toggle „glüht“.
 - **Cursor:** `steadyBlock` (Ghostty), Blinken als Schalter; Farbe bleibt Akzent/Projektfarbe (Mats:
   „wie vorgeschlagen“). Padding, Schrift (JetBrains Mono gebündelt, 20 pt, Zeilenabstand 0) und die
   Home-Palette folgen in Runden 27/28; Ghostty-Config-Import in Runde 29.

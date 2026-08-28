@@ -354,6 +354,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         container.setFrameSize(container.frame.size)
         applyAccent()   // Hüll-Tint auf dem neuen Grund, Caret (Akzent oder Theme-Cursor)
         applyFocusStyle(animated: false)   // Rahmen an/aus
+        updateRainbowTimer()
         homeView?.applyTheme(theme)
         view.needsDisplay = true
     }
@@ -404,10 +405,21 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             self?.updatePromptBox()
         }
         term.onNeedsFullRescan = { [weak controller] in controller?.scheduleRescan() }
-        // Prompt-Tint (experimentell): Standard-FG-Zellen in den Box-Zeilen in Akzentfarbe.
-        term.rowForegroundOverride = { [weak self] row in
-            guard let self, ThemeStore.shared.promptTint, let box = self.promptBoxAbsolute, box.contains(row) else { return nil }
-            return self.effectiveAccent
+        // Prompt-Tint (experimentell): Standard-FG-Zellen in den Box-Zeilen stylen.
+        term.cellStyleOverride = { [weak self] row, col in
+            guard let self, let box = self.promptBoxAbsolute, box.contains(row) else { return nil }
+            let store = ThemeStore.shared
+            let color: NSColor
+            switch store.promptTintMode {
+            case .off: return nil
+            case .accent: color = self.effectiveAccent
+            case .custom: color = store.promptColor
+            case .rainbow:
+                // Farbverlauf über die Spalten (ein Zyklus je 28 Zellen), Phase läuft über den Timer.
+                let hue = ((CGFloat(col) + self.rainbowPhase) / 28).truncatingRemainder(dividingBy: 1)
+                color = NSColor(hue: hue < 0 ? hue + 1 : hue, saturation: 0.85, brightness: 1.0, alpha: 1)
+            }
+            return CellStyleOverride(color: color, glow: store.promptGlow)
         }
         term.onScrolled = { [weak controller] in controller?.scheduleReposition() }
         term.onSplitRequested = { [weak self] in
@@ -489,6 +501,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     deinit {
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
+        rainbowTimer?.invalidate()
     }
 
     /// Verarbeitet eine OSC-5522-Payload (`key=value`; das Format ist bewusst
@@ -772,10 +785,28 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         setPromptBox((base + box.contentRows.lowerBound)..<(base + box.contentRows.upperBound))
     }
 
+    /// Regenbogen: Phase (Zellen) und 12-Hz-Timer, nur solange Box + Modus.
+    private var rainbowPhase: CGFloat = 0
+    private var rainbowTimer: Timer?
+
+    private func updateRainbowTimer() {
+        let wanted = ThemeStore.shared.promptTintMode == .rainbow && promptBoxAbsolute != nil
+        if wanted, rainbowTimer == nil {
+            rainbowTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 12, repeats: true) { [weak self] _ in
+                guard let self else { return }
+                self.rainbowPhase -= 0.6
+                self.view.needsDisplay = true
+            }
+        } else if !wanted, let t = rainbowTimer {
+            t.invalidate(); rainbowTimer = nil
+        }
+    }
+
     private func setPromptBox(_ range: Range<Int>?) {
         guard range != promptBoxAbsolute else { return }
         promptBoxAbsolute = range
         if ThemeStore.shared.promptTint { view.needsDisplay = true }
+        updateRainbowTimer()
 #if DEBUG
         if let r = range {
             Self.statusLog("BOX rows \(r.lowerBound)..<\(r.upperBound) (abs, yBase=\(view.getTerminal().buffer.yBase))")

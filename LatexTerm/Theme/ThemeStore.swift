@@ -21,7 +21,10 @@ final class ThemeStore: ObservableObject {
         static let cursorThemeColor = "LatexTerm.cursorThemeColor"
         static let fontThicken = "LatexTerm.fontThicken"
         static let paneBorders = "LatexTerm.paneBorders"
-        static let promptTint = "LatexTerm.promptTint"
+        static let promptTint = "LatexTerm.promptTint"          // alt (Bool) — migriert auf promptTintMode
+        static let promptTintMode = "LatexTerm.promptTintMode"
+        static let promptGlow = "LatexTerm.promptGlow"
+        static let promptColor = "LatexTerm.promptColor"        // "#rrggbb"
         /// Ghostty-Config-Theme (Basis + Overrides) als `key = value`-Zeilen.
         static let customTheme = "LatexTerm.customTheme"
     }
@@ -71,10 +74,33 @@ final class ThemeStore: ObservableObject {
         didSet { UserDefaults.standard.set(paneBorders, forKey: Keys.paneBorders); post() }
     }
 
-    /// Experimentell: getippter Text in Claude Codes Eingabe-Box in der Projekt-/Akzentfarbe
-    /// (`PromptBoxLocator` findet die Box, der Fork färbt Standard-FG-Zellen dieser Zeilen).
-    @Published var promptTint: Bool {
-        didSet { UserDefaults.standard.set(promptTint, forKey: Keys.promptTint); post() }
+    /// Experimentell: getippter Text in Claude Codes Eingabe-Box (`PromptBoxLocator` findet die
+    /// Box, der Fork stylt Standard-FG-Zellen dieser Zeilen).
+    enum PromptTintMode: String, CaseIterable, Identifiable {
+        case off, accent, custom, rainbow
+        var id: String { rawValue }
+        var label: String {
+            switch self {
+            case .off: return "Aus"
+            case .accent: return "Projektfarbe"
+            case .custom: return "Eigene Farbe"
+            case .rainbow: return "Regenbogen"
+            }
+        }
+    }
+    @Published var promptTintMode: PromptTintMode {
+        didSet { UserDefaults.standard.set(promptTintMode.rawValue, forKey: Keys.promptTintMode); post() }
+    }
+    var promptTint: Bool { promptTintMode != .off }
+
+    /// Glühender Prompt-Text (weicher Schein in der Textfarbe), kombinierbar mit jedem Modus.
+    @Published var promptGlow: Bool {
+        didSet { UserDefaults.standard.set(promptGlow, forKey: Keys.promptGlow); post() }
+    }
+
+    /// Eigene Prompt-Farbe (Modus „Eigene Farbe“).
+    @Published var promptColor: NSColor {
+        didSet { UserDefaults.standard.set(promptColor.ghosttyHex, forKey: Keys.promptColor); post() }
     }
 
     /// Innenabstand Terminal-Text ↔ Kachelrand (Ghostty `window-padding` 15; hier 12, weil bei
@@ -92,7 +118,13 @@ final class ThemeStore: ObservableObject {
         cursorThemeColor = d.object(forKey: Keys.cursorThemeColor) != nil ? d.bool(forKey: Keys.cursorThemeColor) : false
         fontThicken = d.object(forKey: Keys.fontThicken) != nil ? d.bool(forKey: Keys.fontThicken) : false
         paneBorders = d.object(forKey: Keys.paneBorders) != nil ? d.bool(forKey: Keys.paneBorders) : true
-        promptTint = d.object(forKey: Keys.promptTint) != nil ? d.bool(forKey: Keys.promptTint) : false
+        if let raw = d.string(forKey: Keys.promptTintMode), let m = PromptTintMode(rawValue: raw) {
+            promptTintMode = m
+        } else {
+            promptTintMode = d.bool(forKey: Keys.promptTint) ? .accent : .off   // Migration vom Bool
+        }
+        promptGlow = d.object(forKey: Keys.promptGlow) != nil ? d.bool(forKey: Keys.promptGlow) : false
+        promptColor = d.string(forKey: Keys.promptColor).flatMap { NSColor(ghostty: $0) } ?? NSColor(hex: 0x29b8db)
         let pad = d.object(forKey: Keys.padding) != nil ? CGFloat(d.double(forKey: Keys.padding)) : Self.defaultPadding
         padding = min(max(pad, Self.paddingRange.lowerBound), Self.paddingRange.upperBound)
     }

@@ -38,6 +38,14 @@ import MetalKit
  * Use the `configureNativeColors()` to set the defaults colors for the view to match the OS
  * defaults, otherwise, this uses its own set of defaults colors.
  */
+/// Host-provided per-cell style (see `TerminalView.cellStyleOverride`).
+public struct CellStyleOverride: Equatable {
+    public var color: NSColor
+    /// Draw a soft glow (shadow in `color`) behind the glyphs.
+    public var glow: Bool
+    public init(color: NSColor, glow: Bool = false) { self.color = color; self.glow = glow }
+}
+
 open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, TerminalDelegate {
 #if canImport(MetalKit)
     // Default to throttling Metal redraws during live-resize; set SWIFTTERM_METAL_LIVE_RESIZE_THROTTLE=0 to disable.
@@ -450,10 +458,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// Controls weather to use high ansi colors, if false terminal will use bold text instead of high ansi colors
     public var useBrightColors: Bool = true
 
-    /// Host hook: returns a replacement foreground for cells that use the *default* color in the
-    /// given absolute buffer row (nil = no change). Used by LatexTerm to tint the text typed into
-    /// Claude Code's prompt box in the session accent. Dim cells are left alone.
-    public var rowForegroundOverride: ((_ absoluteRow: Int) -> NSColor?)?
+    /// Host hook: replacement style for a cell that uses the *default* foreground color
+    /// (absolute buffer row, column; nil = no change). Used by LatexTerm to tint/glow the text
+    /// typed into Claude Code's prompt box. Dim cells are left alone.
+    public var cellStyleOverride: ((_ absoluteRow: Int, _ col: Int) -> CellStyleOverride?)?
 
     /// macOS font smoothing (slightly thicker glyphs). Default off = Ghostty look.
     public var fontSmoothing: Bool = false {

@@ -58,7 +58,14 @@ struct SettingsView: View {
                 Toggle("Cursor blinkt", isOn: $themeStore.cursorBlink)
                 Toggle("Cursor in Theme-Farbe statt Projektfarbe", isOn: $themeStore.cursorThemeColor)
                 Toggle("Kachel-Akzentrahmen", isOn: $themeStore.paneBorders)
-                Toggle("Prompt-Text in Projektfarbe (experimentell)", isOn: $themeStore.promptTint)
+                // Prompt-Text (experimentell): Farbmodus + Glühen; eigene Farbe nur im Modus „Eigene Farbe“.
+                Picker("Prompt-Text (experimentell)", selection: $themeStore.promptTintMode) {
+                    ForEach(ThemeStore.PromptTintMode.allCases) { Text($0.label).tag($0) }
+                }
+                ColorPicker("Eigene Prompt-Farbe", selection: promptColor, supportsOpacity: false)
+                    .disabled(themeStore.promptTintMode != .custom)
+                Toggle("Prompt-Text glüht", isOn: $themeStore.promptGlow)
+                    .disabled(themeStore.promptTintMode == .off)
                 // Ghostty-Config übernehmen: Theme, Schrift, Größe, Padding, Cursor, Bold — nur auf
                 // Knopfdruck, mit Vorschau. Ohne Config-Datei ausgegraut.
                 LabeledContent("Ghostty") {
@@ -137,6 +144,11 @@ struct SettingsView: View {
     private var formulaColor: Binding<Color> {
         Binding(get: { Color(nsColor: settings.formulaColor) },
                 set: { settings.formulaColor = NSColor($0) })
+    }
+
+    private var promptColor: Binding<Color> {
+        Binding(get: { Color(nsColor: themeStore.promptColor) },
+                set: { themeStore.promptColor = NSColor($0).usingColorSpace(.sRGB) ?? NSColor($0) })
     }
 
     private var padding: Binding<Double> {
