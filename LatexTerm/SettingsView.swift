@@ -41,6 +41,15 @@ struct SettingsView: View {
                 Picker("Theme", selection: themeName) {
                     ForEach(themeNames, id: \.self) { Text($0).tag($0) }
                 }
+                LabeledContent("Innenabstand") {
+                    HStack(spacing: 8) {
+                        Slider(value: padding, in: Double(ThemeStore.paddingRange.lowerBound)...Double(ThemeStore.paddingRange.upperBound), step: 1)
+                        Text("\(Int(themeStore.padding)) px")
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                            .frame(width: 40, alignment: .trailing)
+                    }
+                }
                 Toggle("Fett als helle Farbe", isOn: $themeStore.boldIsBright)
                 Toggle("Cursor blinkt", isOn: $themeStore.cursorBlink)
             }
@@ -98,6 +107,10 @@ struct SettingsView: View {
     private var formulaColor: Binding<Color> {
         Binding(get: { Color(nsColor: settings.formulaColor) },
                 set: { settings.formulaColor = NSColor($0) })
+    }
+
+    private var padding: Binding<Double> {
+        Binding(get: { Double(themeStore.padding) }, set: { themeStore.padding = CGFloat($0) })
     }
 
     private var themeName: Binding<String> {

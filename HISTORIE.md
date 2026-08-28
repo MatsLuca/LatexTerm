@@ -47,6 +47,16 @@ Kontext: Werkstatt-Plan `claude-werkstatt/plans/terminal-optik_2026-08-28.md`. M
   HUD-Pille und Formel-Editfeld nutzen `AppFonts.mono` — Home-Basisgröße gedeckelt auf 18, damit der
   Baum bei 20 pt Terminal nicht mitwächst. Settings: Picker „Schrift“ (gebündelte zuerst, dann alle
   fixed-pitch-Familien, „System (SF Mono)“); Familienwechsel = `fontDidChange` ohne `size`.
+- **Runde 28 — Fläche (28.08., R27 „passt auf den ersten Blick sehr gut“):** Mats fragte, ob Launcher
+  und Custom-UIs „automatisch“ an der Architektur hängen — Antwort: halb; jetzt ganz. `PaneContainerView.contentInset`
+  liest `ThemeStore.padding` (Key `LatexTerm.padding`, Default 12, Slider 0–24; `applyTheme` ruft
+  `setFrameSize` nach, damit laufende Kacheln neu einpassen). Home-Kachel-Palette sind Computed-Statics:
+  `fg/dim/faint` + `cyan/green/blue/violet/yellow/red` = helle ANSI-Farben des Themes, `orange/pink` =
+  Claudes `accentPalette` aus `projekte --json` (gemerkt in `HomePaneView.claudePalette`, Fallback
+  `#d97757`/`#c46686`). Adaptive Akzenterkennung wählt aus `theme.contrastCandidates` (6 helle ANSI +
+  FG) statt der Neon-Palette; Status-Pille = `badgeBackground` (Grund +3 %), HUD-Fokusring = FG 0.8.
+  `HomePaneView.applyTheme` färbt Titel/Untertitel/Divider/Tastenhilfe um und lädt Baum + Liste neu.
+  Verbleibende feste Werte: keine (nur der Pixel-Mittelwert der Kontrastanalyse).
 - **Cursor:** `steadyBlock` (Ghostty), Blinken als Schalter; Farbe bleibt Akzent/Projektfarbe (Mats:
   „wie vorgeschlagen“). Padding, Schrift (JetBrains Mono gebündelt, 20 pt, Zeilenabstand 0) und die
   Home-Palette folgen in Runden 27/28; Ghostty-Config-Import in Runde 29.

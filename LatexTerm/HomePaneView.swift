@@ -475,20 +475,24 @@ final class HomePaneView: NSView {
     private let notices = NSStackView()          // über dem Baum: wartet auf dich · fällige Wiedervorlagen
     private let divider = NSView()
 
-    // Aus einem Guss mit Terminal und Statusline: dieselbe Monospace-Schrift in derselben Größe,
-    // dieselbe xterm-256-Palette wie `statusline-command.sh` (51 cyan, 77 grün, 111 blau,
-    // 171 violett, 214 orange, 220 gelb, 203 rot).
-    static let fg = NSColor(red: 230/255.0, green: 225/255.0, blue: 225/255.0, alpha: 1)
-    static let dim = fg.withAlphaComponent(0.45)
-    static let faint = fg.withAlphaComponent(0.22)
-    static let cyan   = NSColor(red: 0x5f/255.0, green: 0xd7/255.0, blue: 0xff/255.0, alpha: 1)
-    static let green  = NSColor(red: 0x87/255.0, green: 0xd7/255.0, blue: 0x87/255.0, alpha: 1)   // 114, gedämpfter als 77
-    static let blue   = NSColor(red: 0x87/255.0, green: 0xaf/255.0, blue: 0xff/255.0, alpha: 1)
-    static let violet = NSColor(red: 0xd7/255.0, green: 0x5f/255.0, blue: 0xff/255.0, alpha: 1)
-    static let orange = NSColor(red: 0xff/255.0, green: 0xaf/255.0, blue: 0x00/255.0, alpha: 1)
-    static let yellow = NSColor(red: 0xff/255.0, green: 0xd7/255.0, blue: 0x00/255.0, alpha: 1)
-    static let pink   = NSColor(red: 0xff/255.0, green: 0x5f/255.0, blue: 0xaf/255.0, alpha: 1)
-    static let red    = NSColor(red: 0xff/255.0, green: 0x5f/255.0, blue: 0x5f/255.0, alpha: 1)
+    // Aus einem Guss mit dem Terminal (Runde 28): Text- und Semantikfarben kommen aus dem Theme
+    // (helle ANSI-Farben), Orange/Pink aus Claudes eigener `/color`-Palette (`accentPalette` der
+    // Datenschicht, Fallback = Claudes Dark-Werte) — so passt die Kachel zu jedem Ghostty-Theme,
+    // und die Projektfarben bleiben exakt die der Claude-Box.
+    static var theme: TerminalTheme { ThemeStore.shared.theme }
+    static var fg: NSColor { theme.foreground }
+    static var dim: NSColor { theme.dim }
+    static var faint: NSColor { theme.faint }
+    static var cyan: NSColor { theme.cyan }
+    static var green: NSColor { theme.green }
+    static var blue: NSColor { theme.blue }
+    static var violet: NSColor { theme.violet }
+    static var yellow: NSColor { theme.yellow }
+    static var red: NSColor { theme.red }
+    /// Zuletzt geladene `accentPalette` (Name → Hex) aus `projekte --json`.
+    static var claudePalette: [String: String] = [:]
+    static var orange: NSColor { claudePalette["orange"].flatMap { NSColor(ghostty: $0) } ?? NSColor(hex: 0xd97757) }
+    static var pink: NSColor { claudePalette["pink"].flatMap { NSColor(ghostty: $0) } ?? NSColor(hex: 0xc46686) }
     /// Folgt der Terminalgröße, aber gedeckelt: der Baum soll bei 20 pt Terminal nicht mitwachsen.
     static var base: CGFloat { min(LatexTerminalView.storedFontSize(), 18) }
     static func mono(_ delta: CGFloat = 0, _ w: NSFont.Weight = .regular) -> NSFont {
@@ -509,6 +513,13 @@ final class HomePaneView: NSView {
     func applyTheme(_ theme: TerminalTheme) {
         layer?.backgroundColor = theme.background.cgColor
         keyHelp.layer?.backgroundColor = theme.keyHelpBackground.cgColor
+        keyHelp.layer?.borderColor = theme.faint.withAlphaComponent(0.10).cgColor
+        title.textColor = theme.cyan
+        subtitle.textColor = theme.dim
+        lastLine.textColor = theme.foreground.withAlphaComponent(0.5)
+        divider.layer?.backgroundColor = theme.foreground.withAlphaComponent(0.08).cgColor
+        tree.reloadData()
+        list.reloadData()
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -811,6 +822,7 @@ final class HomePaneView: NSView {
             switch result {
             case .success(let d):
                 self.data = d
+                Self.claudePalette = d.accentPalette ?? [:]
                 self.byPath = Dictionary(d.projects.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a })
                 let root = Node(path: d.root, parent: nil)
                 self.root = root

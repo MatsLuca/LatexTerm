@@ -12,7 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **Schrift (Runde 27).** JetBrains Mono NL ist gebündelt (OFL) und Standard — 20 pt, Zeilenabstand 0, wie Ghostty. Einstellungen → „Schrift“ wählt jede installierte Monospace-Familie oder SF Mono; Home-Kachel, Status-Pillen und Formel-Editor laufen in derselben Schrift. Bestehende Installationen werden einmalig auf 20 pt / Abstand 0 umgestellt.
 
+- **Innenabstand (Runde 28).** Einstellungen → Darstellung → „Innenabstand“ (Standard 12 px, wie Ghosttys Padding abzüglich Steg); Status-Pille und Ring rechnen mit.
+
 ### Changed
+- Home-Kachel, Hinweise, Status-Pille, HUD-Punkte und die automatische Akzenterkennung nehmen ihre Farben aus dem Theme (helle ANSI-Farben) bzw. aus Claudes `/color`-Palette — kein fester Farbwert mehr außerhalb von `TerminalTheme`; ein Theme-Wechsel färbt auch die Home-Kachel sofort um.
 - 256-Farben folgen dem xterm-Würfel (`ansi256PaletteStrategy = .xterm`) statt der LAB-Interpolation aus den 16 Basisfarben — TUI-Farben (Claude Code) sehen jetzt aus wie in jedem anderen Emulator.
 - Fetter Text bleibt in seiner Farbe (`useBrightColors = false`, Ghostty-Verhalten).
 - Formel-Standardfarbe folgt dem Theme-Vordergrund, solange keine eigene Farbe gewählt ist.

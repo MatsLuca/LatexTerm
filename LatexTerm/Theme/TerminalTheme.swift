@@ -32,6 +32,20 @@ struct TerminalTheme: Equatable {
     var dim: NSColor { foreground.withAlphaComponent(0.45) }
     var faint: NSColor { foreground.withAlphaComponent(0.22) }
 
+    // Semantische Farben der eigenen UIs (Home-Kachel, Hinweise, Badges): die hellen ANSI-Farben
+    // des Themes, damit Baum und Terminal-Inhalt aus derselben Palette kommen.
+    var red: NSColor { ansi[9] }
+    var green: NSColor { ansi[10] }
+    var yellow: NSColor { ansi[11] }
+    var blue: NSColor { ansi[12] }
+    var violet: NSColor { ansi[13] }
+    var cyan: NSColor { ansi[14] }
+
+    /// Kandidaten der adaptiven Akzenterkennung (Kacheln ohne Launcher-Farbe): die sechs bunten
+    /// hellen ANSI-Farben plus der Vordergrund — der letzte Eintrag ist die „weiße“ Option, die
+    /// bei hellem Text übersprungen wird.
+    var contrastCandidates: [NSColor] { [ansi[9], ansi[10], ansi[11], ansi[12], ansi[13], ansi[14], foreground] }
+
     /// Hintergrund als sRGB-Komponenten (für Pixel-Vergleiche in der Kontrastanalyse).
     var backgroundRGB: (r: CGFloat, g: CGFloat, b: CGFloat) {
         let c = background.usingColorSpace(.sRGB) ?? background

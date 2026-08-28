@@ -17,7 +17,11 @@ final class ThemeStore: ObservableObject {
         static let theme = "LatexTerm.theme"
         static let boldIsBright = "LatexTerm.boldIsBright"
         static let cursorBlink = "LatexTerm.cursorBlink"
+        static let padding = "LatexTerm.padding"
     }
+
+    static let defaultPadding: CGFloat = 12
+    static let paddingRange: ClosedRange<CGFloat> = 0...24
 
     @Published private(set) var theme: TerminalTheme
 
@@ -42,12 +46,20 @@ final class ThemeStore: ObservableObject {
         didSet { UserDefaults.standard.set(cursorBlink, forKey: Keys.cursorBlink); post() }
     }
 
+    /// Innenabstand Terminal-Text ↔ Kachelrand (Ghostty `window-padding` 15; hier 12, weil bei
+    /// mehreren Kacheln der 8-px-Steg dazukommt).
+    @Published var padding: CGFloat {
+        didSet { UserDefaults.standard.set(Double(padding), forKey: Keys.padding); post() }
+    }
+
     private init() {
         let d = UserDefaults.standard
         let name = d.string(forKey: Keys.theme) ?? TerminalTheme.darkPlus.name
         theme = Self.resolve(name: name) ?? .darkPlus
         boldIsBright = d.object(forKey: Keys.boldIsBright) != nil ? d.bool(forKey: Keys.boldIsBright) : false
         cursorBlink = d.object(forKey: Keys.cursorBlink) != nil ? d.bool(forKey: Keys.cursorBlink) : false
+        let pad = d.object(forKey: Keys.padding) != nil ? CGFloat(d.double(forKey: Keys.padding)) : Self.defaultPadding
+        padding = min(max(pad, Self.paddingRange.lowerBound), Self.paddingRange.upperBound)
     }
 
     private func post() {

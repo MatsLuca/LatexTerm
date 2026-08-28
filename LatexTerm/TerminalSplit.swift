@@ -8,7 +8,8 @@ import SwiftTerm
 /// Das Inset lebt bewusst HIER statt im Fork: Zeichnen, Maus-Koordinaten und die
 /// Overlay-Grid→Pixel-Mathematik nehmen alle den Terminal-Ursprung 0 an.
 final class PaneContainerView: NSView {
-    static let contentInset: CGFloat = 4
+    /// Innenabstand aus den Darstellungs-Einstellungen (`ThemeStore.padding`, Runde 28).
+    static var contentInset: CGFloat { ThemeStore.shared.padding }
     override var isFlipped: Bool { true }
 
     /// Schwebende Live-Status-Pille (#25 v2) oben rechts — liegt ÜBER dem
@@ -349,6 +350,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         let theme = ThemeStore.shared.theme
         Self.applyTheme(theme, to: view)
         container.layer?.backgroundColor = view.nativeBackgroundColor.cgColor
+        // Padding-Änderung: Inhalt neu einpassen (setFrameSize rechnet den Inset frisch).
+        container.setFrameSize(container.frame.size)
         homeView?.applyTheme(theme)
         view.needsDisplay = true
     }
@@ -971,17 +974,11 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         }
     }
 
-    private static let palette: [NSColor] = [
-        NSColor(red: 232/255.0, green: 94/255.0, blue: 62/255.0, alpha: 1.0),   // Orange
-        NSColor(red: 0/255.0, green: 210/255.0, blue: 255/255.0, alpha: 1.0),   // Electric Cyan
-        NSColor(red: 57/255.0, green: 255/255.0, blue: 20/255.0, alpha: 1.0),   // Neon Green
-        NSColor(red: 255/255.0, green: 223/255.0, blue: 0/255.0, alpha: 1.0),   // Solar Yellow
-        NSColor(red: 189/255.0, green: 0/255.0, blue: 255/255.0, alpha: 1.0),   // Electric Purple
-        NSColor(red: 255/255.0, green: 0/255.0, blue: 127/255.0, alpha: 1.0),   // Vaporwave Pink
-        NSColor(red: 245/255.0, green: 245/255.0, blue: 247/255.0, alpha: 1.0)  // Frost White
-    ]
+    /// Kandidaten aus dem Theme (Runde 28) statt der alten Neon-Palette — letzter Eintrag = Vordergrund.
+    private static var palette: [NSColor] { ThemeStore.shared.theme.contrastCandidates }
 
     private static func findBestContrastColor(to baseColor: NSColor) -> NSColor {
+        let palette = Self.palette
         let r = baseColor.redComponent
         let g = baseColor.greenComponent
         let b = baseColor.blueComponent
@@ -1000,7 +997,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         
         for color in palette {
             // Wenn der Text weiß/grau ist, weiche auf Buntheiten aus
-            if isWhiteOrGrayText && color == palette[6] {
+            if isWhiteOrGrayText && color == palette[palette.count - 1] {
                 continue
             }
             
@@ -1741,7 +1738,7 @@ final class PaneStatusBadgeView: NSView {
         isHidden = false
         // Dunkler, fast opaker Grund: die Pille liegt über Terminal-Text und
         // muss lesbar bleiben (das 0.16-Alpha der Zoom-Pille reicht hier nicht).
-        layer?.backgroundColor = NSColor.black.withAlphaComponent(0.72).cgColor
+        layer?.backgroundColor = ThemeStore.shared.theme.badgeBackground.cgColor
         layer?.borderColor = accent.withAlphaComponent(0.55).cgColor
         label.textColor = accent
 
@@ -1791,7 +1788,7 @@ private final class PaneDotView: NSView {
         circle.cornerRadius = 6
         circle.backgroundColor = color.withAlphaComponent(focused ? 1.0 : 0.55).cgColor
         circle.borderWidth = focused ? 1.5 : 0
-        circle.borderColor = NSColor.white.withAlphaComponent(0.8).cgColor
+        circle.borderColor = ThemeStore.shared.theme.foreground.withAlphaComponent(0.8).cgColor
         layer?.addSublayer(circle)
         // Live-Status v1 (#25): dezenter Atem-Puls, solange die Session arbeitet.
         if pulsing {
