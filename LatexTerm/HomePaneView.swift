@@ -482,10 +482,11 @@ final class HomePaneView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     /// Fokusziel der Kachel (direkt, nie über becomeFirstResponder umleiten — siehe HISTORIE 24.08.).
-    var keyView: NSView { tree }
+    var keyView: NSView { launchOverlay ?? tree }
     override var acceptsFirstResponder: Bool { false }
     override func mouseDown(with event: NSEvent) {
         // Klick ins Leere: die Spalte unter der Maus bekommt den Fokus (rechts nur, wenn es Aktionen gibt).
+        if isLaunching { return }
         closeKeyHelpIfOpen()
         let p = convert(event.locationInWindow, from: nil)
         if listScroll.frame.contains(p), !actions.isEmpty { focusList() } else { window?.makeFirstResponder(tree) }
@@ -519,61 +520,39 @@ final class HomePaneView: NSView {
         treeModeObserver.map(NotificationCenter.default.removeObserver)
     }
 
-    // MARK: Start-Overlay (Spinner bis Claude steht)
+    // MARK: Start-Vorhang (Ring bis Claude steht)
 
-    private var launchOverlay: NSView?
-    private var spinnerTimer: Timer?
-    private static let spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"]
+    private(set) var launchOverlay: LaunchOverlayView?
+    /// Läuft gerade ein Start? Dann sind Baum/Liste/Menü taub — nur ⌘⏎ und ⌘W gelten.
+    var isLaunching: Bool { launchOverlay != nil }
 
-    func beginLaunch(_ label: String) {
-        let overlay = NSView(frame: bounds)
-        overlay.autoresizingMask = [.width, .height]
-        overlay.wantsLayer = true
-        overlay.layer?.backgroundColor = NSColor(red: 23/255.0, green: 20/255.0, blue: 20/255.0, alpha: 1).cgColor
-        let spin = NSTextField(labelWithString: Self.spinnerFrames[0])
-        spin.font = Self.mono(10)
-        spin.textColor = accent
-        let text = NSTextField(labelWithString: label)
-        text.font = Self.mono(1)
-        text.textColor = Self.fg
-        text.lineBreakMode = .byTruncatingMiddle
-        let sub = NSTextField(labelWithString: "Session startet …")
-        sub.font = Self.mono(-1)
-        sub.textColor = Self.dim
-        let stack = NSStackView(views: [spin, text, sub])
-        stack.orientation = .vertical
-        stack.alignment = .centerX
-        stack.spacing = 10
-        stack.translatesAutoresizingMaskIntoConstraints = false
-        overlay.addSubview(stack)
-        NSLayoutConstraint.activate([
-            stack.centerXAnchor.constraint(equalTo: overlay.centerXAnchor),
-            stack.centerYAnchor.constraint(equalTo: overlay.centerYAnchor, constant: -10),
-            text.widthAnchor.constraint(lessThanOrEqualTo: overlay.widthAnchor, multiplier: 0.8),
-        ])
+    /// Vorhang zeigen. `eta` = erwartete Startdauer (TerminalPane mittelt die letzten Starts),
+    /// gegen die sich der Ring füllt. Fokus wandert auf den Vorhang: die Tastatur bleibt still,
+    /// aber die Kachel gilt weiter als fokussiert (keine Dimmung, kein Fokus-Flackern).
+    func beginLaunch(_ label: String, eta: TimeInterval) {
+        guard launchOverlay == nil else { return }
+        _ = closeKeyHelpIfOpen()
+        let overlay = LaunchOverlayView(frame: bounds, label: label, accent: accent, fg: Self.fg, dim: Self.dim,
+                                        font: { Self.mono($0, $1) }, eta: eta)
         overlay.alphaValue = 0
         addSubview(overlay)
         launchOverlay = overlay
         NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.15; overlay.animator().alphaValue = 1 }
-        // Live-Zähler: die ECHTE Vorhang-Zeit (Tastendruck bis reveal), nicht die Hook-Phasen.
-        // Läuft bis removeFromSuperview; TerminalPane.launch loggt den Endwert (vorhang=…).
-        var i = 0
-        let started = Date()
-        spinnerTimer?.invalidate()
-        spinnerTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { _ in
-            i = (i + 1) % Self.spinnerFrames.count
-            spin.stringValue = Self.spinnerFrames[i]
-            let t = String(format: "%.1f", Date().timeIntervalSince(started)).replacingOccurrences(of: ".", with: ",")
-            sub.stringValue = "Session startet … \(t) s"
-        }
-        // Tastatur während des Starts still: Fokus auf das Overlay, nicht mehr auf den Baum.
-        window?.makeFirstResponder(nil)
+        window?.makeFirstResponder(overlay)
     }
 
-    override func removeFromSuperview() {
-        spinnerTimer?.invalidate()
-        spinnerTimer = nil
-        super.removeFromSuperview()
+    /// Start beendet: bei `success` Ring schließen + Puls, dann Vorhang samt Home-Ansicht
+    /// ausblenden; `completion` läuft nach dem Ausblenden (Aufrufer entfernt die View).
+    func finishLaunch(success: Bool, completion: @escaping () -> Void) {
+        guard let overlay = launchOverlay else { completion(); return }
+        overlay.finish(success: success) { [weak self] in
+            guard let self else { completion(); return }
+            NSAnimationContext.runAnimationGroup({ ctx in
+                ctx.duration = 0.22
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                self.animator().alphaValue = 0
+            }, completionHandler: completion)
+        }
     }
 
     // MARK: Aufbau
@@ -713,7 +692,9 @@ final class HomePaneView: NSView {
         lastLine.animator().alphaValue = inTree ? 0.55 : 1
         tree.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
         list.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
-        HomeFocus.shared.set(self, focused: inside)
+        // Während des Starts ist die Kachel fokussiert (Vorhang = First Responder), aber das
+        // Home-Menü hat nichts zu tun — als „aktiv" gilt sie erst wieder danach.
+        HomeFocus.shared.set(self, focused: inside && !isLaunching)
         if inside != focusInside { focusInside = inside; onFocusChanged?(inside) }
     }
 
@@ -1129,6 +1110,7 @@ final class HomePaneView: NSView {
     }
 
     private func run(_ a: Action) {
+        guard !isLaunching else { return }   // ein Start pro Kachel — kein zweiter Prozess ins laufende Terminal
         switch a {
         case .resume(let s, let path, let title, _, let project):
             let cmd = (templates.resume.command ?? "").replacingOccurrences(of: "{session}", with: s.id)
@@ -1574,6 +1556,8 @@ final class HomePaneView: NSView {
         guard focused else { return super.performKeyEquivalent(with: event) }
         if mods == .command, a == "w" { onClose?(); return true }
         if mods == .command, a == "\r" { onZoom?(); return true }
+        // Alles Weitere (Neu laden, Pins, Umbenennen, Neues Projekt) ruht, solange der Vorhang liegt.
+        if isLaunching { return true }
         if mods == .command, a == "r" { reload(); return true }
         if mods == [.command, .shift], a.lowercased() == "n" { newProject(); return true }
         if mods == .command, a == "p" { return pinSelectedFromList() }

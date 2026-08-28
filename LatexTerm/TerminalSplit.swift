@@ -215,6 +215,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Home → Terminal: Shell in `directory` starten und `command` tippen (Kernel puffert,
     /// die Shell liest es nach dem Prompt — gleicher Pfad wie `new-pane --exec`).
     func launch(in directory: String, command: String?, label: String? = nil, followUp: String? = nil) {
+        guard !isStarted else { return }   // ein Prozess pro Kachel — kein zweiter Start ins laufende Terminal
         start(in: directory)
         guard let command, !command.isEmpty, let home = homeView else {
             // Nur Shell: sofort zeigen.
@@ -225,10 +226,11 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             }
             return
         }
-        // Claude-Start: Home-Ansicht bleibt als Vorhang mit Spinner liegen, bis die Session
-        // wirklich steht (passive Erkennung / Hook-Status), höchstens 12 s — der User sieht
-        // weder das getippte Kommando noch Plugin-Sync und Ladezeilen.
-        home.beginLaunch(label ?? "Claude")
+        // Claude-Start: Home-Ansicht bleibt als Vorhang liegen, bis die Session wirklich steht
+        // (Hook-Status / passive Erkennung), höchstens 12 s — der User sieht weder das getippte
+        // Kommando noch Plugin-Sync und Ladezeilen. Der Ring im Vorhang füllt sich gegen die
+        // erwartete Dauer (Mittel der letzten echten Starts).
+        home.beginLaunch(label ?? "Claude", eta: Self.launchEta)
         // Start-Timer: T0 = dieser Tastendruck, als Umgebung vor das Kommando (zsh exportiert
         // Zuweisungen vor einem Funktionsaufruf an dessen Kinder). Der SessionStart-Hook
         // hooks/start-timer.sh (mats-tools) rechnet daraus die Phasen und loggt sie; wir
@@ -238,7 +240,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         view.send(txt: "MATS_START_T0=\(t0) " + command + "\r")
         let started = Date()
         launchTimer?.invalidate()
-        launchTimer = Timer.scheduledTimer(withTimeInterval: 0.2, repeats: true) { [weak self] t in
+        launchTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] t in
             guard let self else { t.invalidate(); return }
             // `status=ready` aus dem SessionStart-Hook ist das eigentliche Signal; die passive
             // Grid-Erkennung (sessionState) bleibt Fallback, dann harter Timeout.
@@ -247,8 +249,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             guard ready || timeout else { return }
             t.invalidate()
             self.launchTimer = nil
-            self.revealTerminal()
-            Self.startTimerLog(t0: t0, curtain: Date().timeIntervalSince(started),
+            let curtain = Date().timeIntervalSince(started)
+            if ready { Self.recordLaunch(curtain) }
+            self.revealTerminal(success: ready)
+            Self.startTimerLog(t0: t0, curtain: curtain,
                                reason: self.launchReady ? "signal" : (ready ? "passiv" : "timeout"))
             // Folgebefehl (z. B. /compact): Text in die Claude-TUI, Enter separat nach 1 s —
             // ein mitgesendetes Enter wird beim Paste geschluckt (Regel aus dem latexterm-Skill).
@@ -264,6 +268,23 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// `status=ready` vom SessionStart-Hook (settings.json) ist angekommen — Session steht.
     private var launchReady = false
 
+    // MARK: Erwartete Startdauer (für den Ring im Vorhang)
+
+    private static let launchEtaKey = "LatexTerm.launchEtaMs"
+    /// Gleitender Mittelwert der letzten echten Starts (nur Signal/passiv, nie Timeout);
+    /// Erstwert 1,4 s. Persistiert, damit der erste Start nach App-Neustart schon passt.
+    static var launchEta: TimeInterval {
+        let ms = UserDefaults.standard.double(forKey: launchEtaKey)
+        return ms > 0 ? ms / 1000 : 1.4
+    }
+    private static func recordLaunch(_ curtain: TimeInterval) {
+        let clamped = min(max(curtain, 0.4), 8)
+        let next = UserDefaults.standard.double(forKey: launchEtaKey) > 0
+            ? 0.6 * launchEta + 0.4 * clamped
+            : clamped
+        UserDefaults.standard.set(Int(next * 1000), forKey: launchEtaKey)
+    }
+
     /// Vorhang-Zeile ins Start-Timer-Log (gleiches Log wie hooks/start-timer.sh; t0 verknüpft beide).
     private static func startTimerLog(t0: Int, curtain: TimeInterval, reason: String) {
         let home = FileManager.default.homeDirectoryForCurrentUser
@@ -277,16 +298,13 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         else { try? data.write(to: url) }
     }
 
-    private func revealTerminal() {
+    /// Vorhang weg: Fokus sofort ans Terminal (Tasten landen ab jetzt bei Claude), die
+    /// Home-Ansicht schließt ihren Ring (bei Erfolg) und blendet dann aus.
+    private func revealTerminal(success: Bool) {
         guard let home = homeView else { return }
         homeView = nil
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.25
-            home.animator().alphaValue = 0
-        }, completionHandler: {
-            home.removeFromSuperview()
-        })
         view.window?.makeFirstResponder(view)
+        home.finishLaunch(success: success) { home.removeFromSuperview() }
     }
 
     override init() {
@@ -956,6 +974,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Beendet die Shell (SIGTERM). Das Prozess-Ende läuft über `processTerminated`
     /// → `onClosed` und entfernt die Kachel auf demselben Pfad wie ein `exit`.
     func terminate() {
+        launchTimer?.invalidate(); launchTimer = nil   // ⌘W mitten im Start: kein Reveal ins Leere
         guard isStarted else { return }   // Home-Kachel hat keinen Prozess
         view.terminate()
     }
