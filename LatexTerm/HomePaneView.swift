@@ -499,9 +499,15 @@ final class HomePaneView: NSView {
     override init(frame: NSRect) {
         super.init(frame: frame)
         wantsLayer = true
-        layer?.backgroundColor = NSColor(red: 23/255.0, green: 20/255.0, blue: 20/255.0, alpha: 1).cgColor
+        layer?.backgroundColor = ThemeStore.shared.theme.background.cgColor
         buildUI()
         reload()
+    }
+
+    /// Theme-Wechsel zur Laufzeit (Grund + Tastenhilfe); Palette folgt in Runde 28.
+    func applyTheme(_ theme: TerminalTheme) {
+        layer?.backgroundColor = theme.background.cgColor
+        keyHelp.layer?.backgroundColor = theme.keyHelpBackground.cgColor
     }
     required init?(coder: NSCoder) { fatalError() }
 
@@ -1320,7 +1326,7 @@ final class HomePaneView: NSView {
 
     private func buildKeyHelp() {
         keyHelp.wantsLayer = true
-        keyHelp.layer?.backgroundColor = NSColor(red: 31/255.0, green: 27/255.0, blue: 27/255.0, alpha: 0.97).cgColor
+        keyHelp.layer?.backgroundColor = ThemeStore.shared.theme.keyHelpBackground.cgColor
         keyHelp.layer?.cornerRadius = 10
         keyHelp.layer?.borderWidth = 1
         keyHelp.layer?.borderColor = Self.fg.withAlphaComponent(0.10).cgColor

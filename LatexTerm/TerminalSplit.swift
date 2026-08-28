@@ -87,6 +87,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     let container: PaneContainerView
     private let controller: OverlayController
     private var settingsObserver: NSObjectProtocol?
+    private var themeObserver: NSObjectProtocol?
     /// Aktueller Fokus-Zustand (vom `onFocusChanged`-Callback gepflegt).
     private var hasFocus = false
     /// Fokus-Rahmen nur zeigen, wenn es mehrere Kacheln gibt — bei einer einzelnen
@@ -328,19 +329,40 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         home.finishLaunch(success: success) { home.removeFromSuperview() }
     }
 
+    /// Theme auf eine Terminal-Ansicht legen. Opaker Hintergrund ist Pflicht: die
+    /// Formel-Overlays maskieren den Quelltext mit einer volldeckenden Box in genau dieser
+    /// Farbe (Alpha wird in OverlayController.css verworfen); wäre der Terminal-BG
+    /// transluzent, erschiene die Maske dunkler als die Umgebung. Vibrancy bleibt in den
+    /// Kachel-Stegen (`TerminalTheme.gap`).
+    static func applyTheme(_ theme: TerminalTheme, to term: LatexTerminalView) {
+        let store = ThemeStore.shared
+        term.installColors(theme.swiftTermPalette)
+        term.nativeForegroundColor = theme.foreground.withAlphaComponent(1)
+        term.nativeBackgroundColor = theme.background.withAlphaComponent(1)
+        term.selectedTextBackgroundColor = theme.selectionBackground
+        term.useBrightColors = store.boldIsBright
+        term.getTerminal().setCursorStyle(store.cursorBlink ? .blinkBlock : .steadyBlock)
+    }
+
+    /// Theme-Wechsel zur Laufzeit: Terminal, Hülle und Home-Kachel nachziehen.
+    private func applyTheme() {
+        let theme = ThemeStore.shared.theme
+        Self.applyTheme(theme, to: view)
+        container.layer?.backgroundColor = view.nativeBackgroundColor.cgColor
+        homeView?.applyTheme(theme)
+        view.needsDisplay = true
+    }
+
     override init() {
         let settings = FormulaSettings.shared
         let term = LatexTerminalView(frame: .zero)
-        term.nativeForegroundColor = NSColor(red: 230/255.0, green: 225/255.0, blue: 225/255.0, alpha: 1.0)
-        // Opaker Hintergrund: die Formel-Overlays maskieren den Quelltext mit einer
-        // volldeckenden Box in genau dieser Farbe (Alpha wird in OverlayController.css
-        // verworfen). Wäre der Terminal-BG transluzent (Vibrancy darunter), erschiene die
-        // opake Maske dunkler als der umgebende Hintergrund. Vibrancy bleibt in den
-        // Kachel-Stegen (gapColor) erhalten.
-        term.nativeBackgroundColor = NSColor(red: 23/255.0, green: 20/255.0, blue: 20/255.0, alpha: 1.0)
+        // Farben, Palette, Cursor, Auswahl: alles aus dem Theme (Runde 26) — siehe applyTheme().
+        // 256-Farben nach xterm-Würfel wie in jedem anderen Emulator, nicht LAB-interpoliert
+        // aus den 16 Basisfarben (SwiftTerm-Default) — sonst sähe Claude Codes TUI hier
+        // anders aus als in Ghostty. Vor installColors setzen, das baut die Tabelle neu.
+        term.getTerminal().options.ansi256PaletteStrategy = .xterm
+        Self.applyTheme(ThemeStore.shared.theme, to: term)
         term.caretColor = settings.accentColor
-        // Pulsierender Cursor
-        term.getTerminal().setCursorStyle(.blinkBlock)
         term.extraLineSpacing = settings.extraLineSpacing  // aus UserDefaults
 
         // Kachel-Styling (Ecken/Rahmen/Dimmung) liegt auf der Container-Hülle;
@@ -421,6 +443,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             }
         }
 
+        themeObserver = NotificationCenter.default.addObserver(
+            forName: ThemeStore.didChange, object: nil, queue: .main
+        ) { [weak self] _ in self?.applyTheme() }
+
         // Auf Einstellungs-Änderungen reagieren
         settingsObserver = NotificationCenter.default.addObserver(
             forName: FormulaSettings.didChange,
@@ -451,6 +477,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     deinit {
         if let settingsObserver { NotificationCenter.default.removeObserver(settingsObserver) }
+        if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
     }
 
     /// Verarbeitet eine OSC-5522-Payload (`key=value`; das Format ist bewusst
@@ -902,10 +929,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         var totalB: CGFloat = 0
         var sampleCount = 0
 
-        // Hintergrundfarbe des Terminals: RGB(23, 20, 20)
-        let bgR: CGFloat = 23/255.0
-        let bgG: CGFloat = 20/255.0
-        let bgB: CGFloat = 20/255.0
+        // Hintergrundfarbe des Terminals (aus dem Theme) — Pixel nahe daran zählen nicht.
+        let (bgR, bgG, bgB) = ThemeStore.shared.theme.backgroundRGB
 
         for y in 0..<64 {
             for x in 0..<64 {
@@ -1098,8 +1123,9 @@ final class TerminalSplitView: NSView {
     /// (macOS-Update) hier nachjustieren.
     private static let windowCornerRadius: CGFloat = 16.5
 
-    /// Farbe des Stegs – transluzenter Hintergrund, damit die Vibrancy in den Stegen elegant durchschimmert.
-    private static let gapColor = NSColor(red: 48/255.0, green: 43/255.0, blue: 43/255.0, alpha: 0.35)
+    /// Farbe des Stegs (aus dem Theme, transluzent), damit die Vibrancy in den Stegen durchschimmert.
+    private static var gapColor: NSColor { ThemeStore.shared.theme.gap }
+    private var themeObserver: NSObjectProtocol?
 
     /// Ziel-Seitenverhältnis (Breite/Höhe) einer Kachel. < 1 = leicht hochkant → erlaubt
     /// mehr Spalten nebeneinander, bevor eine Reihe aufgemacht wird. Höher = früher umbrechen.
@@ -1110,6 +1136,9 @@ final class TerminalSplitView: NSView {
         super.init(frame: frameRect)
         wantsLayer = true
         layer?.backgroundColor = Self.gapColor.cgColor   // scheint in den Kachel-Lücken durch
+        themeObserver = NotificationCenter.default.addObserver(
+            forName: ThemeStore.didChange, object: nil, queue: .main
+        ) { [weak self] _ in self?.layer?.backgroundColor = Self.gapColor.cgColor }
 
         // Session-Restore (#11): letztes Layout (Pane-Anzahl + CWDs) wiederherstellen;
         // ohne/mit korruptem Snapshot startet wie bisher eine Kachel im Home.

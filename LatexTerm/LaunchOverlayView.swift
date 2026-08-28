@@ -41,7 +41,7 @@ final class LaunchOverlayView: NSView {
         super.init(frame: frame)
         autoresizingMask = [.width, .height]
         wantsLayer = true
-        layer?.backgroundColor = NSColor(red: 23/255.0, green: 20/255.0, blue: 20/255.0, alpha: 1).cgColor
+        layer?.backgroundColor = ThemeStore.shared.theme.background.cgColor
 
         ringHost.wantsLayer = true
         ringHost.translatesAutoresizingMaskIntoConstraints = false

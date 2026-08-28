@@ -11,6 +11,8 @@ import AppKit
 /// automatisch konsistent.
 struct SettingsView: View {
     @ObservedObject private var settings = FormulaSettings.shared
+    @ObservedObject private var themeStore = ThemeStore.shared
+    private let themeNames = ThemeStore.availableNames
     @AppStorage(LatexTerminalView.fontSizeKey)
     private var fontSize: Double = Double(LatexTerminalView.defaultFontSize)
 
@@ -30,6 +32,15 @@ struct SettingsView: View {
                             .frame(width: 40, alignment: .trailing)
                     }
                 }
+            }
+
+            Section("Darstellung") {
+                // Eingebaut (Dark+, Ember) + alle Ghostty-Themes, sofern Ghostty installiert ist.
+                Picker("Theme", selection: themeName) {
+                    ForEach(themeNames, id: \.self) { Text($0).tag($0) }
+                }
+                Toggle("Fett als helle Farbe", isOn: $themeStore.boldIsBright)
+                Toggle("Cursor blinkt", isOn: $themeStore.cursorBlink)
             }
 
             Section("Terminal") {
@@ -78,6 +89,10 @@ struct SettingsView: View {
     private var formulaColor: Binding<Color> {
         Binding(get: { Color(nsColor: settings.formulaColor) },
                 set: { settings.formulaColor = NSColor($0) })
+    }
+
+    private var themeName: Binding<String> {
+        Binding(get: { themeStore.themeName }, set: { themeStore.themeName = $0 })
     }
 
     private var accentColor: Binding<Color> {

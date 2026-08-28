@@ -46,7 +46,8 @@ final class FormulaSettings: ObservableObject {
 
     // MARK: - Defaults
 
-    static let defaultFormulaColor   = NSColor(red: 230/255.0, green: 225/255.0, blue: 225/255.0, alpha: 1.0)
+    /// Formeln ohne eigene Farbwahl folgen dem Theme-Vordergrund.
+    static var defaultFormulaColor: NSColor { ThemeStore.shared.theme.foreground }
     static let defaultAccentColor    = NSColor(red: 232/255.0, green: 94/255.0, blue: 62/255.0, alpha: 1.0)
     static let defaultLineSpacing: CGFloat = 8
     static let defaultFormulaScale: CGFloat = 1.0
@@ -100,13 +101,14 @@ final class FormulaSettings: ObservableObject {
     private init() {
         let d = UserDefaults.standard
 
-        // Formelfarbe laden
+        // Formelfarbe laden (ohne gespeicherte Wahl: Theme-Vordergrund)
+        let themeFg = ThemeStore.shared.theme.foreground.usingColorSpace(.sRGB) ?? ThemeStore.shared.theme.foreground
         let r = d.object(forKey: Keys.formulaColorRed) != nil
-            ? CGFloat(d.double(forKey: Keys.formulaColorRed)) : CGFloat(230/255.0)
+            ? CGFloat(d.double(forKey: Keys.formulaColorRed)) : themeFg.redComponent
         let g = d.object(forKey: Keys.formulaColorGreen) != nil
-            ? CGFloat(d.double(forKey: Keys.formulaColorGreen)) : CGFloat(225/255.0)
+            ? CGFloat(d.double(forKey: Keys.formulaColorGreen)) : themeFg.greenComponent
         let b = d.object(forKey: Keys.formulaColorBlue) != nil
-            ? CGFloat(d.double(forKey: Keys.formulaColorBlue)) : CGFloat(225/255.0)
+            ? CGFloat(d.double(forKey: Keys.formulaColorBlue)) : themeFg.blueComponent
         let a = d.object(forKey: Keys.formulaColorAlpha) != nil
             ? CGFloat(d.double(forKey: Keys.formulaColorAlpha)) : CGFloat(1.0)
         // sRGB laden, weil saveColor in sRGB-Komponenten speichert — ein calibrated

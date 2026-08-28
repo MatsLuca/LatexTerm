@@ -101,13 +101,14 @@ struct LatexTermApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
     @ObservedObject private var settings = FormulaSettings.shared
     @ObservedObject private var homeFocus = HomeFocus.shared
+    @ObservedObject private var themeStore = ThemeStore.shared
     /// Reduzierter Baum (nur Projekte und die Ordner dorthin) — gilt für alle Home-Kacheln.
     @AppStorage("LatexTerm.homeOnlyProjects") private var onlyProjects = false
 
     var body: some Scene {
         WindowGroup("LatexTerm") {
             ZStack {
-                Color(red: 23/255.0, green: 20/255.0, blue: 20/255.0)
+                Color(nsColor: themeStore.theme.background)
                 // Bewusst OHNE horizontales Padding: die Akzent-Outlines der
                 // Kacheln sollen an den physischen Fensterkanten anliegen.
                 TerminalContainer()
@@ -171,6 +172,16 @@ struct LatexTermApp: App {
                     .disabled(aus)
             }
             CommandMenu("Terminal") {
+
+                // MARK: Darstellung (Runde 26): Theme-Wechsel wirkt sofort auf alle Kacheln.
+                Menu("Theme  (\(themeStore.themeName))") {
+                    ForEach(ThemeStore.availableNames, id: \.self) { name in
+                        Toggle(name, isOn: Binding(
+                            get: { themeStore.themeName == name },
+                            set: { if $0 { themeStore.themeName = name } }))
+                    }
+                }
+                Divider()
 
                 // MARK: LaTeX-Optionen
                 Toggle("LaTeX-Formeln anzeigen", isOn: $settings.formulasEnabled)

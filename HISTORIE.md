@@ -7,6 +7,32 @@ Hier liegen die Arbeits-Erkenntnisse: Debug-Funde, Entscheidungen mit Begründun
 
 ---
 
+## Stand (2026-08-28 — Terminal-Optik Runde 26: Theme-Modell, Dark+, xterm-256)
+
+Kontext: Werkstatt-Plan `claude-werkstatt/plans/terminal-optik_2026-08-28.md`. Mats fand Ghostty
+(Dark+, JetBrains Mono 20) „einfach geiler zum Arbeiten“; Befund vorab per Inventar aller Optik-Stellen.
+
+- **Zwei technische Abweichungen, nicht nur Geschmack:** (1) der Fork mischte 256-Farben per
+  `.base16Lab` (LAB-Interpolation aus den 16 Basisfarben) statt xterm-Würfel — Claude Codes TUI-Farben
+  sahen hier anders aus als in jedem anderen Emulator; (2) `useBrightColors = true` ließ fetten Text in
+  ANSI 0–7 auf die helle Palette springen. Beides jetzt Ghostty-konform (`.xterm`, Bold ≠ hell).
+- **Bauweise:** `Theme/TerminalTheme.swift` (Struct: bg/fg/16 ANSI/Cursor/Auswahl + abgeleitete
+  Flächen `gap`, `keyHelpBackground`, `dim`, `faint`) und `Theme/ThemeStore.swift` (Singleton, Key
+  `LatexTerm.theme`, `boldIsBright`, `cursorBlink`, `didChange`). Themes im **Ghostty-Dateiformat**:
+  eingebaut `Dark+` und `Ember` (das alte `#171414`-Set), dazu alle Dateien aus
+  `~/.config/ghostty/themes/` und `Ghostty.app/…/themes/` (~460) — Menü „Terminal → Theme“ und
+  Settings-Picker. Kein `23/255` mehr im Code: Fenster-BG, Home-Kachel, Tastenhilfe, Ring-Vorhang,
+  Kachel-Steg und die Kontrastanalyse (`analyzeContrast` filterte Pixel gegen den hart codierten alten BG)
+  lesen den Store. Formel-Standardfarbe = Theme-FG, solange keine eigene Wahl gespeichert ist.
+- **Fallen:** `installColors` muss *nach* dem Umstellen von `terminal.options.ansi256PaletteStrategy`
+  laufen — nur `installPalette` baut die 256er-Tabelle mit der Strategie neu. `Color(red8:)` im Fork ist
+  internal → `swiftTermPalette` rechnet über die 16-Bit-Init. `Terminal.options` ist public settable.
+- **Cursor:** `steadyBlock` (Ghostty), Blinken als Schalter; Farbe bleibt Akzent/Projektfarbe (Mats:
+  „wie vorgeschlagen“). Padding, Schrift (JetBrains Mono gebündelt, 20 pt, Zeilenabstand 0) und die
+  Home-Palette folgen in Runden 27/28; Ghostty-Config-Import in Runde 29.
+
+---
+
 ## Stand (2026-08-24 — Home-Kachel gebaut, Welle 5 des Projekt-Launchers)
 
 Kontext: Werkstatt-Plan `claude-werkstatt/plans/projekt-launcher_2026-08-24.md` (Datenschicht
