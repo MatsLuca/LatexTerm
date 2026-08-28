@@ -1224,6 +1224,7 @@ final class TerminalSplitView: NSView {
     private var isFirstLayout = true
     private var terminateObserver: NSObjectProtocol?
     private var newHomeObserver: NSObjectProtocol?
+    private var paneCommandObserver: NSObjectProtocol?
     private var quickstartObserver: NSObjectProtocol?
 
     /// Lücke (Steg) zwischen den Kacheln in Punkten.
@@ -1267,6 +1268,21 @@ final class TerminalSplitView: NSView {
             self.addPane(home: true)
         }
 
+        // Menü „Kachel“: Aktion auf die fokussierte Kachel des Key-Fensters (Fallback: erste).
+        paneCommandObserver = NotificationCenter.default.addObserver(
+            forName: .latexTermPaneCommand, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, self.window?.isKeyWindow == true,
+                  let cmd = note.userInfo?["command"] as? PaneCommand,
+                  let pane = self.panes.first(where: { self.isFocused($0) }) ?? self.panes.first else { return }
+            switch cmd {
+            case .split: pane.onSplitRequested?(pane)
+            case .close: pane.onCloseRequested?(pane)
+            case .zoom: pane.onZoomRequested?(pane)
+            case .find: pane.view.showFindInterface()
+            }
+        }
+
         // Dock-Menü „Quickstart": neue Home-Kachel im Key-Fenster (ohne Key-Fenster: im ersten
         // sichtbaren) und sofort starten — gleicher Weg wie ein Klick in der Kachel.
         quickstartObserver = NotificationCenter.default.addObserver(
@@ -1295,6 +1311,7 @@ final class TerminalSplitView: NSView {
         if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
         if let newHomeObserver { NotificationCenter.default.removeObserver(newHomeObserver) }
         if let quickstartObserver { NotificationCenter.default.removeObserver(quickstartObserver) }
+        if let paneCommandObserver { NotificationCenter.default.removeObserver(paneCommandObserver) }
     }
 
     /// Quickstart ausführen: eine noch unberührte Home-Kachel (Kaltstart: die einzige) wird

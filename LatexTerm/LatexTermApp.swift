@@ -98,6 +98,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct LatexTermApp: App {
 
+    private func paneCommand(_ c: PaneCommand) {
+        NotificationCenter.default.post(name: .latexTermPaneCommand, object: nil, userInfo: ["command": c])
+    }
+
     init() { AppearanceMigration.run() }
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -123,13 +127,16 @@ struct LatexTermApp: App {
             }
         }
         .commands {
-            // ⌘N: Home-Kachel (Projekt-Launcher) statt SwiftUIs „Neues Fenster".
-            // ⌘T (nackte Shell, CWD-Erbe) bleibt in LatexTerminalView.performKeyEquivalent.
+            // Ablage → Neu: ⌘N Home-Kachel (Projekt-Launcher) statt SwiftUIs „Neues Fenster",
+            // ⌘T Terminal-Kachel (nackte Shell, CWD-Erbe). Die Tasten fängt die Kachel selbst
+            // (LatexTerminalView.performKeyEquivalent); das Menü ist Schaufenster + Mausweg.
             CommandGroup(replacing: .newItem) {
                 Button("Neue Home-Kachel") {
                     NotificationCenter.default.post(name: .latexTermNewHomePane, object: nil)
                 }
                 .keyboardShortcut("n", modifiers: .command)
+                Button("Neue Terminal-Kachel") { paneCommand(.split) }
+                    .keyboardShortcut("t", modifiers: .command)
             }
             // Home-Kachel: die Befehle stehen im Menü statt in einer Fußzeile in der Kachel
             // (Runde 15). Die Tastenwege selbst fängt HomePaneView.performKeyEquivalent ab —
@@ -170,62 +177,28 @@ struct LatexTermApp: App {
                     .keyboardShortcut("/", modifiers: .command)
                     .disabled(aus)
             }
-            CommandMenu("Terminal") {
-
-                // MARK: Darstellung (Runde 26): Theme-Wechsel wirkt sofort auf alle Kacheln.
-                Menu("Theme  (\(themeStore.themeName))") {
-                    ForEach(ThemeStore.availableNames, id: \.self) { name in
-                        Toggle(name, isOn: Binding(
-                            get: { themeStore.themeName == name },
-                            set: { if $0 { themeStore.themeName = name } }))
-                    }
-                }
+            // Kachel-Aktionen, die sonst nur als Taste existieren — Menü = Nachschlagewerk der
+            // Kürzel. Einstellungen (Theme, Akzent, Zeilenabstand, Formelgröße …) stehen NICHT
+            // hier, sondern nur in ⌘, (Menüs = Aktionen, Einstellungen = Einstellungen).
+            CommandMenu("Kachel") {
+                Button("Zoomen / Zoom beenden") { paneCommand(.zoom) }
+                    .keyboardShortcut(.return, modifiers: .command)
+                Button("Suchen…") { paneCommand(.find) }
+                    .keyboardShortcut("f", modifiers: .command)
                 Divider()
-
-                // MARK: LaTeX-Optionen
                 Toggle("LaTeX-Formeln anzeigen", isOn: $settings.formulasEnabled)
                     .keyboardShortcut("l", modifiers: .command)
-
-                Menu("Formelgröße") {
-                    Button("Erhöhen") {
-                        settings.increaseFormulaScale()
-                    }
-                    .keyboardShortcut("+", modifiers: [.command, .option])
-
-                    Button("Verringern") {
-                        settings.decreaseFormulaScale()
-                    }
-                    .keyboardShortcut("-", modifiers: [.command, .option])
-
-                    Button("Zurücksetzen  (aktuell: \(String(format: "%.1f", settings.formulaScale))×)") {
-                        settings.resetFormulaScale()
-                    }
-                    .keyboardShortcut("0", modifiers: [.command, .option])
-                }
-
                 Divider()
-
-                // MARK: Terminal-Optionen — das Menü trägt nur die Tastenkürzel; alles
-                // Weitere (Farben, Schrift, Cursor …) steht im Einstellungen-Fenster (⌘,).
-                Toggle("Automatische Akzentfarbe", isOn: $themeStore.isAdaptiveAccent)
-                    .keyboardShortcut("a", modifiers: [.command, .control])
-
-                Menu("Zeilenabstand") {
-                    Button("Erhöhen") { themeStore.increaseLineSpacing() }
-                        .keyboardShortcut("+", modifiers: [.command, .shift])
-                    Button("Verringern") { themeStore.decreaseLineSpacing() }
-                        .keyboardShortcut("-", modifiers: [.command, .shift])
-                    Button("Zurücksetzen  (aktuell: \(Int(themeStore.lineSpacing)) px)") {
-                        themeStore.resetLineSpacing()
-                    }
-                    .keyboardShortcut("0", modifiers: [.command, .shift])
-                }
-
+                Button("Schrift größer") { ThemeStore.shared.fontSize += 1 }
+                    .keyboardShortcut("+", modifiers: .command)
+                Button("Schrift kleiner") { ThemeStore.shared.fontSize -= 1 }
+                    .keyboardShortcut("-", modifiers: .command)
+                Button("Schriftgröße zurücksetzen") { ThemeStore.shared.fontSize = ThemeStore.defaultFontSize }
+                    .keyboardShortcut("0", modifiers: .command)
                 Divider()
-
-                Button("Einstellungen…") {
-                    NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil)
-                }
+                // Kein ⌘W als Menükürzel: SwiftUIs „Schließen“ im Ablage-Menü trägt es schon;
+                // die Kachel fängt die Taste selbst.
+                Button("Kachel schließen  (⌘W)") { paneCommand(.close) }
             }
         }
 

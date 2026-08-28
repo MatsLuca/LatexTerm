@@ -75,7 +75,7 @@ printf '\e]5522;accent=reset\a'     # back to global/adaptive
 
 LatexTerm renders like Ghostty out of the box: theme **Dark+**, bundled **JetBrains Mono NL** at 20 pt,
 xterm-256 colors, bold stays bold, steady block cursor, 12 px padding. Everything lives in
-*Settings → Darstellung* (⌘,) and the *Terminal → Theme* menu. The settings window has six tabs —
+*Settings → Darstellung* (⌘,). The settings window has six tabs —
 Allgemein (home tree, Ghostty import), Darstellung, Kacheln (accent, focus), Claude
 (notifications, prompt text), Formeln, Erweitert (launcher data commands, control socket, reset):
 
@@ -148,9 +148,7 @@ xcodebuild test -project LatexTerm.xcodeproj -scheme LatexTerm \
 | `⌘F` | find in the focused pane |
 | `⌘+` `⌘-` `⌘0` | font size (all panes, persisted) |
 | `⌘L` | toggle formula overlays |
-| `⌘⇧+` `⌘⇧-` `⌘⇧0` | line spacing |
-| `⌥⌘+` `⌥⌘-` `⌥⌘0` | formula render scale |
-| `⌘,` | settings window (six tabs; everything above as sliders) |
+| `⌘,` | settings window (six tabs — theme, font, line spacing, accent, formula scale, notifications …) |
 
 **Tip — testing formulas:** zsh `echo` mangles backslashes; use `printf '%s\n' '$E=mc^2$'` or a quoted here-doc.
 

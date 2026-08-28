@@ -231,9 +231,17 @@ enum LimitsLoader {
 
 struct LoaderError: Error { let message: String }
 
+/// Kachel-Aktionen aus dem Menü „Kachel“. Die Tasten selbst fängt `LatexTerminalView.performKeyEquivalent`
+/// vor dem Menü ab — die Menüeinträge sind Schaufenster + Mausweg (wie beim Home-Menü).
+enum PaneCommand {
+    case split, close, zoom, find
+}
+
 extension Notification.Name {
     /// ⌘N (Menü): das Key-Fenster hängt eine Home-Kachel an.
     static let latexTermNewHomePane = Notification.Name("LatexTerm.newHomePane")
+    /// Menü „Kachel“ → fokussierte Kachel im Key-Fenster (`userInfo["command"]` = `PaneCommand`).
+    static let latexTermPaneCommand = Notification.Name("LatexTerm.paneCommand")
     /// Dock-Menü → Quickstart starten; userInfo["quickstart"] = ProjekteData.Quickstart.
     static let latexTermQuickstart = Notification.Name("LatexTerm.quickstart")
     /// Menü „Home" → „Nur Projekte": alle Home-Kacheln stellen ihren Baum um.
