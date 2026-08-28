@@ -8,6 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Einstellungen neu (Runden 31–34, 28.08.).** Das ⌘,-Fenster hat Toolbar-Tabs wie die Systemeinstellungen: *Allgemein* (Home-Launcher-Befehle — vorher nur per `defaults write` —, Ghostty-Import), *Darstellung* (Theme mit Farbvorschau der 16 ANSI-Farben, Schrift, Zeilenabstand, Innenabstand, Cursor), *Kacheln* (Akzentfarbe, Akzentrahmen, neu: „Unfokussierte Kacheln abdunkeln“ abschaltbar), *Claude* (neu: Benachrichtigungen an/aus, „nur wenn unbeobachtet“, Mindestabstand; Prompt-Text als Gruppe, Unteroptionen erscheinen erst, wenn sie greifen), *Formeln*, *Erweitert* (Socket-Pfad mit Status, Debug-Log, „Alle Einstellungen zurücksetzen…“). Jede Gruppe hat einen Erklärsatz. Das „Terminal“-Menü trägt nur noch die Tastenkürzel; die alten `NSColorPanel`-Knöpfe sind weg.
+
 - **Themes (Runde 26, 28.08.).** Farbschema als eine Wahrheit (`ThemeStore`): Terminal-Grund, 16 ANSI-Farben, Cursor, Auswahl und alle Flächen drumherum (Fenster, Home-Kachel, Ring-Vorhang, Stege) hängen daran. Themes im Ghostty-Dateiformat — eingebaut `Dark+` (Standard) und `Ember` (das bisherige Rotschwarz), dazu automatisch alle Themes einer installierten Ghostty (`~/.config/ghostty/themes`, App-Bundle). Wechsel über „Terminal → Theme“ oder Einstellungen, wirkt sofort auf alle Kacheln. Neue Schalter: „Fett als helle Farbe“ (aus) und „Cursor blinkt“ (aus, Block-Cursor steht).
 
 - **Schrift (Runde 27).** JetBrains Mono NL ist gebündelt (OFL) und Standard — 20 pt, Zeilenabstand 0, wie Ghostty. Einstellungen → „Schrift“ wählt jede installierte Monospace-Familie oder SF Mono; Home-Kachel, Status-Pillen und Formel-Editor laufen in derselben Schrift. Bestehende Installationen werden einmalig auf 20 pt / Abstand 0 umgestellt.
@@ -19,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Side-by-side-Vergleich mit Ghostty in `docs/optik-side-by-side.png`, Probe-Skript `docs/optik-probe.sh`.
 
 ### Changed
+- Intern: Schrift (Familie/Größe), Zeilenabstand und Akzentfarbe wohnen in `ThemeStore` (eine Wahrheit je Thema); `FormulaSettings` kennt nur noch Formeln; der `fontDidChange`-Kanal ist weg. Gespeicherte Einstellungen bleiben erhalten (Keys unverändert).
 - Home-Kachel, Hinweise, Status-Pille, HUD-Punkte und die automatische Akzenterkennung nehmen ihre Farben aus dem Theme (helle ANSI-Farben) bzw. aus Claudes `/color`-Palette — kein fester Farbwert mehr außerhalb von `TerminalTheme`; ein Theme-Wechsel färbt auch die Home-Kachel sofort um.
 - 256-Farben folgen dem xterm-Würfel (`ansi256PaletteStrategy = .xterm`) statt der LAB-Interpolation aus den 16 Basisfarben — TUI-Farben (Claude Code) sehen jetzt aus wie in jedem anderen Emulator.
 - Experimentell: „Prompt-Text“ (Darstellung, Default aus) — getippter Text in Claude Codes Eingabe-Box in Projektfarbe, eigener Farbe oder als animierter Regenbogen, optional glühend; auf Wunsch auch für von Claude gefärbten Text (Slash-Commands, @-Erwähnungen), wahlweise in eigener Farbe. Grundlage `PromptBoxLocator` (strukturelle Erkennung der Box zwischen zwei `─`-Linien, 13 Tests).

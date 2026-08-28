@@ -50,9 +50,9 @@ The first pane on launch (and every `⌘N`) is a **home pane** instead of a shel
 
 Above the tree a notice strip shows panes that are **waiting for you** (click → jump there; the same jump is the first action of a folder that already has a running pane) and due **follow-ups** from `~/.claude/wiedervorlage/`. The header on the right carries what the tree cannot: alias, CLAUDE.md headline, git state, last activity, and the last prompt of the session you would resume. Type-to-search also matches session titles.
 
-The top right corner shows your subscription's **quota**: 5-hour window, week and model week with percentage and a live countdown to the reset (red from 85 %). It refreshes every 30 s via `projekte limits --json` (override with the `LatexTerm.limitsCommand` default) and stays empty if that command is missing.
+The top right corner shows your subscription's **quota**: 5-hour window, week and model week with percentage and a live countdown to the reset (red from 85 %). It refreshes every 30 s via `projekte limits --json` (change the command in *Settings → Allgemein*) and stays empty if that command is missing.
 
-The data comes from an external CLI — `projekte --json` (run through your login shell; override with `defaults write com.… LatexTerm.projekteCommand "…"`). Without it the pane shows a hint and nothing else breaks. The contract (JSON shape) lives with the CLI, not in the app.
+The data comes from an external CLI — `projekte --json` (run through your login shell; change it in *Settings → Allgemein*). Without it the pane shows a hint and nothing else breaks. The contract (JSON shape) lives with the CLI, not in the app.
 
 ### Status & notifications
 
@@ -75,7 +75,9 @@ printf '\e]5522;accent=reset\a'     # back to global/adaptive
 
 LatexTerm renders like Ghostty out of the box: theme **Dark+**, bundled **JetBrains Mono NL** at 20 pt,
 xterm-256 colors, bold stays bold, steady block cursor, 12 px padding. Everything lives in
-*Settings → Darstellung* (⌘,) and the *Terminal → Theme* menu:
+*Settings → Darstellung* (⌘,) and the *Terminal → Theme* menu. The settings window has six tabs —
+Allgemein (home launcher commands, Ghostty import), Darstellung, Kacheln (accent, focus), Claude
+(notifications, prompt text), Formeln, Erweitert (control socket, reset):
 
 - **Themes** are Ghostty theme files. `Dark+` and `Ember` (the old warm black) are built in; if Ghostty is
   installed, all of its ~460 themes appear in the picker. Every surface follows the theme — panes, home
@@ -84,7 +86,7 @@ xterm-256 colors, bold stays bold, steady block cursor, 12 px padding. Everythin
   the renderer is cell-exact and formula overlays sit on cell coordinates).
 - **Import from Ghostty**: one button reads `~/.config/ghostty/config` (theme, font, size, padding,
   cursor blink, bold-is-bright) and previews the changes before applying. Color overrides in the config
-  become the theme „Ghostty (Config)“.
+  become the theme „Ghostty (Config)“. Lives in *Settings → Allgemein*.
 
 ![Ghostty and LatexTerm side by side](docs/optik-side-by-side.png)
 
@@ -148,7 +150,7 @@ xcodebuild test -project LatexTerm.xcodeproj -scheme LatexTerm \
 | `⌘L` | toggle formula overlays |
 | `⌘⇧+` `⌘⇧-` `⌘⇧0` | line spacing |
 | `⌥⌘+` `⌥⌘-` `⌥⌘0` | formula render scale |
-| `⌘,` | settings window (everything above as sliders) |
+| `⌘,` | settings window (six tabs; everything above as sliders) |
 
 **Tip — testing formulas:** zsh `echo` mangles backslashes; use `printf '%s\n' '$E=mc^2$'` or a quoted here-doc.
 

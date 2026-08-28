@@ -7,6 +7,31 @@ Hier liegen die Arbeits-Erkenntnisse: Debug-Funde, Entscheidungen mit Begründun
 
 ---
 
+## Stand (2026-08-28, Nacht — Einstellungen neu, Runden 31–34)
+
+Kontext: Werkstatt-Plan `claude-werkstatt/plans/settings-neu_2026-08-28.md`. Nach R26–R30 war
+`SettingsView.swift` ein einziges Form mit ~25 Elementen in drei falsch benannten Sektionen; die
+nächste Option hätte keinen Platz gehabt.
+
+- **Gerüst:** `Settings/` mit `SettingsPage` (Enum = Seitenliste), `SettingsWindow` (TabView in der
+  `Settings`-Szene → macOS zeichnet Toolbar-Tabs), `Controls/` (`SliderRow`, `ColorRow`, `SettingsGroup`
+  mit Footer-Hilfetext), sechs Seiten. Fenster-Höhe steht pro Seite im Enum — SwiftUIs Settings-Fenster
+  passt sich nicht selbst an den Tab-Inhalt an.
+- **Modell:** Schrift/Zeilenabstand/Akzent aus `FormulaSettings` + `LatexTerminalView`-Statics nach
+  `ThemeStore`; `didChange` bekam ein `Change`-Enum, damit die Kachel bei adaptiver Akzentfarbe nicht das
+  Theme neu installiert (der alte `affectsFormulas`-Trick, jetzt an der richtigen Stelle). Neu
+  `CockpitSettings` (Notifications, Home-Befehle). Keys unverändert → keine Migration.
+- **Fallen:** (1) Stores laden jetzt über `load()` (für den Reset) — die Setter dürfen dabei nicht
+  schreiben, sonst landet die Theme-FG als „eigene“ Formelfarbe in den Defaults (`loading`-Guard).
+  (2) `@Published var x = Self.default` ist verboten („covariant Self in stored property initializer“)
+  → `ThemeStore.default…`. (3) `SettingsGroup("Titel")` braucht einen expliziten `init(_:help:content:)`,
+  sonst verlangt Swift das Label `title:`. (4) Home-Kachel las die Schriftgröße über
+  `LatexTerminalView.storedFontSize()` — mit dem Static verschwand die Stelle im Build-Fehler, nicht im
+  grep (Build als Verifikation, nicht nur grep).
+- **Bewusst nicht:** Sidebar-Settings, Suchfeld, Session-Restore-Schalter (kein heutiger Bedarf),
+  Vorhang-Timeout als Option.
+- Tests: 47 grün (13 PromptBoxLocator). Abnahme durch Mats offen (Xcode ⌘R, alle sechs Tabs).
+
 ## Stand (2026-08-28 — Terminal-Optik Runde 26: Theme-Modell, Dark+, xterm-256)
 
 Kontext: Werkstatt-Plan `claude-werkstatt/plans/terminal-optik_2026-08-28.md`. Mats fand Ghostty
