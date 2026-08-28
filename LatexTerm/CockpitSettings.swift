@@ -73,9 +73,9 @@ final class CockpitSettings: ObservableObject {
     }
 
     private var loading = false
-    private init() { load() }
+    private init() { load(initial: true) }
 
-    func load() {
+    func load(initial: Bool = false) {
         loading = true
         let d = UserDefaults.standard
         notificationsEnabled = d.object(forKey: Keys.notificationsEnabled) != nil ? d.bool(forKey: Keys.notificationsEnabled) : true
@@ -87,6 +87,7 @@ final class CockpitSettings: ObservableObject {
         limitsCommand = d.string(forKey: Keys.limitsCommand) ?? Self.defaultLimitsCommand
         homeOnlyProjects = d.bool(forKey: Keys.homeOnlyProjects)
         loading = false
+        guard !initial else { return }
         NotificationCenter.default.post(name: .latexTermHomeTreeChanged, object: nil)
         post()
     }

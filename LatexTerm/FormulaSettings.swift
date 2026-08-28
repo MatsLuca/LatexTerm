@@ -49,10 +49,10 @@ final class FormulaSettings: ObservableObject {
     /// als „eigene“ Formelfarbe gespeichert).
     private var loading = false
 
-    private init() { load() }
+    private init() { load(initial: true) }
 
     /// Aus UserDefaults (neu) lesen — Start und „Alle Einstellungen zurücksetzen“.
-    func load() {
+    func load(initial: Bool = false) {
         loading = true
         defer { loading = false }
         let d = UserDefaults.standard
@@ -80,7 +80,7 @@ final class FormulaSettings: ObservableObject {
             ? CGFloat(d.double(forKey: Keys.formulaScale)) : Self.defaultFormulaScale
         formulaScale = max(Self.minFormulaScale, min(Self.maxFormulaScale, scale))
         loading = false
-        post()
+        if !initial { post() }
     }
 
     // MARK: - Helpers

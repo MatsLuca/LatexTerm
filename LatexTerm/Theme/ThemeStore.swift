@@ -191,12 +191,12 @@ final class ThemeStore: ObservableObject {
     /// als „eigene“ Formelfarbe gespeichert).
     private var loading = false
 
-    private init() { load() }
+    private init() { load(initial: true) }
 
     /// Alles aus UserDefaults (neu) lesen — beim Start und nach „Alle Einstellungen zurücksetzen“.
     /// Läuft über die normalen Setter (schreibt Defaults zurück, postet Änderungen) — bewusst, damit
     /// alle Kacheln nach einem Reset denselben Weg gehen wie bei jeder Einzeländerung.
-    func load() {
+    func load(initial: Bool = false) {
         loading = true
         defer { loading = false }
         let d = UserDefaults.standard
@@ -228,6 +228,7 @@ final class ThemeStore: ObservableObject {
         isAdaptiveAccent = d.object(forKey: Keys.isAdaptiveAccent) != nil ? d.bool(forKey: Keys.isAdaptiveAccent) : false
         focusDimming = d.object(forKey: Keys.focusDimming) != nil ? d.bool(forKey: Keys.focusDimming) : true
         loading = false
+        guard !initial else { return }
         for c: Change in [.theme, .font, .lineSpacing, .accent, .prompt, .panes] { post(c) }
     }
 

@@ -259,7 +259,8 @@ final class OverlayController {
     }
 
     /// Erzwingt kompletten Neuaufbau aller Formeln beim nächsten Scan.
-    private func invalidateAll() {
+    /// Alle Formeln verwerfen (KaTeX-Rebuild beim nächsten Rescan) — Zellhöhe/Farbe/Scale geändert.
+    func invalidateAll() {
         pendingClear = true
         lastFontPx = 0
         lastConfigJSON = nil

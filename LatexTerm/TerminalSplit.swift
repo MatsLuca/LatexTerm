@@ -494,8 +494,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             case .font:
                 break   // LatexTerminalView übernimmt selbst (applyFont)
             case .lineSpacing:
+                // Zellhöhe ändert sich → Formeln neu aufbauen (wie früher über FormulaSettings).
                 term?.extraLineSpacing = store.lineSpacing
-                term?.onNeedsFullRescan?()
+                self.controller.invalidateAll()
+                self.controller.scheduleRescan()
             case .accent:
                 // Globale Akzent-Änderungen nur anwenden, wo kein OSC-Override liegt
                 // (applyAccent respektiert den Override von selbst).
