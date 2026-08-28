@@ -353,6 +353,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         // Padding-Änderung: Inhalt neu einpassen (setFrameSize rechnet den Inset frisch).
         container.setFrameSize(container.frame.size)
         applyAccent()   // Hüll-Tint auf dem neuen Grund, Caret (Akzent oder Theme-Cursor)
+        applyFocusStyle(animated: false)   // Rahmen an/aus
         homeView?.applyTheme(theme)
         view.needsDisplay = true
     }
@@ -563,7 +564,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         view.caretColor = ThemeStore.shared.cursorThemeColor ? ThemeStore.shared.theme.cursor : effectiveAccent
         container.layer?.borderColor = effectiveAccent.withAlphaComponent(0.65).cgColor
         let bg = view.nativeBackgroundColor
-        let hull = paneAccent.flatMap { bg.blended(withFraction: 0.12, of: $0) } ?? bg
+        let hull = ThemeStore.shared.paneBorders
+            ? (paneAccent.flatMap { bg.blended(withFraction: 0.12, of: $0) } ?? bg) : bg
         container.layer?.backgroundColor = hull.cgColor
         updateStatusBadge()   // Pille trägt die Akzentfarbe mit (#25 v2)
         onStyleChanged?()
@@ -576,7 +578,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         let alpha: CGFloat = hasFocus ? 1.0 : 0.65
         // Fenster-füllend (gezoomt oder einzige Kachel): voller Akzent — der
         // Rahmen IST dann die Session-Kennung; sonst Fokus-Abstufung im Grid.
-        let borderWidth: CGFloat = fillsWindow ? 2.0 : (showsFocusBorder ? (hasFocus ? 1.5 : 1.0) : 0)
+        var borderWidth: CGFloat = fillsWindow ? 2.0 : (showsFocusBorder ? (hasFocus ? 1.5 : 1.0) : 0)
+        if !ThemeStore.shared.paneBorders { borderWidth = 0 }   // Darstellung → „Kachel-Akzentrahmen“ aus
         let borderColor = effectiveAccent.withAlphaComponent(
             fillsWindow ? 1.0 : (hasFocus ? 0.65 : 0.35)).cgColor
         if animated {

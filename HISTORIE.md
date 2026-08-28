@@ -86,6 +86,11 @@ Kontext: Werkstatt-Plan `claude-werkstatt/plans/terminal-optik_2026-08-28.md`. M
   Striche ~1 Subpixel); Ghostty hat `font-thicken = false`. Jetzt `public var fontSmoothing` auf
   `TerminalView` (Default aus), in LatexTerm als `ThemeStore.fontThicken` → Schalter „Schrift verstärken
   (Font-Smoothing)“ und im Ghostty-Import (`font-thicken`).
+- **Nachtrag R30 (Mats: „farbige Kachel-Outlines deaktivierbar, optional wieder borderless“):** Schalter
+  „Kachel-Akzentrahmen“ (`LatexTerm.paneBorders`, Default an) — aus = `borderWidth 0` in `applyFocusStyle`
+  und kein Hüll-Tint in `applyAccent`; Caret, HUD-Punkt, Home-Ring und Claude-Box tragen die Projektfarbe
+  weiter. Einen zweiten Schalter „Randloses Fenster“ (Ampel + HUD weg) hatte ich gebaut — Mats: „Ampel weg
+  braucht's gar nicht“ → wieder entfernt, nur der Rahmen-Schalter bleibt.
 - **Cursor:** `steadyBlock` (Ghostty), Blinken als Schalter; Farbe bleibt Akzent/Projektfarbe (Mats:
   „wie vorgeschlagen“). Padding, Schrift (JetBrains Mono gebündelt, 20 pt, Zeilenabstand 0) und die
   Home-Palette folgen in Runden 27/28; Ghostty-Config-Import in Runde 29.

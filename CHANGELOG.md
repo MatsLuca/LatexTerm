@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 - Home-Kachel, Hinweise, Status-Pille, HUD-Punkte und die automatische Akzenterkennung nehmen ihre Farben aus dem Theme (helle ANSI-Farben) bzw. aus Claudes `/color`-Palette — kein fester Farbwert mehr außerhalb von `TerminalTheme`; ein Theme-Wechsel färbt auch die Home-Kachel sofort um.
 - 256-Farben folgen dem xterm-Würfel (`ansi256PaletteStrategy = .xterm`) statt der LAB-Interpolation aus den 16 Basisfarben — TUI-Farben (Claude Code) sehen jetzt aus wie in jedem anderen Emulator.
+- Schalter „Kachel-Akzentrahmen“ (Darstellung): aus = keine farbigen Kachel-Outlines und kein Hüll-Tint — nur der Theme-Grund; Projektfarbe bleibt an Cursor, HUD-Punkt und Home-Ring.
 - Font-Smoothing ist aus (Ghostty-Strichstärke); Schalter „Schrift verstärken“ in Darstellung, Import liest `font-thicken`.
 - Fetter Text bleibt in seiner Farbe (`useBrightColors = false`, Ghostty-Verhalten).
 - Formel-Standardfarbe folgt dem Theme-Vordergrund, solange keine eigene Farbe gewählt ist.
