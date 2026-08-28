@@ -7,6 +7,14 @@ Hier liegen die Arbeits-Erkenntnisse: Debug-Funde, Entscheidungen mit Begründun
 
 ---
 
+## Stand (2026-08-29 — Launcher Runden 27+28: Pfeiltasten, Home-Kopf entrümpelt)
+
+R27 (`HomePaneView.treeKey/listKey`): → / ← wechseln nur noch die Spalte, ⏎ im Baum klappt Ordner auf/zu,
+rechts führt es aus; Tastenhilfe ⌘/ angepasst. R28: `lastLine` (letzter Prompt unter dem Untertitel) entfernt —
+bleibt Tooltip auf „↻ Weiter"; Untertitel und Kontingente (`renderLimits`) hängen an `showMore`: zugeklappt nur
+`aktiv …` und das 5h-Fenster (4-Zellen-Balken, kein ↻), aufgeklappt alles; Woche/Modell ab 70 % immer.
+Lehren in `claude-werkstatt/launcher/HISTORIE.md` (Runden 27, 28). Sicht-Check durch Mats steht aus.
+
 ## Stand (2026-08-28, Nacht — Launcher Runde 26: Vorhang schützt Folgebefehle)
 
 Mats' erstes Tippen fiel in den noch offenen `/color`-Folgebefehl („cyanist es“). Ursache in

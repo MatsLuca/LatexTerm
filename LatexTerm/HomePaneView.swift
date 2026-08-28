@@ -268,7 +268,7 @@ final class HomeFocus: ObservableObject {
 /// gerade eine Claude-Kachel läuft), rechts die Aktionen des gewählten Ordners:
 /// „＋ Neue Session" (Standard, ⏎), „↻ Weiter" (letzte Session), „› Nur Shell", darunter „Zuletzt hier"
 /// (eigene Sessions + letzte Session jedes Unterprojekts, EINE Zeitliste).
-/// Tasten: ↑↓ · → in den Ordner / zu den Aktionen · ← zu / zurück · ⏎ ausführen · Tippen filtert
+/// Tasten: ↑↓ · → / ← immer Spalte wechseln · ⏎ im Baum Ordner auf/zu, rechts ausführen · Tippen filtert
 /// den Baum · Esc leert · ⌘⇧N neues Projekt im gewählten Ordner · ⌘R neu laden.
 final class HomePaneView: NSView {
 
@@ -330,7 +330,6 @@ final class HomePaneView: NSView {
     /// Fallback, falls `projekte` (noch) keine Templates liefert: nur Neu + Shell.
     /// Pin-Screen: rechts die Aktionen des gewählten Pins (Projekt: Neu/Weiter/Shell — Session: Weiter …).
     private func renderPinActions() {
-        lastLine.stringValue = ""
         let item = tree.item(atRow: tree.selectedRow)
         if let pp = (item as? PinProjectItem)?.p {
             title.stringValue = pp.name
@@ -471,7 +470,6 @@ final class HomePaneView: NSView {
     private let treeScroll = NSScrollView()
     private let title = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
-    private let lastLine = NSTextField(labelWithString: "")   // „zuletzt: …" der Weiter-Session
     private let list = HomeTable()
     private let listScroll = NSScrollView()
     private let limitsLabel = NSTextField(labelWithString: "")
@@ -520,7 +518,6 @@ final class HomePaneView: NSView {
         keyHelp.layer?.borderColor = theme.faint.withAlphaComponent(0.10).cgColor
         title.textColor = theme.cyan
         subtitle.textColor = theme.dim
-        lastLine.textColor = theme.foreground.withAlphaComponent(0.5)
         divider.layer?.backgroundColor = theme.foreground.withAlphaComponent(0.08).cgColor
         tree.reloadData()
         list.reloadData()
@@ -610,10 +607,6 @@ final class HomePaneView: NSView {
         subtitle.font = Self.mono(-1)
         subtitle.textColor = Self.dim
         subtitle.lineBreakMode = .byTruncatingTail
-        lastLine.font = Self.mono(-1)
-        lastLine.textColor = Self.fg.withAlphaComponent(0.5)
-        lastLine.lineBreakMode = .byTruncatingTail
-        lastLine.maximumNumberOfLines = 1
         limitsLabel.font = Self.mono(-1)
         limitsLabel.alignment = .right
         limitsLabel.lineBreakMode = .byClipping
@@ -679,7 +672,7 @@ final class HomePaneView: NSView {
         notices.orientation = .vertical
         notices.alignment = .leading
         notices.spacing = 4
-        for v in [notices, treeScroll, divider, title, subtitle, lastLine, limitsLabel, listScroll] {
+        for v in [notices, treeScroll, divider, title, subtitle, limitsLabel, listScroll] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
@@ -711,10 +704,7 @@ final class HomePaneView: NSView {
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -m),
 
-            lastLine.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 2),
-            lastLine.leadingAnchor.constraint(equalTo: title.leadingAnchor),
-            lastLine.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -m),
-            listScroll.topAnchor.constraint(equalTo: lastLine.bottomAnchor, constant: 12),
+            listScroll.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 12),
             listScroll.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: m - 8),
             listScroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -(m - 8)),
             listScroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
@@ -735,7 +725,6 @@ final class HomePaneView: NSView {
         listScroll.animator().alphaValue = inTree ? 0.55 : 1
         title.animator().alphaValue = inTree ? 0.55 : 1
         subtitle.animator().alphaValue = inTree ? 0.55 : 1
-        lastLine.animator().alphaValue = inTree ? 0.55 : 1
         tree.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
         list.enumerateAvailableRowViews { rv, _ in rv.needsDisplay = true }
         // Während des Starts ist die Kachel fokussiert (Vorhang = First Responder), aber das
@@ -787,10 +776,10 @@ final class HomePaneView: NSView {
         if l.percent >= 85 || l.severity == "critical" { return red }
         return fg.withAlphaComponent(0.85)
     }
-    /// Mini-Balken wie in der Statusline (█░), 6 Zellen.
+    /// Mini-Balken wie in der Statusline (█░), 4 Zellen.
     private static func limitBar(_ pct: Int) -> String {
-        let full = max(0, min(6, Int((Double(pct) / 100 * 6).rounded())))
-        return String(repeating: "█", count: full) + String(repeating: "░", count: 6 - full)
+        let full = max(0, min(4, Int((Double(pct) / 100 * 4).rounded())))
+        return String(repeating: "█", count: full) + String(repeating: "░", count: 4 - full)
     }
 
     private func renderLimits() {
@@ -800,7 +789,9 @@ final class HomePaneView: NSView {
         }
         let out = NSMutableAttributedString()
         let dimA: [NSAttributedString.Key: Any] = [.font: Self.mono(-1), .foregroundColor: Self.dim]
-        for l in d.limits {
+        // Kompakt: nur das 5h-Fenster (erstes Limit) — Woche/Modell erst ab 70 % oder mit „▸ Sessions".
+        let shown = d.limits.enumerated().filter { showMore || $0.offset == 0 || $0.element.percent >= 70 }.map(\.element)
+        for l in shown {
             if out.length > 0 { out.append(NSAttributedString(string: "   ", attributes: dimA)) }
             out.append(NSAttributedString(string: l.label + " ", attributes: dimA))
             let c = Self.limitColor(l)
@@ -808,7 +799,7 @@ final class HomePaneView: NSView {
                 .font: Self.mono(-2), .foregroundColor: c.withAlphaComponent(c == Self.red ? 1 : 0.7)]))
             out.append(NSAttributedString(string: "\(l.percent)%", attributes: [
                 .font: Self.mono(-1, .bold), .foregroundColor: c]))
-            if let rest = Self.until(l.resetsAt) {
+            if showMore, let rest = Self.until(l.resetsAt) {
                 out.append(NSAttributedString(string: " ↻" + rest, attributes: [
                     .font: Self.mono(-2), .foregroundColor: Self.faint]))
             }
@@ -1123,12 +1114,15 @@ final class HomePaneView: NSView {
         let p = byPath[node.path]
         let isRoot = node.path == d.root
         title.stringValue = isRoot ? (node.name) : node.name
+        // Zugeklappt nur das Nötige (Aktivität + Warnung „keine CLAUDE.md"); Aliase, CLAUDE.md-Kopf
+        // und Git erst mit „▸ Sessions" — dann ist „mehr anzeigen" der erklärte Wunsch.
         var sub: [String] = []
-        if let a = p?.aliases, !a.isEmpty { sub.append(a.joined(separator: ", ")) }
-        if let h = p?.claudeMdHeader { sub.append(h) } else if !isRoot { sub.append("keine CLAUDE.md") }
-        if let g = Self.gitLine(p?.git) { sub.append(g) }
+        if showMore, let a = p?.aliases, !a.isEmpty { sub.append(a.joined(separator: ", ")) }
+        if let h = p?.claudeMdHeader { if showMore { sub.append(h) } } else if !isRoot { sub.append("keine CLAUDE.md") }
+        if showMore, let g = Self.gitLine(p?.git) { sub.append(g) }
         if let la = p?.lastActivity, !isRoot { sub.append("aktiv " + Self.age(la)) }
         subtitle.stringValue = sub.joined(separator: "   ·   ")
+        renderLimits()
 
         var out: [Action] = []
         // „Weiter" = die neueste Session im GESAMTEN Teilbaum (eigene + alle Unterordner) —
@@ -1157,7 +1151,6 @@ final class HomePaneView: NSView {
             out.append(.resume(s, path: q.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt),
                                project: q.path == node.path ? nil : q.name))
         }
-        lastLine.stringValue = candidates.first.flatMap { $0.1.lastPrompt }.map { "» \($0)" } ?? ""
         for t in byLevel where t.command == nil { out.append(.run(t, path: node.path)) }
         // Kompakt-Rat bleibt sichtbar (Warnung), alles Weitere — Pin, Umbenennen, ältere Sessions —
         // liegt hinter „▸ Sessions": erreichbar mit einem →, aber nicht dauernd im Bild.
@@ -1330,9 +1323,9 @@ final class HomePaneView: NSView {
     /// früher eine Dauer-Fußzeile, jetzt auf Abruf mit ⌘/ (Menü „Home"). Die Kachel bleibt leer.
     private static let keyHelpRows: [(String, String)] = [
         ("↑ ↓", "auswählen"),
-        ("→ ←", "Ordner auf/zu · zwischen Baum und Aktionen"),
+        ("→ ←", "zwischen Baum und Aktionen"),
         ("⇥ / ⇧⇥", "Spalte wechseln / Angepinntes zeigen"),
-        ("⏎", "ausführen"),
+        ("⏎", "im Baum: Ordner auf/zu · rechts: ausführen"),
         ("A–Z", "sucht im Baum, Esc leert"),
         ("⌘⇧N / ⌘R", "neues Projekt · neu laden"),
         ("⌘P / ⌘⇧P", "Session / Projekt anpinnen"),
@@ -1577,23 +1570,20 @@ final class HomePaneView: NSView {
         let mods = ev.modifierFlags.intersection([.command, .shift, .option, .control])
         guard !mods.contains(.command), !mods.contains(.control) else { return false }
         switch ev.keyCode {
-        case 36, 76:
-            if let a = actions.first { run(a) }
-            return true
+        case 36, 76: // ⏎ : Ordner auf/zu · ohne Unterordner → zu den Aktionen (Start = → ⏎ bzw. ⏎ ⏎)
+            if pinMode { focusList(); return true }
+            if !filter.isEmpty { endSearchKeepingSelection() }
+            if let n = selectedNode, !kids(n).isEmpty {
+                if tree.isItemExpanded(n) { tree.collapseItem(n) } else { tree.expandItem(n) }
+                return true
+            }
+            focusList(); return true
         case 48: // ⇥ : zu den Aktionen · ⇧⇥ : Pin-Screen an/aus
             if mods.contains(.shift) { togglePinMode(); return true }
             endSearchKeepingSelection(); focusList(); return true
-        case 124: // → : Suche beenden / aufklappen / sonst zu den Aktionen
-            if pinMode { focusList(); return true }
-            if !filter.isEmpty { endSearchKeepingSelection(); return true }
-            if let n = selectedNode, n.hasChildren, !tree.isItemExpanded(n) { tree.expandItem(n); return true }
-            focusList(); return true
-        case 123: // ← : zuklappen, sonst zum Eltern-Ordner
-            if pinMode { return true }
-            if !filter.isEmpty { endSearchKeepingSelection(); return true }
-            guard let n = selectedNode else { return true }
-            if tree.isItemExpanded(n) { tree.collapseItem(n); return true }
-            if let p = n.parent { reveal(p) }
+        case 124: // → : immer zu den Aktionen (Suche wird dabei beendet)
+            endSearchKeepingSelection(); focusList(); return true
+        case 123: // ← : links ist nichts — bleibt im Baum
             return true
         case 53: if !filter.isEmpty { filter = "" }; return true
         case 51: if !filter.isEmpty { filter.removeLast(); lastTypedAt = Date() }; return true
@@ -1615,10 +1605,7 @@ final class HomePaneView: NSView {
         switch ev.keyCode {
         case 36, 76: runSelectedAction(); return true
         case 48 where mods.contains(.shift): togglePinMode(); return true
-        case 124:   // → auf „▸ Sessions" klappt auf
-            if selectedMore == false { setMore(true) }
-            return true
-        case 123 where selectedMore == true: setMore(false); return true   // ← klappt zu
+        case 124: return true   // → : rechts ist nichts — bleibt in den Aktionen („▸ Sessions" klappt ⏎)
         case 123, 53, 48: window?.makeFirstResponder(tree); return true   // ← / Esc / ⇥ zurück zum Baum
         case 125, 126: return false
         default:
