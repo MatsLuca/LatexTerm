@@ -178,6 +178,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     var onEnsurePaneCount: ((Int) -> Void)?
     /// Cmd+⏎ in dieser Pane → Zoom-Toggle (#26).
     var onZoomRequested: ((TerminalPane) -> Void)?
+    /// Start-Anfrage, die diese (schon laufende) Kachel nicht mehr tragen kann → Split öffnet eine neue.
+    var onLaunchElsewhere: ((String, String?, String?, [String], NSColor?, String?) -> Void)?
 
     // MARK: Home-Kachel (Projekt-Launcher)
 
@@ -227,7 +229,14 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// die Shell liest es nach dem Prompt — gleicher Pfad wie `new-pane --exec`).
     func launch(in directory: String, command: String?, label: String? = nil, followUps: [String] = [],
                 accent: NSColor? = nil, accentName: String? = nil) {
-        guard !isStarted else { return }   // ein Prozess pro Kachel — kein zweiter Start ins laufende Terminal
+        // Ein Prozess pro Kachel — kein zweiter Start ins laufende Terminal. Kommt der Start trotzdem
+        // hier an (Home-Menü auf einer Kachel, die längst läuft), wandert er in eine frische Kachel
+        // statt still zu verpuffen.
+        guard !isStarted else {
+            Logger(subsystem: "com.mats.LatexTerm", category: "launch").notice("launch auf gestarteter Kachel → neue Kachel: \(command ?? "-", privacy: .public)")
+            onLaunchElsewhere?(directory, command, label, followUps, accent, accentName)
+            return
+        }
         // Projektfarbe (Runde 25): vor dem Start setzen, damit Ring, Rahmen und HUD-Punkt von der
         // ersten Sekunde an die Session-Farbe tragen — dieselbe Palette, in der Claude seine Box malt.
         // Bewusst in den „erkannt"-Slot, nicht als OSC-Override: tippt Mats später von Hand /color,
@@ -1441,6 +1450,12 @@ final class TerminalSplitView: NSView {
         pane.onCloseRequested = { [weak self] p in self?.closePane(p) }
         pane.onEnsurePaneCount = { [weak self] n in self?.ensurePaneCount(n) }
         pane.onZoomRequested = { [weak self] p in self?.toggleZoom(p) }
+        pane.onLaunchElsewhere = { [weak self] dir, cmd, label, followUps, accent, accentName in
+            guard let self else { return }
+            let fresh = self.addPane(home: true)
+            self.focusPane(fresh)
+            fresh.launch(in: dir, command: cmd, label: label, followUps: followUps, accent: accent, accentName: accentName)
+        }
         pane.resolveLaunchAccentName = { [weak self, weak pane] w, alts, pal in self?.distinctAccentName(w, alternatives: alts, palette: pal, excluding: pane) ?? w }
         pane.onStyleChanged = { [weak self] in self?.updateTitlebarHUD() }
         pane.onSessionAwaitingInput = { [weak self] p in self?.notifySessionAwaiting(p) }

@@ -1,4 +1,5 @@
 import AppKit
+import os
 
 // MARK: - Datenmodell (Vertrag: `projekte --json`, claude-werkstatt/plans/projekt-launcher_2026-08-24.md)
 
@@ -546,7 +547,10 @@ final class HomePaneView: NSView {
         treeModeObserver.map(NotificationCenter.default.removeObserver)
         treeModeObserver = nil
         firstResponderObservation = nil
-        guard let window else { return }
+        // Kachel aus dem Fenster (Reveal nach dem Start, ⌘W): darf nicht als „aktive" Home-Kachel
+        // im Menü hängen bleiben — sonst öffnet „Neues Projekt…" den Dialog, aber der Start
+        // landet in einer Kachel, die schon einen Prozess hat, und verpufft.
+        guard let window else { HomeFocus.shared.set(self, focused: false); return }
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refreshRunning() }
         treeModeObserver = NotificationCenter.default.addObserver(forName: .latexTermHomeTreeChanged, object: nil, queue: .main) { [weak self] _ in
             self?.applyTreeMode()
@@ -1518,7 +1522,10 @@ final class HomePaneView: NSView {
         withExtendedLifetime(sink) {}
 
         let name = nameField.stringValue.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: " ", with: "_")
-        guard !name.isEmpty, !name.contains("/") else { return }
+        guard !name.isEmpty, !name.contains("/") else {
+            Self.complain("Kein Projekt angelegt", name.isEmpty ? "Der Name fehlt." : "Der Name darf keinen Schrägstrich enthalten.")
+            return
+        }
         let alias = aliasField.stringValue.trimmingCharacters(in: .whitespaces)
         let purpose = purposeField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let t = templates.newProject
@@ -1530,8 +1537,12 @@ final class HomePaneView: NSView {
 
         if open.state == .on {
             // Ort offen: nichts anlegen, Claude erörtert es in der Wurzel.
-            guard let pc = t.placeCommand else { return }
+            guard let pc = t.placeCommand else {
+                Self.complain("Kein Projekt angelegt", "Das Launcher-Template kennt kein placeCommand — `projekte` neu laden (⌘R).")
+                return
+            }
             let cmd = "cd \(Self.q(rootPath)) && " + fill(pc)
+            Self.log.notice("newProject einordnen: \(cmd, privacy: .public)")
             onLaunch?(LaunchRequest(path: rootPath, command: cmd, label: "\(name) · einordnen", followUp: nil))
             return
         }
@@ -1545,7 +1556,15 @@ final class HomePaneView: NSView {
             cmd += " && " + fill(ac)
         }
         if let c = t.command { cmd += " && " + fill(c) }
-        onLaunch?(colored(LaunchRequest(path: place, command: cmd, label: "\(name) · \(t.label)", followUp: nil), session: nil))
+        Self.log.notice("newProject anlegen: \(cmd, privacy: .public)")
+        guard let onLaunch else { Self.complain("Kein Projekt angelegt", "Die Kachel hat keinen Startweg (onLaunch fehlt)."); return }
+        onLaunch(colored(LaunchRequest(path: place, command: cmd, label: "\(name) · \(t.label)", followUp: nil), session: nil))
+    }
+
+    static let log = Logger(subsystem: "com.mats.LatexTerm", category: "home")
+    /// Abbruch sichtbar machen — ein stiller `return` nach dem Dialog sah aus wie „nichts passiert".
+    private static func complain(_ title: String, _ text: String) {
+        let a = NSAlert(); a.messageText = title; a.informativeText = text; a.runModal()
     }
 
     /// Text, der in einem einfach-quotierten Shell-Argument landet (der Zweck-Satz): Apostrophe
