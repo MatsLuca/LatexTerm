@@ -730,3 +730,11 @@ Alt-Issues neu bewertet: #9 ist **billiger als gedacht** (vendored Fork hat komp
 - Echtes Theming (Farben sind 4× hartkodiert) — schaltet die volle Wirkung von #12 frei.
 
 **Verifikations-Workflow (manuelles UI-Testen):** ⚠️ **Claude Code läuft selbst in einem LatexTerm-Fenster** — `pkill -f LatexTerm` killt den eigenen Host und die Instanzen-Jonglierung ist wertlos. Außerdem dedupliziert LaunchServices über die Bundle-ID, d.h. ein direkt gestartetes `.build`-Binary wird von einer bereits via Xcode laufenden Instanz verdrängt (→ Env-Vars wie `LATEXTERM_SCAN_LOG` greifen nicht). **Robuster Weg:** der User baut+startet selbst per **Xcode Cmd+R**; Diagnose-Logging in `#if DEBUG` *immer an* (kein Env-Gate) und **direkt in eine Datei** schreiben (`FileHandle`, z.B. `/tmp/…`) statt NSLog/os_log, dann die Datei auslesen. Der Standalone-`.build`-Run wirft harmlose WebContent-Sandbox-Fehler — kein echtes Problem.
+
+## 2026-08-29 — „Neues Projekt“ aus dem Menü verpuffte
+Dialog kam, danach nichts: kein Ordner, kein Start im Timer-Log. Der Code hatte nach dem Dialog vier
+stille `return`-Pfade und `launch()` schluckte Anfragen auf schon gestarteten Kacheln (Menü ging über
+`HomeFocus.active`, das beim Entfernen der Home-Kachel nicht gelöscht wurde). Jetzt: Abbrüche als
+Alert, `active` wird beim Fensterverlust gelöscht, Start auf laufender Kachel wandert in eine neue
+(`onLaunchElsewhere`), Logger `com.mats.LatexTerm` Kategorie `home`/`launch`. Lehre: nach einem
+Modal-Dialog nie still aussteigen — der User liest „nichts passiert“ als Bug.
