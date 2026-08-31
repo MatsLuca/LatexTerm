@@ -7,6 +7,18 @@ Hier liegen die Arbeits-Erkenntnisse: Debug-Funde, Entscheidungen mit Begründun
 
 ---
 
+## Stand (2026-08-31 — Lokal-Modus: Ollama-Fallback als ⌘,-Toggle)
+
+Anlass: Claude-Code-Fallback auf lokale Modelle (claude-werkstatt `lokal/`). Neu: `LokalModusSettings`
+(dateibasierter Store nach dem Muster von `StatuslineSettings` — Wahrheit ist die Flag-Datei
+`~/.config/projekte/lokal-modus`, weil Launcher-Shell und `projekte.py` sie extern prüfen; UserDefaults
+wäre für externe Leser unsichtbar). Toggle in ⌘, → Claude („Neue Sessions lokal starten“, Höhe 640→740),
+liest den Zustand bei `onAppear` frisch (Datei kann von der Shell geändert werden). Der Toggle schaltet
+das neue Statuszeilen-Segment `lokal` (🦙 Modell/CPU/RAM/tok/s, gerendert vom mats-tools-Skript) automatisch
+mit — `StatuslineSettings.Segment` um `case lokal` (Zeile 2) erweitert, im Statuszeile-Tab weiter von Hand
+übersteuerbar. Build + alle Tests grün. Lehre am Rande: Download-Kachel + „App neu starten (⌘Q)“-Anweisung
+beißen sich — der Neustart killt laufende Pane-Prozesse.
+
 ## Stand (2026-08-29, spät — Fullscreen-TUI: Mausrad/Trackpad-Reporting, 120 Hz)
 
 Anlass: Claude Codes `/tui fullscreen` (Alt-Screen, Research Preview). Alles in LatexTerm war kompatibel

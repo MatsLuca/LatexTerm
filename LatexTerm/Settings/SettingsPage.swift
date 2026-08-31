@@ -37,7 +37,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .general: return 300
         case .appearance: return 600
         case .panes: return 330
-        case .claude: return 640
+        case .claude: return 740
         case .statusline: return 400
         case .formulas: return 260
         case .advanced: return 560

@@ -13,7 +13,7 @@ final class StatuslineSettings: ObservableObject {
     /// Ein Segment = ein Schlüssel im Skript; Reihenfolge = Reihenfolge in der Zeile.
     enum Segment: String, CaseIterable, Identifiable {
         case dir, git, model, effort, timer, earn   // Zeile 1
-        case ctx, limits, fable, cost, month         // Zeile 2
+        case ctx, lokal, limits, fable, cost, month  // Zeile 2
         var id: String { rawValue }
         var label: String {
             switch self {
@@ -24,6 +24,7 @@ final class StatuslineSettings: ObservableObject {
             case .timer: return "Session-Timer"
             case .earn: return "Kickbacks-Einnahmen"
             case .ctx: return "Kontextfenster"
+            case .lokal: return "Lokal-Modus (🦙 Ollama)"
             case .limits: return "5h/7d-Limits"
             case .fable: return "Fable-Wochenlimit"
             case .cost: return "Session-Kosten"

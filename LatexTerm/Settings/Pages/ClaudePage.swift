@@ -4,9 +4,16 @@ import SwiftUI
 struct ClaudePage: View {
     @ObservedObject private var cockpit = CockpitSettings.shared
     @ObservedObject private var store = ThemeStore.shared
+    @ObservedObject private var lokal = LokalModusSettings.shared
 
     var body: some View {
         Form {
+            SettingsGroup("Lokal-Modus (Ollama)",
+                          help: "Launcher und Home-Kachel starten jedes Projekt über `lokal` statt `claude`: Claude Code gegen ein lokales Ollama-Modell — für „kein Internet“ oder „Tokens leer“. Permissions dann acceptEdits statt yolo; Statuszeile zeigt 🦙 mit CPU und Tok/s. Laufende Sessions bleiben unberührt.") {
+                Toggle("Neue Sessions lokal starten", isOn: $lokal.enabled)
+            }
+            .onAppear { lokal.load() }
+
             SettingsGroup("Benachrichtigungen",
                           help: "„Claude braucht Input“ / „Claude ist fertig“ kommen aus den Claude-Code-Hooks (OSC 5522); Terminal-Glocke und passive Erkennung sind Fallback. Klick auf ein Banner holt die Kachel nach vorn.") {
                 Toggle("Benachrichtigungen zeigen", isOn: $cockpit.notificationsEnabled)
