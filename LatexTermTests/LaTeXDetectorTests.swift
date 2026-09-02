@@ -43,8 +43,11 @@ final class LaTeXDetectorTests: XCTestCase {
     }
 
     func testBodyIsTrimmed() {
-        let hits = LaTeXDetector.find(in: "$  x + y  $")
-        XCTAssertEqual(hits.first?.body, "x + y")
+        // Innen-Leerraum wird getrimmt; bei `$` verbietet die Pandoc-Regel Leerzeichen direkt am
+        // Delimiter (Prosa-Schutz), bei `\(…\)` und `$$…$$` nicht.
+        XCTAssertEqual(LaTeXDetector.find(in: "\\(  x + y  \\)").first?.body, "x + y")
+        XCTAssertEqual(LaTeXDetector.find(in: "$$  x + y  $$").first?.body, "x + y")
+        XCTAssertTrue(LaTeXDetector.find(in: "$  x + y  $").isEmpty)
     }
 
     // MARK: - Escaping & Negativfälle
@@ -210,5 +213,120 @@ final class LaTeXDetectorTests: XCTestCase {
         lines += Array(repeating: "x", count: 13)
         lines += ["$$"]
         XCTAssertTrue(LaTeXDetector.findBlocks(in: lines).isEmpty)
+    }
+
+    func testBlockOpenerWithClaudeMarkerPrefix() {
+        // Claude Code stellt der ersten Absatzzeile „⏺ " voran — der Block gilt trotzdem,
+        // startCol zeigt auf den Delimiter (der Marker bleibt sichtbar).
+        let lines = ["⏺ $$", "  a = b", "  $$", ""]
+        let blocks = LaTeXDetector.findBlocks(in: lines)
+        XCTAssertEqual(blocks.count, 1)
+        XCTAssertEqual(blocks[0].body, "a = b")
+        XCTAssertEqual(blocks[0].startCol, 2)
+        XCTAssertEqual(blocks[0].endRow, 2)
+    }
+
+    func testBlockOpenerWithProseIsNotABlock() {
+        let lines = ["Kosten $$", "a", "$$"]
+        XCTAssertTrue(LaTeXDetector.findBlocks(in: lines).isEmpty)
+    }
+
+    // MARK: - looksLikeHardWrapContinuation — Claude Codes eigener Wortumbruch
+
+    func testHardWrapContinuationClaudeStyle() {
+        XCTAssertTrue(LaTeXDetector.looksLikeHardWrapContinuation(
+            prev: "⏺ Die Lösung ist $x = \\frac{-b \\pm",
+            next: "  \\sqrt{b^2-4ac}}{2a}$ und damit eindeutig."))
+    }
+
+    func testHardWrapContinuationParenDelimiter() {
+        XCTAssertTrue(LaTeXDetector.looksLikeHardWrapContinuation(
+            prev: "  also \\(a +", next: "  b\\) ist"))
+    }
+
+    func testHardWrapRejectsShellVariablesWithoutIndent() {
+        // Zwei Shell-Zeilen: kein Einzug → kein Join (sonst würde `$PATH … $HOME` zur Formel).
+        XCTAssertFalse(LaTeXDetector.looksLikeHardWrapContinuation(
+            prev: "echo $PATH", next: "cd $HOME"))
+    }
+
+    func testHardWrapRejectsWhenPrevIsBalanced() {
+        XCTAssertFalse(LaTeXDetector.looksLikeHardWrapContinuation(
+            prev: "  $a$ fertig", next: "  $b$ neu"))
+    }
+
+    func testHardWrapRejectsWhenNextHasNoCloser() {
+        XCTAssertFalse(LaTeXDetector.looksLikeHardWrapContinuation(
+            prev: "  ist $x +", next: "  y ohne Ende"))
+    }
+
+    func testHardWrapRejectsBareDollarAtLineEnd() {
+        // Nacktes `$` am Zeilenende (Prompt, Preis-Prosa) ist kein Öffner einer Formel.
+        XCTAssertFalse(LaTeXDetector.looksLikeHardWrapContinuation(
+            prev: "Preis in $", next: "  5$ Dollar"))
+    }
+
+    // MARK: - Prosa-Schutz: Pandoc-Regel + Stilklassen
+
+    func testPandocRuleShellVariablesOnOneLine() {
+        // `$PATH and $HOME`: das zweite `$` hat links ein Leerzeichen → kein Schließer.
+        XCTAssertTrue(LaTeXDetector.find(in: "echo $PATH and $HOME").isEmpty)
+    }
+
+    func testPandocRuleOpenerNeedsNonSpaceRight() {
+        XCTAssertTrue(LaTeXDetector.find(in: "kostet 5 $ und 7 $ hier").isEmpty)
+        XCTAssertTrue(LaTeXDetector.find(in: "offenes $, dann $x$").count == 1)
+    }
+
+    func testPandocRuleCloserNotBeforeDigit() {
+        // `$5` als Preis: das `$` direkt vor einer Ziffer schließt nichts.
+        XCTAssertTrue(LaTeXDetector.find(in: "von $a bis $5 Dollar").isEmpty)
+        XCTAssertEqual(LaTeXDetector.find(in: "$x_1$ und $y$").count, 2)
+    }
+
+    func testPandocRuleKeepsLegitMath() {
+        XCTAssertEqual(LaTeXDetector.find(in: "$(a+b)$ und $n$th und $X$ … $Y$").count, 4)
+    }
+
+    func testStyleClassMustMatch() {
+        // "mit $PATH" in Code-Farbe (Klasse 1), das `$` davor im Fließtext (Klasse 0): kein Paar.
+        let line = "ein $x, mit $PATH ok"
+        var styles = [Int](repeating: 0, count: line.count)
+        for i in 12..<17 { styles[i] = 1 }
+        XCTAssertTrue(LaTeXDetector.find(in: line, styles: styles).isEmpty)
+        // Ohne Stilinfo greift nur die Pandoc-Regel: `$PATH`s `$` hat links ein Leerzeichen → ebenfalls leer.
+        XCTAssertTrue(LaTeXDetector.find(in: line).isEmpty)
+        // Gleiche Klasse überall → normale Paarung.
+        XCTAssertEqual(LaTeXDetector.find(in: "ein $x$ ok", styles: [Int](repeating: 3, count: 10)).count, 1)
+    }
+
+    func testHardWrapRejectsProseWithCodeColoredDollar() {
+        // Der Fall aus Mats' Screenshot: „offenes $,“ oben, „mit $PATH“ (Code-Farbe) unten.
+        let prev = "  Regel: oben ein offenes $, unten"
+        let next = "  eine Zeile mit $PATH und $HOME getrennt."
+        XCTAssertFalse(LaTeXDetector.looksLikeHardWrapContinuation(prev: prev, next: next))
+    }
+
+    // MARK: - Prosa-Body + Markdown-Schaden
+
+    func testProseBodyInDoubleDollarIsRejected() {
+        XCTAssertTrue(LaTeXDetector.find(in: "die PID ist $$ und das war $$ kein Block").isEmpty)
+        XCTAssertTrue(LaTeXDetector.looksLikeProse("und das war"))
+        XCTAssertFalse(LaTeXDetector.looksLikeProse("a b"))
+        XCTAssertFalse(LaTeXDetector.looksLikeProse("\\sin x"))
+        XCTAssertFalse(LaTeXDetector.looksLikeProse("abc"))
+        XCTAssertEqual(LaTeXDetector.find(in: "$$x^2 + y^2$$").count, 1)
+    }
+
+    func testRepairMatrixRowBreaksEatenByMarkdown() {
+        // CC macht aus `1 & 2 \\\\ 3 & 4` ein `1 & 2 \\ 3 & 4` — im Environment zurück zu `\\\\`.
+        let damaged = "\\begin{pmatrix} 1 & 2 \\ 3 & 4 \\end{pmatrix}"
+        XCTAssertEqual(LaTeXDetector.repairMarkdownDamage(damaged),
+                       "\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}")
+        // Ohne Environment bleibt `\\ ` (Control Space) unangetastet.
+        XCTAssertEqual(LaTeXDetector.repairMarkdownDamage("a\\ b"), "a\\ b")
+        // Ein echtes `\\\\ ` wird nicht verdoppelt.
+        let ok = "\\begin{cases} a \\\\ b \\end{cases}"
+        XCTAssertEqual(LaTeXDetector.repairMarkdownDamage(ok), ok)
     }
 }

@@ -43,7 +43,13 @@ public struct CellStyleOverride: Equatable {
     public var color: NSColor
     /// Draw a soft glow (shadow in `color`) behind the glyphs.
     public var glow: Bool
-    public init(color: NSColor, glow: Bool = false) { self.color = color; self.glow = glow }
+    /// Draw nothing for this cell (background, selection and cursor still paint). LatexTerm hides
+    /// the source characters under a formula overlay this way instead of masking them.
+    public var hidden: Bool
+    public init(color: NSColor, glow: Bool = false, hidden: Bool = false) {
+        self.color = color; self.glow = glow; self.hidden = hidden
+    }
+    public static let hidden = CellStyleOverride(color: .clear, hidden: true)
 }
 
 open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, TerminalDelegate {
@@ -458,9 +464,10 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// Controls weather to use high ansi colors, if false terminal will use bold text instead of high ansi colors
     public var useBrightColors: Bool = true
 
-    /// Host hook: replacement style for a non-dim cell (absolute buffer row, column, whether the
-    /// cell uses the default foreground; nil = no change). Used by LatexTerm to tint/glow the text
-    /// typed into Claude Code's prompt box. Dim cells are never offered.
+    /// Host hook: replacement style for a cell (absolute buffer row, column, whether the cell
+    /// uses the default foreground; nil = no change). Used by LatexTerm to tint/glow the text
+    /// typed into Claude Code's prompt box and to hide the source text under formula overlays.
+    /// Dim cells only honour `hidden` (their colour is never replaced).
     public var cellStyleOverride: ((_ absoluteRow: Int, _ col: Int, _ isDefaultFg: Bool) -> CellStyleOverride?)?
 
     /// macOS font smoothing (slightly thicker glyphs). Default off = Ghostty look.

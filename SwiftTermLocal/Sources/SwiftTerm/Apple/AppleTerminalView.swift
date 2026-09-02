@@ -648,10 +648,12 @@ extension TerminalView {
             #if os(macOS)
             // Host style for default-colored, non-dim cells (LatexTerm prompt box tint/glow).
             var override: CellStyleOverride? = nil
-            if !attr.style.contains(.dim), let hook = cellStyleOverride {
+            if let hook = cellStyleOverride {
                 let isDefault: Bool
                 if case .defaultColor = attr.fg { isDefault = true } else { isDefault = false }
                 override = hook(row, col, isDefault)
+                // Dim cells keep their colour; only `hidden` applies.
+                if let o = override, attr.style.contains(.dim), !o.hidden { override = nil }
             }
             let overrideChanged = override != lastOverride
             #else
@@ -679,8 +681,15 @@ extension TerminalView {
             }
             #if os(macOS)
             if let o = override {
-                currentAttributes[.foregroundColor] = o.color
-                if o.glow { currentAttributes[.latexTermGlow] = o.color }
+                if o.hidden {
+                    // Transparent glyphs: background/selection stay, nothing is drawn on top.
+                    currentAttributes[.foregroundColor] = NSColor.clear
+                    currentAttributes[.underlineColor] = NSColor.clear
+                    currentAttributes[.strikethroughColor] = NSColor.clear
+                } else {
+                    currentAttributes[.foregroundColor] = o.color
+                    if o.glow { currentAttributes[.latexTermGlow] = o.color }
+                }
             }
             #endif
             pendingAttrs = currentAttributes

@@ -33,7 +33,8 @@ PTY (login shell) → SwiftTerm VT parser → buffer grid
 
 - One WebView hosts *all* formulas; KaTeX loads once, offline (bundled CSS/JS/fonts).
 - Overlays are keyed to the absolute scrollback row — scrolling repositions them (one GPU-composited translate) instead of rebuilding.
-- Detection handles soft-wrapped inline formulas and multi-line `$$ … $$` blocks; inline hits scale to fit their row.
+- Detection handles soft-wrapped inline formulas, Claude Code's own word-wrap (indented continuation lines) and multi-line `$$ … $$` blocks; inline hits scale to fit their row and grow into empty neighbour rows.
+- The source characters under a formula are drawn transparent by the terminal itself (no mask), so selection and coloured backgrounds stay intact.
 - Clicks on empty space pass through to normal terminal selection; only formula hitboxes are interactive.
 
 The deep-dive lives in the source — start at `LatexTerm/Latex/OverlayController.swift`.
@@ -154,10 +155,12 @@ xcodebuild test -project LatexTerm.xcodeproj -scheme LatexTerm \
 
 ## Known limitations
 
-- A formula whose opener is scrolled off above the viewport (or that wraps past the bottom) isn't detected; multi-line `$$` blocks need each delimiter alone on its line.
-- Two bare `$` in prose (`echo $PATH and $HOME`) still pair into a false formula — every safe heuristic broke legit math, so math correctness wins.
+- A formula whose opener is scrolled off above the viewport (or that wraps past the bottom) isn't detected; multi-line `$$` blocks need each delimiter alone on its line (a leading marker like `⏺ ` is fine).
+- Claude Code's Markdown renderer strips the backslash before ASCII punctuation, so `\(…\)`, `\[…\]`, `\,`, `\{` and `\$` never reach the terminal intact — use `$…$`, `\thinspace`, `\lbrace`. Matrix row breaks (`\\`) are repaired heuristically.
+- A fraction squeezed between two text lines still shrinks to one row height — hover for the full-size view.
+- `$` in prose is filtered by Pandoc's rule (no space right of the opener / left of the closer, no digit after the closer) and by colour: opener and closer must share the cell colour, so a `$PATH` in a code span never pairs with a prose `$`. Price: `$ x $` with inner spaces isn't a formula — write `$x$` or `\( x \)`.
 - Ligatures are off by design (bundled font is the NL variant); a ligature font can still be chosen, but glyphs then may not align with cells.
 
 ## License
 
-MIT — © 2026 Mats Luca Dagott. Bundles [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT, vendored fork at `SwiftTermLocal/`) and [KaTeX](https://katex.org) 0.16.9 (MIT; fonts under SIL OFL 1.1) and [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) NL 2.304 (SIL OFL 1.1) — see [`NOTICE`](NOTICE). The demo above is rendered programmatically with [Remotion](https://remotion.dev) (`demo-video/`).
+MIT — © 2026 Mats Luca Dagott. Bundles [SwiftTerm](https://github.com/migueldeicaza/SwiftTerm) (MIT, vendored fork at `SwiftTermLocal/`) and [KaTeX](https://katex.org) 0.16.47 (MIT; fonts under SIL OFL 1.1) and [JetBrains Mono](https://github.com/JetBrains/JetBrainsMono) NL 2.304 (SIL OFL 1.1) — see [`NOTICE`](NOTICE). The demo above is rendered programmatically with [Remotion](https://remotion.dev) (`demo-video/`).

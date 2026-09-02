@@ -101,8 +101,7 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
     html,body{margin:0;padding:0;background:transparent;overflow:hidden;height:100%;width:100%;}
     #root{position:absolute;top:0;left:0;}
     .f{position:absolute;overflow:hidden;}
-    .f .bg{position:absolute;left:0;right:0;}
-    .f .m{position:absolute;left:2px;top:50%;transform-origin:left center;white-space:nowrap;}
+    .f .m{position:absolute;left:2px;top:0;transform-origin:left top;white-space:nowrap;}
     .katex{white-space:nowrap;}
     .fallback{font-family:ui-monospace,Menlo,monospace;opacity:.65;font-style:italic;}
     /* KaTeX-Fehler: roher Text bleibt sichtbar, aber rot wellig unterstrichen. */
@@ -112,18 +111,30 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
     <script>
     var root=document.getElementById('root');
     var els={};                 // key -> {wrap,bg,m,latex}
-    var cfg={fontPx:13,cellH:16,fg:'rgb(230,225,225)',bg:'rgb(23,20,20)',userScale:1};
+    var cfg={fontPx:13,cellH:16,fg:'rgb(230,225,225)',userScale:1};
 
-    function styleEl(e){ e.m.style.color=cfg.fg; e.bg.style.background=cfg.bg; }
+    function styleEl(e){ e.m.style.color=cfg.fg; }
 
+    // Die Box (wrap) ist die Quellzeile plus ggf. leere Nachbarzeilen; e.sy/e.sh = Lage der
+    // Quellzeile darin. Skalieren, bis die Formel in die Box passt; vertikal auf die Mitte
+    // der Quellzeile ankern und nur dann verschieben, wenn sie sonst aus der Box ragt.
+    // Display-Blöcke werden in beiden Achsen in ihrer Box zentriert.
     function fit(e){
       var pad=2;
-      var maxH=e.wrap.clientHeight-pad, maxW=e.wrap.clientWidth-pad;
+      var boxH=e.wrap.clientHeight, boxW=e.wrap.clientWidth;
+      var maxH=boxH-pad, maxW=boxW-pad;
       var rh=e.m.offsetHeight, rw=e.m.offsetWidth;
       if(rh<=0||rw<=0)return;
       var s=Math.min(1, maxH/rh, maxW/rw)*cfg.userScale;
-      // Display-Blöcke werden in beiden Achsen zentriert, Inline links/vertikal-mittig.
-      e.m.style.transform=(e.display?'translate(-50%,-50%)':'translateY(-50%)')+' scale('+s+')';
+      var h=rh*s, w=rw*s, top, left;
+      if(e.display){ top=(boxH-h)/2; left=(boxW-w)/2; }
+      else {
+        top=e.sy+e.sh/2-h/2;
+        top=Math.max(pad/2, Math.min(top, boxH-h-pad/2));
+        left=2;
+      }
+      e.m.style.top=top+'px'; e.m.style.left=left+'px';
+      e.m.style.transform='scale('+s+')';
     }
 
     function setConfig(c){
@@ -139,32 +150,26 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
         var e=els[it.key];
         if(!e){
           var wrap=document.createElement('div'); wrap.className='f';
-          var bg=document.createElement('div'); bg.className='bg';
           var m=document.createElement('div'); m.className='m';
-          wrap.appendChild(bg); wrap.appendChild(m); root.appendChild(wrap);
-          e={wrap:wrap,bg:bg,m:m,latex:null,display:false,err:null}; els[it.key]=e;
+          wrap.appendChild(m); root.appendChild(wrap);
+          e={wrap:wrap,m:m,latex:null,display:false,err:null,sy:0,sh:cfg.cellH,geom:''}; els[it.key]=e;
         }
         e.wrap.style.left=it.x+'px'; e.wrap.style.top=it.y+'px';
         e.wrap.style.width=it.w+'px'; e.wrap.style.height=it.h+'px';
-        // Hintergrund maskiert den Quelltext: bei Display der ganze Block, sonst eine Zeile mittig.
-        if(it.display){ e.bg.style.top='0px'; e.bg.style.height=it.h+'px'; }
-        else { var bgY=(it.h-cfg.cellH)/2; e.bg.style.top=bgY+'px'; e.bg.style.height=cfg.cellH+'px'; }
+        e.sy=it.sy||0; e.sh=it.sh||cfg.cellH;
+        var geom=it.w+'x'+it.h+'@'+e.sy;
         styleEl(e);
         if(e.latex!==it.latex || e.display!==!!it.display){
-          e.latex=it.latex; e.display=!!it.display;
-          if(e.display){ e.m.style.left='50%'; e.m.style.top='50%'; e.m.style.transformOrigin='center center'; }
-          else { e.m.style.left='2px'; e.m.style.top='50%'; e.m.style.transformOrigin='left center'; }
-          if(it.latex===""){           // reines Masken-Item (gewrappte Formel): nur bg, kein KaTeX
-            e.m.className='m'; e.m.innerHTML=''; e.err=null;
-          } else {
-            try{ e.m.className='m';
-                 e.m.innerHTML=katex.renderToString(it.latex,{displayMode:e.display,throwOnError:true});
-                 e.err=null; }
-            catch(err){ e.m.className='m fallback err'; e.m.textContent=it.latex;
-                 e.err=(err&&err.message)?err.message:String(err); }
-            if(document.fonts&&document.fonts.ready){document.fonts.ready.then(function(){fit(e);});}
-            fit(e);
-          }
+          e.latex=it.latex; e.display=!!it.display; e.geom=geom;
+          try{ e.m.className='m';
+               e.m.innerHTML=katex.renderToString(it.latex,{displayMode:e.display,throwOnError:true});
+               e.err=null; }
+          catch(err){ e.m.className='m fallback err'; e.m.textContent=it.latex;
+               e.err=(err&&err.message)?err.message:String(err); }
+          if(document.fonts&&document.fonts.ready){document.fonts.ready.then(function(){fit(e);});}
+          fit(e);
+        } else if(e.geom!==geom){     // nur Box geändert (Nachbarzeile frei/belegt): neu einpassen
+          e.geom=geom; fit(e);
         }
       }
       for(var k in els){ if(!seen[k]){ root.removeChild(els[k].wrap); delete els[k]; } }

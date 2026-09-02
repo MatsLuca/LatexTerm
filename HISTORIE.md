@@ -7,6 +7,45 @@ Hier liegen die Arbeits-Erkenntnisse: Debug-Funde, Entscheidungen mit Begründun
 
 ---
 
+## Stand (2026-09-02 — Formel-Overlays für Claude-Code-Text: Umbruch-Join, Span, keine Maske, Keys)
+
+Anlass: `/neudenken uiux, bisherige limitierungen und perfektion der latex formeln renderings`. Befund: die
+Architektur (Grid → eine WebView, Scroll-Block) trägt; gebrochen waren vier Prämissen aus der Shell-Epoche, seit
+der Text aus Claude Codes Fullscreen-TUI kommt. Mats' Entscheidung: alle vier umsetzen, **keinen** CLAUDE.md-Satz
+„Mathe als $…$ schreiben“ — wenn das Modell zufällig lesbar rendert, ist das ebenso gut.
+- **Umbruch-Join:** Claude Code bricht selbst wortweise um und schreibt harte Zeilen mit Einzug (`isWrapped` =
+  false); eine Formel darüber hatte pro Zeile nur ein `$` → nichts erkannt. Jetzt `LaTeXDetector.
+  looksLikeHardWrapContinuation(prev:next:)`: unpaariger Öffner oben (mit Inhalt dahinter), Folgezeile beginnt
+  mit Leerzeichen und enthält den Schließer. Einzug ist die Schutzschwelle gegen `echo $PATH`/`cd $HOME`. Dazu
+  `findBlocks`: Marker-Zeichen (`⏺ • - * > ⎿ │`) vor `$$`/`\[` erlaubt, `startCol` = Delimiter-Spalte.
+- **Dynamischer Span:** Box = Quellzeile + leere Nachbarzeilen (ohne Block), Item trägt `sy/sh`; `fit()` im
+  JS skaliert in die Box, ankert vertikal auf der Quellzeilen-Mitte und schiebt nur bei Überstand. Bruch
+  zwischen Text und Leerzeile bekommt zwei Zeilen, in einem Absatz mit Leerzeile oben und unten drei.
+- **Keine Maske:** `CellStyleOverride.hidden` im Fork (Glyph/Unterstrich transparent, Hintergrund + Selektion
+  + Cursor bleiben); Hook läuft jetzt für alle Zellen, Dim-Zellen honorieren nur `hidden`. Controller führt
+  `hiddenCells` (absolute Zeile → Spaltenbereiche) aus allen Segmenten (auch Block-Zeilen), meldet Änderung →
+  `needsDisplay`. `bg` aus der Layer-Config, `.bg`-Div und `M|`-Masken-Items entfernt.
+- **Keys ohne Zeile:** `col|body#n`. Im Fullscreen-TUI scrollt Claude Code selbst (yDisp 0) — vorher pro
+  Schritt Div weg + neu + KaTeX; jetzt nur Reposition. Beim echten Scroll unverändert.
+- **Nachschlag (Screenshot von Mats):** der Umbruch-Join machte aus `offenes $,` + `mit $PATH` eine Prosa-
+  Formel. Neue Idee statt Heuristik-Flickwerk: (a) **Pandoc-Regel** `tex_math_dollars` — Öffner-`$` braucht
+  rechts ein Nicht-Leerzeichen, Schließer-`$` links eines und rechts keine Ziffer. Fängt auch den alten
+  „by design“-Rest `echo $PATH and $HOME`. (b) **Stilklassen** — wir besitzen das Grid: Öffner und Schließer
+  müssen dieselbe Vordergrundfarbe (+Dim) tragen; Claude Codes Code-Span `$PATH` (blau) paart sich nie mit
+  Fließtext-`$`. `find/findWrapped/looksLikeHardWrapContinuation` nehmen optional `styles` (Klasse je Spalte),
+  der Controller berechnet sie nur für Zeilen mit `$`/`\` und hasht sie in den Row-Cache. Preis: `$ x $` mit
+  Innen-Leerzeichen ist keine Formel mehr (Test angepasst). 61 Tests grün.
+- **Probe (20 Formen, Screenshot):** Inline, Index, Griechisch, Bruch in Leerzeile, großes Integral, Umbruch-Join
+  über Claudes Wortumbruch, `$$`-Blöcke mit/ohne Marker, alle Negativfälle (Shell-Variablen, Preise, `$,`,
+  Innen-Leerzeichen, `\$100`) — alles wie erwartet. Zwei Funde: (a) `$$ und das war $$` einzeilig paart
+  (Pandoc-Regel gilt nur für `$`) → `looksLikeProse`: ≥ 2 Wörter à ≥ 3 Buchstaben ohne Mathe-Zeichen = Text.
+  (b) **Claude Codes Markdown-Renderer entfernt Backslashes vor ASCII-Satzzeichen** (CommonMark): `\(`→`(`,
+  `\[`→`[`, `\,`→`,`, `\;`→`;`, `\$`→`$`, `\\`→`\ ` — daher kam Punkt 3/10 roh, Punkt 6 mit `, dx`, Punkt 9
+  als einzeilige Matrix, Punkt 11 als Fehler. App-seitig nur die Matrix heilbar (`repairMarkdownDamage`:
+  `\ ` in `\begin{…}` → `\\`); der Rest ist CC-Verhalten, dokumentiert in CLAUDE.md/README. Code-Span
+  `` `$a$` `` rendert (gleiche Farbe beidseits) — bewusst gelassen. 63 Tests grün. Doku-Drift bereinigt: CLAUDE.md
+  behauptete „display:false hartkodiert“, README „KaTeX 0.16.9“ (gebündelt: 0.16.47).
+
 ## Stand (2026-08-31 — Lokal-Modus: Ollama-Fallback als ⌘,-Toggle)
 
 Anlass: Claude-Code-Fallback auf lokale Modelle (claude-werkstatt `lokal/`). Neu: `LokalModusSettings`

@@ -444,8 +444,11 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             self?.updatePromptBox()
         }
         term.onNeedsFullRescan = { [weak controller] in controller?.scheduleRescan() }
+        // Quellzellen unter Formel-Overlays unsichtbar zeichnen (statt WebView-Maske).
+        controller.onHiddenCellsChanged = { [weak term] in term?.needsDisplay = true }
         // Prompt-Tint (experimentell): Standard-FG-Zellen in den Box-Zeilen stylen.
-        term.cellStyleOverride = { [weak self] row, col, isDefaultFg in
+        term.cellStyleOverride = { [weak self, weak controller] row, col, isDefaultFg in
+            if let controller, controller.isHidden(row: row, col: col) { return .hidden }
             guard let self, let box = self.promptBoxAbsolute, box.contains(row) else { return nil }
             let store = ThemeStore.shared
             guard store.promptTintMode != .off else { return nil }

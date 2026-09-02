@@ -155,10 +155,11 @@ final class OverlayController {
 
     // MARK: - Privat
 
-    // Span 1.0: jede *Inline*-Formel wird in ihre eigene Zeile skaliert und ragt nie in
-    // Nachbarzeilen. Große Inline-Formeln werden klein – per Hover gibt's den Großmodus.
-    // (Mehrzeilige $$-Blöcke spannen dagegen ihren ganzen Quell-Zeilenbereich, s. blockBox.)
-    private static let verticalSpan: CGFloat = 1.0
+    // Vertikaler Platz einer Inline-Formel: die eigene Zeile, plus je eine **leere** Nachbar-
+    // zeile darüber/darunter (Claudes Absätze haben Leerzeilen). Ein Bruch oder Integral wird so
+    // nicht mehr auf die halbe Zeilenhöhe geschrumpft; die Formel bleibt auf der Mitte ihrer
+    // Quellzeile verankert (`sy`/`sh` im Item) und wächst nur in den freien Raum. Zwischen zwei
+    // Textzeilen bleibt es bei einer Zeile – per Hover gibt's den Großmodus.
     private var lastFontPx: CGFloat = 0
     private var lastConfigJSON: String?
     private var pendingClear = false
@@ -181,6 +182,19 @@ final class OverlayController {
     private let preview = FormulaPreview()
     private var hitboxes: [String: (rect: CGRect, latex: String)] = [:]
     private var formulaErrors: [String: String] = [:]   // Key → KaTeX-Fehlermeldung (#4)
+
+    /// Quellzellen unter einer Formel (absolute Buffer-Zeile → Spaltenbereiche). Der Fork
+    /// zeichnet sie über `cellStyleOverride` transparent (`CellStyleOverride.hidden`), statt dass
+    /// die WebView sie mit einer Hintergrundfarbe maskiert: so bleiben Selektion, Diff-Hintergründe
+    /// und Cursor unter der Formel echt, und es gibt keinen dunklen Kasten in fremdfarbigen Flächen.
+    private(set) var hiddenCells: [Int: [Range<Int>]] = [:]
+    /// Wird gerufen, wenn sich `hiddenCells` geändert hat (Kachel setzt `needsDisplay`).
+    var onHiddenCellsChanged: (() -> Void)?
+
+    func isHidden(row: Int, col: Int) -> Bool {
+        guard let ranges = hiddenCells[row] else { return false }
+        return ranges.contains { $0.contains(col) }
+    }
     private static let hoverPad: CGFloat = 2   // kleine Toleranz fürs Treffen
 
     /// Vertikaler Versatz der Formel-Divs während des Scrollens (#21): die Block-
@@ -295,6 +309,7 @@ final class OverlayController {
             formulaErrors.removeAll()
             rowCache.removeAll()
             lastItemsJSON = nil
+            if !hiddenCells.isEmpty { hiddenCells = [:]; onHiddenCellsChanged?() }
             return
         }
 
@@ -302,11 +317,8 @@ final class OverlayController {
         let cell = terminal.cellSize()
         let rows = term.rows
         let fg = settings.formulaColor
-        let bg = terminal.nativeBackgroundColor
         let fontPx = terminal.font.pointSize
         let scale = settings.formulaScale
-        let span = Self.verticalSpan
-        let yPad = cell.height * (span - 1) / 2
 
         // Schriftgröße geändert → kompletter Neuaufbau (KaTeX bei neuer Größe re-rendern).
         // Der Pro-Zeile-Cache bleibt gültig: `find()`-Treffer hängen nur am Text, nicht an
@@ -332,19 +344,53 @@ final class OverlayController {
         // Pro Zeile zugleich das `isWrapped`-Flag erfassen (eine getLine-Runde):
         // markiert, dass die Zeile die Fortsetzung der vorigen ist → für die
         // Rekonstruktion logischer (weich-umgebrochener) Zeilen, s.u.
+        // Dazu je Zeile eine Stilklasse pro Spalte (Vordergrundfarbe + Dim): Öffner und Schließer
+        // einer Formel müssen gleich gefärbt sein — Claude Codes Code-Spans (`$PATH`, blau) paaren
+        // sich so nicht mit einem `$` im Fließtext. Nur für Zeilen mit `$` oder `\` berechnet.
         var rowTexts: [String] = []; rowTexts.reserveCapacity(rows)
+        var rowStyles: [[Int]] = []; rowStyles.reserveCapacity(rows)
         var wrappedFlags = [Bool](repeating: false, count: rows)
         for vr in 0..<rows {
             let line = term.getLine(row: vr)
-            rowTexts.append(line?
+            let text = line?
                 .translateToString(trimRight: false)
-                .replacingOccurrences(of: "\u{0}", with: " ") ?? "")
+                .replacingOccurrences(of: "\u{0}", with: " ") ?? ""
+            rowTexts.append(text)
             wrappedFlags[vr] = line?.isWrapped ?? false
+            var styles: [Int] = []
+            if let line, text.contains("$") || text.contains("\\") {
+                let n = text.count
+                styles.reserveCapacity(n)
+                for col in 0..<n {
+                    let a = line[col].attribute
+                    styles.append(a.fg.hashValue &* 2 &+ (a.style.contains(.dim) ? 1 : 0))
+                }
+            }
+            rowStyles.append(styles)
         }
 
         var items: [[String: Any]] = []
         hitboxes.removeAll()
         var scanned = 0
+
+        // Keys OHNE Zeile: `col|body#n` (n = laufende Nummer gleicher col/body im Viewport, von
+        // oben). Scrollt eine TUI ihren Inhalt selbst (Claude Code im Fullscreen: yDisp bleibt 0,
+        // die Zeilen wandern), behalten die Formeln so ihren Key und werden von `sync()` nur
+        // verschoben statt entfernt + neu gerendert. Beim echten Terminal-Scroll (yDisp) ändert
+        // sich am Key ebenfalls nichts — die Block-Translation (#14) bleibt wie sie ist.
+        var keyCounter: [String: Int] = [:]
+        func makeKey(_ base: String) -> String {
+            let n = keyCounter[base, default: 0]
+            keyCounter[base] = n + 1
+            return n == 0 ? base : "\(base)#\(n)"
+        }
+
+        // Quellzellen, die der Fork unter den Formeln unsichtbar zeichnen soll.
+        var hidden: [Int: [Range<Int>]] = [:]
+        func hide(row: Int, from: Int, to: Int) {
+            guard to > from else { return }
+            hidden[row + yDisp, default: []].append(from..<to)
+        }
 
         // 1) Mehrzeilige Display-Blöcke ($$..$$, \[..\]): echtes displayMode, das Overlay
         //    spannt den ganzen Quell-Zeilenbereich – der Platz ist im Text schon reserviert.
@@ -354,10 +400,11 @@ final class OverlayController {
         var blockMasked: [Int: [Character]] = [:]
         for b in LaTeXDetector.findBlocks(in: rowTexts) {
             let box = blockBox(b, rowTexts: rowTexts, cell: cell)
-            let key = "B|\(b.startRow + yDisp)|\(b.startCol)|\(b.body)"
+            let key = makeKey("B|\(b.startCol)|\(b.body)")
             items.append([
                 "key": key,
                 "x": box.minX, "y": box.minY, "w": box.width, "h": box.height,
+                "sy": 0, "sh": box.height,
                 "latex": b.body,
                 "display": true
             ])
@@ -366,6 +413,7 @@ final class OverlayController {
                 var chars = blockMasked[r] ?? Array(rowTexts[r])
                 let from = (r == b.startRow) ? b.startCol : 0
                 let to = (r == b.endRow) ? min(b.endCol, chars.count) : chars.count
+                hide(row: r, from: from, to: to)
                 var c = from
                 while c < to { chars[c] = " "; c += 1 }
                 blockMasked[r] = chars
@@ -382,36 +430,63 @@ final class OverlayController {
         // Fortsetzungs-Flags: continues[vr] ⇒ vr setzt vr-1 fort (= isWrapped). continues[0]
         // gilt als false. An Block-Grenzen brechen, damit Block-Zeilen nie in eine logische
         // Gruppe geraten – sie laufen weiter über den Block-/Frisch-Pfad.
+        // Zweite Quelle neben `isWrapped`: Claude Codes eigener Wortumbruch schreibt harte
+        // Zeilen mit Einzug — `looksLikeHardWrapContinuation` erkennt eine Formel, die darüber
+        // läuft (unpaariger Öffner oben, eingerückte Zeile mit Schließer unten).
         var continues = [Bool](repeating: false, count: rows)
-        if rows > 1 { for vr in 1..<rows { continues[vr] = wrappedFlags[vr] } }
+        if rows > 1 {
+            for vr in 1..<rows {
+                continues[vr] = wrappedFlags[vr]
+                    || LaTeXDetector.looksLikeHardWrapContinuation(
+                        prev: rowTexts[vr - 1], next: rowTexts[vr],
+                        prevStyles: rowStyles[vr - 1].isEmpty ? nil : rowStyles[vr - 1],
+                        nextStyles: rowStyles[vr].isEmpty ? nil : rowStyles[vr])
+            }
+        }
         for r in blockMasked.keys {
             if r < rows { continues[r] = false }
             if r + 1 < rows { continues[r + 1] = false }
         }
 
+        // Leere Zeilen (ohne Block) dürfen von einer Nachbar-Formel mitbenutzt werden.
+        var emptyRow = [Bool](repeating: false, count: rows)
+        for vr in 0..<rows where blockMasked[vr] == nil {
+            emptyRow[vr] = rowTexts[vr].allSatisfy { $0 == " " }
+        }
+
         // Emittiert eine (ggf. über mehrere Rows laufende) Formel. Mehrzeiler: in das
         // breiteste Quell-Segment rendern (geringste Skalierung = beste Lesbarkeit); die
-        // übrigen Segmente mit einem reinen Hintergrund-Item (leeres latex) maskieren, damit
+        // Quellzellen aller Segmente werden vom Fork unsichtbar gezeichnet (`hidden`), damit
         // kein roher Fragment-Text durchscheint. displayMode wird durchgereicht.
         func emitFormula(startRow: Int, startCol: Int, endRow: Int, endCol: Int,
                          body: String, display: Bool) {
-            let key = "\(startRow + yDisp)|\(startCol)|\(body)"
-            func box(row: Int, fromCol: Int, toCol: Int) -> CGRect {
-                CGRect(x: CGFloat(fromCol) * cell.width,
-                       y: CGFloat(row) * cell.height - yPad,
-                       width: CGFloat(toCol - fromCol) * cell.width,
-                       height: cell.height * span)
+            let key = makeKey("\(startCol)|\(body)")
+            // Box = Quellzeile, erweitert um leere Nachbarzeilen; `sy`/`sh` = Lage der
+            // Quellzeile innerhalb der Box (Anker für die vertikale Ausrichtung im JS).
+            func box(row: Int, fromCol: Int, toCol: Int) -> (rect: CGRect, sy: CGFloat) {
+                let above = row > 0 && emptyRow[row - 1]
+                let below = row + 1 < rows && emptyRow[row + 1]
+                let top = above ? row - 1 : row
+                let n = 1 + (above ? 1 : 0) + (below ? 1 : 0)
+                let rect = CGRect(x: CGFloat(fromCol) * cell.width,
+                                  y: CGFloat(top) * cell.height,
+                                  width: CGFloat(toCol - fromCol) * cell.width,
+                                  height: cell.height * CGFloat(n))
+                return (rect, above ? cell.height : 0)
             }
-            func appendItem(_ k: String, _ f: CGRect, _ latex: String, _ disp: Bool) {
+            func appendItem(_ k: String, _ b: (rect: CGRect, sy: CGFloat), _ latex: String, _ disp: Bool) {
+                let f = b.rect
                 items.append([
                     "key": k, "x": f.minX, "y": f.minY, "w": f.width, "h": f.height,
+                    "sy": b.sy, "sh": cell.height,
                     "latex": latex, "display": disp
                 ])
             }
             if startRow == endRow {
-                let f = box(row: startRow, fromCol: startCol, toCol: endCol)
-                appendItem(key, f, body, display)
-                hitboxes[key] = (rect: f, latex: body)   // grobe Hitbox; per onBounds verfeinert
+                let b = box(row: startRow, fromCol: startCol, toCol: endCol)
+                appendItem(key, b, body, display)
+                hitboxes[key] = (rect: b.rect, latex: body)   // grobe Hitbox; per onBounds verfeinert
+                hide(row: startRow, from: startCol, to: endCol)
                 return
             }
             var segs: [(row: Int, from: Int, to: Int)] = []
@@ -419,19 +494,15 @@ final class OverlayController {
                 let from = (r == startRow) ? startCol : 0
                 let to   = (r == endRow)   ? endCol   : rowTexts[r].count
                 segs.append((r, from, to))
+                hide(row: r, from: from, to: to)
             }
             let renderIdx = segs.indices.max {
                 (segs[$0].to - segs[$0].from) < (segs[$1].to - segs[$1].from)
             } ?? 0
-            for (i, seg) in segs.enumerated() {
-                let f = box(row: seg.row, fromCol: seg.from, toCol: seg.to)
-                if i == renderIdx {
-                    appendItem(key, f, body, display)
-                    hitboxes[key] = (rect: f, latex: body)
-                } else {
-                    appendItem("M|\(startRow + yDisp)|\(startCol)|\(seg.row)", f, "", false)
-                }
-            }
+            let seg = segs[renderIdx]
+            let b = box(row: seg.row, fromCol: seg.from, toCol: seg.to)
+            appendItem(key, b, body, display)
+            hitboxes[key] = (rect: b.rect, latex: body)
         }
 
         var vr = 0
@@ -442,13 +513,17 @@ final class OverlayController {
             if groupEnd == vr {
                 // Einzelzeile: Cache-Pfad (bzw. block-maskierte Zeile frisch) wie bisher.
                 let hits: [LaTeXHit]
+                let styles = rowStyles[vr].isEmpty ? nil : rowStyles[vr]
                 if let masked = blockMasked[vr] {
-                    hits = LaTeXDetector.find(in: String(masked)); rowCache[vr] = nil; scanned += 1
+                    hits = LaTeXDetector.find(in: String(masked), styles: styles); rowCache[vr] = nil; scanned += 1
                 } else {
-                    let text = rowTexts[vr]; let h = text.hashValue
+                    // Hash über Text UND Stile: eine Umfärbung (Code-Span erscheint) muss neu parsen.
+                    let text = rowTexts[vr]
+                    var hasher = Hasher(); hasher.combine(text); hasher.combine(rowStyles[vr])
+                    let h = hasher.finalize()
                     let inRange = vr >= dStart && vr <= dEnd
                     if full || inRange || rowCache[vr]?.hash != h {
-                        hits = LaTeXDetector.find(in: text); rowCache[vr] = (hash: h, hits: hits); scanned += 1
+                        hits = LaTeXDetector.find(in: text, styles: styles); rowCache[vr] = (hash: h, hits: hits); scanned += 1
                     } else { hits = rowCache[vr]!.hits }
                 }
                 for hit in hits {
@@ -458,10 +533,13 @@ final class OverlayController {
             } else {
                 // Mehrzeilen-Gruppe: immer frisch via findWrapped (Wraps sind selten/billig).
                 let slice = Array(rowTexts[vr...groupEnd])
+                let sliceStyles: [[Int]] = (vr...groupEnd).map { r in
+                    rowStyles[r].isEmpty ? [Int](repeating: 0, count: rowTexts[r].count) : rowStyles[r]
+                }
                 var sliceCont = [Bool](repeating: true, count: slice.count); sliceCont[0] = false
                 for r in vr...groupEnd { rowCache[r] = nil }   // nicht einzeln gecacht
                 scanned += slice.count
-                for wh in LaTeXDetector.findWrapped(rows: slice, continues: sliceCont) {
+                for wh in LaTeXDetector.findWrapped(rows: slice, continues: sliceCont, styles: sliceStyles) {
                     emitFormula(startRow: vr + wh.startRow, startCol: wh.startCol,
                                 endRow: vr + wh.endRow, endCol: wh.endCol,
                                 body: wh.body, display: wh.displayMode)
@@ -474,7 +552,6 @@ final class OverlayController {
             "fontPx": fontPx,
             "cellH": cell.height,
             "fg": Self.css(fg),
-            "bg": Self.css(bg),
             "userScale": scale
         ])
         let itemsJSON = Self.json(items)
@@ -495,6 +572,8 @@ final class OverlayController {
         if !js.isEmpty { layer.run(js); lastItemsJSON = itemsJSON }
 
         lastEmpty = items.isEmpty
+
+        if hidden != hiddenCells { hiddenCells = hidden; onHiddenCellsChanged?() }
 
         #if DEBUG
         if ProcessInfo.processInfo.environment["LATEXTERM_SCAN_LOG"] != nil {
