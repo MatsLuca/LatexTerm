@@ -179,7 +179,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Cmd+⏎ in dieser Pane → Zoom-Toggle (#26).
     var onZoomRequested: ((TerminalPane) -> Void)?
     /// Start-Anfrage, die diese (schon laufende) Kachel nicht mehr tragen kann → Split öffnet eine neue.
-    var onLaunchElsewhere: ((String, String?, String?, [String], NSColor?, String?) -> Void)?
+    var onLaunchElsewhere: ((String, String?, String?, [String], NSColor?, String?, String?) -> Void)?
+    private var usesClaudeIntegration = true
+    private(set) var launcherLabel: String?
+    var onLaunchGroup: (([LaunchRequest]) -> Void)?
 
     // MARK: Home-Kachel (Projekt-Launcher)
 
@@ -193,16 +196,17 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     /// Kachel als Home-Kachel zeigen (statt Shell). `otherPanes` liefert die Kopfzeile
     /// mit dem Status der übrigen Kacheln.
-    func showHome(otherPanes: @escaping () -> [(String, String)], focusPane: @escaping (String) -> Void) {
+    func showHome(otherPanes: @escaping () -> [HomePaneInfo], focusPane: @escaping (String) -> Void) {
         guard !isStarted, homeView == nil else { return }
         let home = HomePaneView(frame: container.bounds)
         home.autoresizingMask = [.width, .height]
         home.otherPanes = otherPanes
         home.onFocusPane = focusPane
+        home.onLaunchGroup = { [weak self] requests in self?.onLaunchGroup?(requests) }
         home.onLaunch = { [weak self] req in
             self?.launch(in: req.path, command: req.command, label: req.label,
                          followUps: [req.colorFollowUp, req.followUp].compactMap { $0 },
-                         accent: req.accent, accentName: req.accentName)
+                         accent: req.accent, accentName: req.accentName, integration: req.integration)
         }
         home.resolveAccentName = { [weak self] wanted, alternatives, palette in
             self?.resolveLaunchAccentName?(wanted, alternatives, palette) ?? wanted
@@ -228,13 +232,13 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Home → Terminal: Shell in `directory` starten und `command` tippen (Kernel puffert,
     /// die Shell liest es nach dem Prompt — gleicher Pfad wie `new-pane --exec`).
     func launch(in directory: String, command: String?, label: String? = nil, followUps: [String] = [],
-                accent: NSColor? = nil, accentName: String? = nil) {
+                accent: NSColor? = nil, accentName: String? = nil, integration: String? = nil) {
         // Ein Prozess pro Kachel — kein zweiter Start ins laufende Terminal. Kommt der Start trotzdem
         // hier an (Home-Menü auf einer Kachel, die längst läuft), wandert er in eine frische Kachel
         // statt still zu verpuffen.
         guard !isStarted else {
             Logger(subsystem: "com.mats.LatexTerm", category: "launch").notice("launch auf gestarteter Kachel → neue Kachel: \(command ?? "-", privacy: .public)")
-            onLaunchElsewhere?(directory, command, label, followUps, accent, accentName)
+            onLaunchElsewhere?(directory, command, label, followUps, accent, accentName, integration)
             return
         }
         // Projektfarbe (Runde 25): vor dem Start setzen, damit Ring, Rahmen und HUD-Punkt von der
@@ -243,6 +247,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         // zieht die passive Rahmenerkennung die Kachel nach — Box und Rahmen bleiben eins.
         if let accent { borderAccent = accent }
         self.accentName = accentName
+        usesClaudeIntegration = integration != "terminal"
+        launcherLabel = label
         start(in: directory)
         guard let command, !command.isEmpty, let home = homeView else {
             // Nur Shell: sofort zeigen.
@@ -250,6 +256,43 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             DispatchQueue.main.async { [weak self] in
                 guard let self else { return }
                 self.view.window?.makeFirstResponder(self.view)
+            }
+            return
+        }
+        if !usesClaudeIntegration {
+            home.beginLaunch(label ?? "Codex", eta: 2, accent: effectiveAccent)
+            home.launchOverlay?.allowReveal { [weak self] in
+                self?.launchTimer?.invalidate()
+                self?.launchTimer = nil
+                self?.revealTerminal(success: false)
+            }
+            view.send(txt: command + "\r")
+            let started = Date()
+            var readySince: Date?
+            launchTimer?.invalidate()
+            launchTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] timer in
+                guard let self else { timer.invalidate(); return }
+                let term = self.view.getTerminal()
+                var lines: [String] = []
+                for row in 0..<term.rows {
+                    guard let line = term.getLiveLine(row: row) else { continue }
+                    var text = ""
+                    for col in 0..<term.cols {
+                        let ch = line[col].getCharacter()
+                        text.append(ch == "\u{0}" ? " " : ch)
+                    }
+                    lines.append(text)
+                }
+                let state = CodexLaunchReadiness.state(lines: lines)
+                if case .ready = state { readySince = readySince ?? Date() } else { readySince = nil }
+                let stable = readySince.map { Date().timeIntervalSince($0) >= 0.5 } ?? false
+                let timeout = Date().timeIntervalSince(started) >= 12
+                let interaction: Bool
+                if case .interaction = state { interaction = true } else { interaction = false }
+                guard stable || interaction || timeout else { return }
+                timer.invalidate()
+                self.launchTimer = nil
+                self.revealTerminal(success: stable)
             }
             return
         }
@@ -756,6 +799,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Output praktisch nicht vor). Graue/ungesättigte Rahmen (CC ohne /color,
     /// Dim-Borders) liefern bewusst nil → Fallback auf die globale Analyse.
     private func detectBorderAccent() -> NSColor? {
+        guard usesClaudeIntegration else { return nil }
         let term = view.getTerminal()
         let cols = term.cols
         guard cols >= 16 else { return nil }
@@ -825,6 +869,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Strukturscan der unteren Live-Zeilen (`PromptBoxLocator`), nach jedem Inhaltswechsel.
     /// Kosten: ≤ 64 Zeilen × Spalten Zeichenvergleiche — im Rauschen des Rescans.
     private func updatePromptBox() {
+        guard usesClaudeIntegration else { setPromptBox(nil); return }
         let term = view.getTerminal()
         let cols = term.cols
         guard cols >= 8, term.rows > 0 else { setPromptBox(nil); return }
@@ -901,6 +946,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private static let spinnerGlyphs: Set<Character> = ["·", "✢", "✳", "✶", "✻", "✽", "∗", "*"]
 
     private func detectSessionState() -> SessionState {
+        guard usesClaudeIntegration else { return .none }
         let term = view.getTerminal()
         let cols = term.cols
         guard cols >= 16 else { return .none }
@@ -1389,14 +1435,17 @@ final class TerminalSplitView: NSView {
 
     /// Für die Home-Kachel: (CWD, Claude-Status) aller ANDEREN gestarteten Kacheln — der Baum
     /// markiert Ordner, in denen gerade eine Session läuft.
-    private func paneSummary(excluding me: TerminalPane) -> [(String, String)] {
+    private func paneSummary(excluding me: TerminalPane) -> [HomePaneInfo] {
         panes.compactMap { p in
             guard p !== me, p.isStarted, let cwd = p.currentDirectory else { return nil }
+            let state: String
             switch p.sessionState {
-            case .working: return (cwd, "working")
-            case .awaitingInput: return (cwd, "awaitingInput")
-            case .none: return (cwd, "none")
+            case .working: state = "working"
+            case .awaitingInput: state = "awaitingInput"
+            case .none: state = "none"
             }
+            return HomePaneInfo(id: p.id.uuidString, path: cwd, agent: nil, sessionID: nil,
+                                state: state, label: p.launcherLabel ?? (cwd as NSString).lastPathComponent)
         }
     }
 
@@ -1446,6 +1495,15 @@ final class TerminalSplitView: NSView {
     func addPane(startingIn directory: String? = nil, home: Bool = false) -> TerminalPane {
         let pane = TerminalPane()
         pane.onClosed = { [weak self] p in self?.removePane(p) }
+        pane.onLaunchGroup = { [weak self] requests in
+            guard let self, (1...2).contains(requests.count) else { return }
+            for req in requests {
+                let fresh = self.addPane(home: true)
+                fresh.launch(in: req.path, command: req.command, label: req.label,
+                             followUps: [req.colorFollowUp, req.followUp].compactMap { $0 },
+                             accent: req.accent, accentName: req.accentName, integration: req.integration)
+            }
+        }
         // ⌘T: die anfordernde Kachel ist die fokussierte → ihr CWD vererben (#8).
         pane.onSplitRequested = { [weak self] requester in
             self?.addPane(startingIn: requester.currentDirectory)
@@ -1453,11 +1511,11 @@ final class TerminalSplitView: NSView {
         pane.onCloseRequested = { [weak self] p in self?.closePane(p) }
         pane.onEnsurePaneCount = { [weak self] n in self?.ensurePaneCount(n) }
         pane.onZoomRequested = { [weak self] p in self?.toggleZoom(p) }
-        pane.onLaunchElsewhere = { [weak self] dir, cmd, label, followUps, accent, accentName in
+        pane.onLaunchElsewhere = { [weak self] dir, cmd, label, followUps, accent, accentName, integration in
             guard let self else { return }
             let fresh = self.addPane(home: true)
             self.focusPane(fresh)
-            fresh.launch(in: dir, command: cmd, label: label, followUps: followUps, accent: accent, accentName: accentName)
+            fresh.launch(in: dir, command: cmd, label: label, followUps: followUps, accent: accent, accentName: accentName, integration: integration)
         }
         pane.resolveLaunchAccentName = { [weak self, weak pane] w, alts, pal in self?.distinctAccentName(w, alternatives: alts, palette: pal, excluding: pane) ?? w }
         pane.onStyleChanged = { [weak self] in self?.updateTitlebarHUD() }
@@ -1475,8 +1533,8 @@ final class TerminalSplitView: NSView {
             pane.showHome(otherPanes: { [weak self, weak pane] in
                 guard let self, let pane else { return [] }
                 return self.paneSummary(excluding: pane)
-            }, focusPane: { [weak self] cwd in
-                guard let self, let target = self.panes.first(where: { $0.isStarted && $0.currentDirectory == cwd }) else { return }
+            }, focusPane: { [weak self] paneID in
+                guard let self, let target = self.panes.first(where: { $0.isStarted && $0.id.uuidString == paneID }) else { return }
                 self.focusPane(target)
             })
         } else {

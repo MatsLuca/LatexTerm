@@ -1,11 +1,149 @@
 # HISTORIE — LatexTerm
 
+## Archiviert beim Tagesabschluss 2026-09-05
+
+## Aktueller Stand (2026-09-02)
+
+**Formel-Rendering an Claude-Code-Text angepasst (02.09., ungepusht)** — Anlass `/neudenken` über UI/UX + Grenzen
+der LaTeX-Overlays: die Detektions-Prämissen stammten aus der Shell-Epoche, der Text kommt heute aus Claude
+Codes TUI. Vier Punkte, alle in `OverlayController`/`LaTeXDetector`/Fork: (1) **Hard-Wrap-Join** — Claude Codes
+eigener Wortumbruch (harte Zeilen mit Einzug) wird per `looksLikeHardWrapContinuation` wie `isWrapped`
+behandelt; `$$`-Blöcke dürfen ein `⏺ ` vor dem Öffner haben. (2) **Dynamischer Span** — Inline-Formeln wachsen
+in leere Nachbarzeilen (Items tragen `sy/sh`, `fit()` ankert auf der Quellzeile). (3) **Keine Maske mehr** —
+Quellzellen werden vom Fork via `CellStyleOverride.hidden` transparent gezeichnet (Selektion/Diff-Hintergrund
+bleiben echt, `bg` aus der Layer-Config raus, `M|`-Masken-Items weg). (4) **Keys ohne Zeile** (`col|body#n`),
+damit Fullscreen-TUI-Scrollen nur repositioniert. Nachschlag nach Mats' Screenshot (Falsch-Formel aus
+`offenes $,` + `mit $PATH`): (5) **Prosa-Schutz** — Pandoc-Regel + Stilklassen-Regel (Öffner/Schließer gleich
+gefärbt; Controller liefert je Zeile mit `$`/`\` eine Klasse pro Spalte aus `attribute.fg` + dim, Row-Cache
+hasht Text + Stile). Probe mit 20 Formen (Screenshot): alles wie erwartet bis auf Claude Codes Markdown-Escape
+(s. Known limitations) → (6) `looksLikeProse` + `repairMarkdownDamage`. Build + 63 Tests grün (16 neue Detector-Tests); **Sicht-Check
+durch Mats steht aus** — besonders: Formel über Claude-Umbruch, Bruch neben Leerzeile, Mausauswahl über
+Formel, Scrollen im Fullscreen. Chronik `HISTORIE.md` oben.
+
+## Vorheriger Stand (2026-08-31)
+
+**Lokal-Modus (31.08., ungepusht)** — Toggle in ⌘, → Claude („Neue Sessions lokal starten“): Claude Code
+gegen Ollama statt Anthropic-API (Heimat: `claude-werkstatt/lokal/README.md`). Neuer dateibasierter Store
+`LokalModusSettings` (Wahrheit = Flag `~/.config/projekte/lokal-modus`, externe Leser: Launcher-Shell +
+`projekte.py`; liest bei `onAppear` frisch), schaltet das neue Statuszeilen-Segment `lokal` (🦙, in
+`StatuslineSettings.Segment`) automatisch mit. Claude-Tab-Höhe 640→740. Build + Tests grün; Sicht-Check
+durch Mats steht aus. Chronik `HISTORIE.md` oben.
+
+**Fullscreen-TUI (29.08. spät, `7377371`, gepusht)** — Claude Code läuft bei Mats jetzt in `/tui fullscreen`
+(Alt-Screen; `~/.claude/settings.json` `tui: fullscreen`, `CLAUDE_CODE_SCROLL_SPEED=1`, Beschleunigung aus).
+Fork dafür: `MacTerminalView.reportWheel` meldet Rad **und** Trackpad als Wheel-Buttons 64/65, sobald eine App
+Maus-Tracking anfordert (vorher totes Rad im Alt-Screen; Trackpad zeilenweise akkumuliert, Gestenstart ¾ Zeile
+vorgeladen); `AppleTerminalView.displayFrameDelayNanos` koppelt das Repaint-Throttle an die Screen-Rate (120 Hz).
+Prompt-Stil, LaTeX-Overlay, Launcher/Vorhang laufen im Alt-Screen unverändert. Grenze: zeilenquantisiertes
+Scrollen (Protokoll), kein Terminal-Scrollback mehr (`Ctrl+O` → `[` schreibt Transcript). Chronik `HISTORIE.md` oben.
+
+**Terminal-Optik R26–R30 + Spielereien (28.08.)** — Plan `claude-werkstatt/plans/terminal-optik_2026-08-28.md`,
+Chronik `HISTORIE.md` oben. LatexTerm sieht aus wie Ghostty (Dark+, JetBrains Mono NL 20, Padding 12,
+xterm-256, Bold ≠ hell, Font-Smoothing aus, Cursor steht); Themes im Ghostty-Format (`Theme/`), Import-Knopf,
+**alle** Flächen am `ThemeStore` — Regel: keine feste Farbe außerhalb `TerminalTheme`. Side-by-side
+`docs/optik-side-by-side.png` (Probe `docs/optik-probe.sh`): bis auf Ligaturen nicht unterscheidbar.
+Darstellungs-Schalter (⌘,): Theme, Innenabstand, Schrift verstärken, Bold = hell, Cursor blinkt / Theme-Farbe,
+Kachel-Akzentrahmen, **Prompt-Text** (Aus / Projektfarbe / Eigene Farbe / Regenbogen, glühend, optional auch
+Claudes gefärbten Text übersteuern, wahlweise eigene Farbe) — Grundlage `Latex/PromptBoxLocator.swift`
+(13 Tests) + Fork-Hook `cellStyleOverride`. Mats hat alles live abgenommen („funktioniert alles“).
+Fork-Fixes unterwegs: `mapColor` (256er um 8 verschoben), `setupOptions` überschrieb Options.
+Fallen: Bildschirmaufnahme-Grant klebt nach Rebuilds am alten Build → `tccutil reset ScreenCapture
+com.mats.LatexTerm`, neu einschalten, Neustart (`~/.claude/reference/latexterm-tcc.md`); fremde Kacheln
+nie zoomen, während Mats in einer anderen arbeitet; `open -na Ghostty` ohne `--window-save-state=never`
+bringt gespeicherte Fenster mit; Fork-Dateien sind `r--r--r--` (`chmod u+w`); `xcodeproj`-Gem nur in
+`/usr/bin/ruby`.
+
+Weiter gültig aus dem Stand vom 24.08. (Volltext in `HISTORIE.md` → „Stand 2026-08-24, Zusammenfassung“):
+Cockpit-Roadmap #29 bis auf **#28 v2 (Fernsteuerung vom Handy, Plan als Kommentar in #28)** zu; Home-Kachel
+= Werkstatt-Launcher (Heimatort `claude-werkstatt/launcher/README.md`, Runden 1–25 abgenommen; Fokusziel ist
+die Tabelle, Aufklapp-Zustand in `expandedPaths`, Mats-Befehle nur in den Templates von `projekte --json`,
+`runProjekte(args)` mit `"$@"`); OSS-Bewerbung offen; `list-panes`-Status hinkt bei laufender TUI nach.
+
 Erledigt-Verlauf der Arbeitssessions, 1:1 aus der Projekt-`CLAUDE.md` ausgelagert (Welle 5 der
 CLAUDE.md-Verfassung, 2026-08-22). Neueste Einträge oben. Der aktuelle Stand und die offenen
 Punkte stehen in `CLAUDE.md`; die Feature-Sicht (was ist drin, seit wann) im `CHANGELOG.md`.
 Hier liegen die Arbeits-Erkenntnisse: Debug-Funde, Entscheidungen mit Begründung, Sackgassen.
 
 ---
+
+## Stand (2026-09-05 — gleichwertiger Agentenstart im Home)
+
+Nachprüfung des Erstzeichen-Fixes: isolierter SearchField-Test war unzureichend. Neuer Test
+kompiliert die echte LauncherPalette, öffnet sie während NSWindow.sendEvent und durchläuft
+Layout/Runloop. Vor Fix reproduziert: Auswahl {0,1}, moin→oin und /frage→frage. AppKit setzt
+Select-all nach dem synchronen Fokuscode erneut. Jetzt nachgelagerte, bewachte Korrektur nur
+bei unverändertem Anfangstext, vollständiger Auswahl, gleichem Fokus und ohne IME-Markierung.
+Gleicher Regressionstest danach grün: Auswahl {1,0}, beide vollständigen Eingaben erhalten.
+
+Erstes Zeichen bei „Tippen öffnet Suche“: explizite Field-Editor-Aktivierung via selectText,
+danach kollabierte UTF-16-Auswahl am Textende statt nur makeFirstResponder/currentEditor.
+Regressionstest mit unsichtbarem AppKit-Fenster: m→moin, /→/frage, leere Eingabe und Unicode,
+vier Fälle grün. Laufende LatexTerm-Instanz dabei nicht gestartet/beendet oder gesteuert.
+
+Mats verwirft die KI-Modusschalter: eine Leiste, führendes `/` = freier Prompt, Enter sendet
+ohne weiteren Versanddialog. Sichtbarer Kontingent-/OpenAI-Hinweis, Kontextdetails im Tooltip.
+Backend erkennt Absicht intern; freie Antworten zusätzlich zu Finden/Start/Team/Vergleich.
+Nur Kachelstarts bleiben separat zu bestätigen. 57 Backend-Tests, 14 Swift-Logikfälle.
+
+KI-Grundfunktionen auf Mats' Auftrag implementiert: Palette trennt Lokal/KI finden/Start/Team.
+Opt-in vor Übertragung, Prozessabbruch bei Esc/Moduswechsel/Tippen, alte Antworten per Generation
+verworfen. Belegdialog löst Resume nur gegen vorhandenen Sessionkatalog auf. Startvorschau zeigt
+Ziel, Prompt und tatsächlichen Startbefehl, neuer Group-Callback öffnet erst nach Bestätigung
+eine oder zwei frische Kacheln. Team-Vergleich aus zwei bewusst eingefügten Antworten; kein
+automatisches Einsammeln aus unsicher zugeordneten Live-Sessions. Native Tests grün; private
+Datenschicht 54 Tests + synthetischer Live-Test (Luna 3,4 s). UI-/Startabnahme nach Neustart offen.
+
+⌘K-Fokus nach Mats' Präzisierung: zentrierte Palette (max. 820 pt), klarer Suchkopf,
+42-pt-Suchfeld, 68-pt-Trefferkarten mit separatem 15-pt-Titel/12-pt-Kontext und Anbieterkennung.
+Auswahl bleibt sichtbar, obwohl das Suchfeld Fokus hält; Esc-Button und eigener Leerzustand.
+KI-Planung anschließend: zuerst lesende Session-Findung mit belegten Treffern, dann bestätigte
+Startvorschauen, zuletzt Mehragenten-Briefings; keine KI-Anbindung in dieser UI-Runde.
+
+UI-Nachschliff nach Mats' Rückmeldung: feste Navigation Projekte/Aufgaben/Pins statt
+mehrerer Hinweislinks zum selben Ziel; Aufgaben zählt Fälliges und trennt heute/überfällig
+von den nächsten sieben Tagen. Schriftbasis 14–16 pt, Erklärungen kleiner in zweiter Zeile,
+einheitlich 54-pt-Aktionszeilen, Titel dürfen bei schmalen Kacheln kürzen statt Layout zu sprengen.
+Visuelle Abnahme durch Mats nach Neustart bleibt erforderlich.
+
+Launcher-Basics mit Mats/Codex: Tippen und ⌘K öffnen dieselbe persistente lokale Suche
+über Ordner, Projekte, Claude-/Codex-Sessions und Aktionen. Rechtsklick auf Resume-Zeilen
+der Aktionsliste: Fortsetzen, Pin, Titel, ID/Pfad kopieren. „Heute“ bündelt Wiedervorlagen
+bis sieben Tage, Inbox-Anzahl (optionales Backend-Feld) und laufende Kacheln.
+Kachelsprünge verwenden UUID statt CWD; mehrere Kacheln im selben Ordner bleiben getrennt.
+Grenze: aktuelles Fenster, keine verlässliche Live-Session-ID nach manuellen TUI-Wechseln;
+Session-Resume wird daher nicht automatisch auf eine vermeintlich passende Kachel umgeleitet.
+KI-Funktionen bleiben bewusst zurückgestellt. Sichtprüfung nach Neustart durch Mats offen.
+
+Sessionverwaltung für beide Agenten: ⌘P/⌘E und Mehr-Aktionen; Sessionmodell trägt Anbieter und
+Resume-Template, Codex-Pins in eigener Gruppe im gemeinsamen Pin-Screen. Native Titel über die
+Datenschicht, Pins vorerst launcher-lokal (installierte Codex-API bietet das Schreibfeld nicht).
+Neuladen baut Pin-Gruppen frisch auf, erhält Projekt/Pin-Auswahl und aktualisiert Suchtreffer.
+Mutationen gegen Doppelklick geschützt; Prozessfehler werden gemeldet statt still als Erfolg behandelt.
+
+Kontingente: eigene zweizeilige Fläche unter Claude/Codex statt Platzkonkurrenz zum Projekttitel.
+Auf Mats' Wunsch bleibt Claudes drittes Kontingent (Fable) auch unterhalb der Warnschwelle sichtbar.
+Verbrauch + Reset sichtbar, weitere Details im Tooltip, Warnung bei ≥85 %. Pro Anbieter
+getrennte Antwortablage und zusammengefasste Requests über offene Home-Kacheln; Fehler löschen
+den In-Memory-Stand statt fremde/veraltete Werte unbegrenzt zu behalten. Ab 60 s „älterer Stand“,
+ab 30 min keine Zahlen; fehlende Daten nicht als 0 %. Datenquelle `projekte limits --agent codex`.
+
+Nach Optik-Abnahme: `agentSessions` aus der Datenschicht für direkte Codex-Fortsetzung,
+ältere unter „Mehr“, Picker als Rückfallebene; auch für Projekt-Pins. Ordnergrenzen mit sechs
+Fixtures geprüft, Titel suchbar, Codex-Ordner im reduzierten Baum sichtbar. Wiedervorlagen
+nutzen fertige `agentActions` mit Initialprompt für den ausgewählten Agenten; Hinweise nennen
+ihn ausdrücklich. Claude-Sondermenüs gekennzeichnet, keine Codex-Session-Pins vorgetäuscht.
+
+Claude/Codex als gleich großer Schalter statt addierter Startzeilen; Wahl pro Ordner in
+UserDefaults, Standard aus dem Launcher. Nur passende Start-/Resume-Aktionen sichtbar,
+Claude-Wartung unter „Mehr“, Sessionaktionen tragen Anbieterkennung. Bestehende gepinnte
+Claude-Sessions bleiben Claude; Codex nutzt vorerst seinen nativen Resume-Picker.
+Codex erhält den gemeinsamen animierten Startring mit eigener TUI-Readiness-Beobachtung,
+Escape/Knopf zum sofortigen Aufdecken und 12-s-Grenze. Eingabepfeil allein reicht nicht:
+Er erscheint schon beim Laden; zusätzlich auf aufgelösten Footer und stabile Anzeige warten.
+Kein Live-Status-API-Ersatz, keine Claude-Folgebefehle/Prompt-Erkennung für Codex.
+Acht eigenständige Readiness-Fixtures (`scripts/test-codex-launch.swift`) und Xcode-Tests grün,
+signierter Debug-Build erfolgreich. Live-Sichtprüfung nach Mats' Neustart noch offen;
+laufende Host-App bewusst nicht beendet.
 
 ## Stand (2026-09-02 — Formel-Overlays für Claude-Code-Text: Umbruch-Join, Span, keine Maske, Keys)
 

@@ -28,6 +28,21 @@ final class LaunchOverlayView: NSView {
     private var clock: Timer?
     private let started = Date()
     private var finished = false
+    private var onReveal: (() -> Void)?
+    private let revealButton = NSButton(title: "Terminal anzeigen  ⎋", target: nil, action: nil)
+
+    func allowReveal(_ action: @escaping () -> Void) {
+        onReveal = action
+        revealButton.target = self
+        revealButton.action = #selector(revealNow)
+        revealButton.isBordered = false
+        revealButton.font = sub.font
+        revealButton.contentTintColor = sub.textColor
+        revealButton.setAccessibilityLabel("Terminal anzeigen")
+        stack.addArrangedSubview(revealButton)
+    }
+
+    @objc private func revealNow() { onReveal?() }
 
     /// Anteil des Rings, den der Start ohne Signal höchstens erreicht.
     private static let ceiling: CGFloat = 0.94
@@ -187,6 +202,8 @@ final class LaunchOverlayView: NSView {
     // MARK: Eingaben schlucken
 
     override var acceptsFirstResponder: Bool { true }
-    override func keyDown(with event: NSEvent) { }      // kein Beep, kein Durchreichen
+    override func keyDown(with event: NSEvent) {
+        if event.keyCode == 53 { onReveal?() }
+    }
     override func mouseDown(with event: NSEvent) { }    // kein Fokuswechsel in den Baum darunter
 }

@@ -4,7 +4,7 @@
 [![Language: Swift](https://img.shields.io/badge/Swift-5.9-orange)](https://swift.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
 
-A native macOS terminal that renders LaTeX live over the text — and doubles as a cockpit for **Claude Code** sessions.
+A native macOS terminal that renders LaTeX live over the text — with a shared launcher for **Claude Code and Codex** sessions.
 
 ![LatexTerm demo: a Claude Code agent orchestrates panes via the latexterm CLI, then LaTeX renders live over a Claude explanation](docs/demo.webp)
 
@@ -14,6 +14,7 @@ A native macOS terminal that renders LaTeX live over the text — and doubles as
 - **Hover, pin & export** — hover shows a formula full-size; a click pins it with copy buttons: **LaTeX**, **readable Unicode** (`(-b ± √(b²-4ac))/(2a)`), **PNG**, **vector PDF**, **Markdown**.
 - **Edit loop** — ✎ opens the formula in an inline editor with live preview; Enter types the result into your prompt.
 - **Auto-tiling panes** — ⌘T splits into a balanced grid, ⌘⏎ zooms one pane, layout + working dirs survive a relaunch.
+- **Claude + Codex launcher** — provider-specific resume, quotas, pins and titles; projects, tasks and pins in one Home screen. ⌘K or typing opens one search palette; `/` explicitly sends a free AI prompt when the optional backend is installed.
 - **Claude Code cockpit** — every pane knows whether its agent is working, done, or waiting for input, notifies you, and picks up the session's `/color` as its accent. Agents drive the terminal themselves via the `latexterm` CLI.
 - Plus: ⌘F search, KaTeX errors underlined instead of swallowed, overlays that follow the scroll, a native settings window (⌘,).
 
@@ -41,17 +42,37 @@ The deep-dive lives in the source — start at `LatexTerm/Latex/OverlayControlle
 
 </details>
 
-## Claude Code integration
+## Agent integration
 
 Everything here is a plain terminal mechanism — escape sequences, an env var, a Unix socket. Nothing is hardwired to Claude; any agent or script can use the same channels.
 
 ### Home pane — project launcher (`⌘N`)
 
-The first pane on launch (and every `⌘N`) is a **home pane** instead of a shell: the folder tree of your projects on the left (Finder order; ▣ project, ▤ area, ● where a Claude pane is running), and on the right the actions for the selected folder — **＋ Neue Session** (default: type an alias, hit `⏎`), **↻ Weiter** (resume the last session, titled from Claude Code's own `ai-title` entries), **› Nur Shell**, and a collapsed **▸ Sessions** row (`→` opens it: pin, rename, the most recently active projects below that folder and earlier sessions; `←` closes). Typing filters the tree, `→`/`←` expand/collapse or move between tree and actions, `⏎` runs the first action, `⌘⇧N` opens the new-project dialog — name, alias, a one-sentence purpose, and the place: the selected folder, any folder via a Finder picker, or *"noch offen"* (not decided yet), which starts Claude at the root with `--einordnen` to work out where the project belongs before creating it. `⌘P` pins a session, `⌘⇧P` pins a project/folder (`⇧⇥` shows the pin screen — projects on top, sessions below; a pinned project offers new session / resume / shell directly), `⌘E` renames one — the custom title overrides Claude Code's `ai-title` (`projekte rename <id> [title]`, empty = back to automatic). `⌘T` stays a plain shell inheriting the focused pane's CWD. The pane has no footer: its commands live in the **Home menu** in the menu bar (new project `⌘⇧N`, reload `⌘R`, pin session/project `⌘P`/`⌘⇧P`, rename `⌘E`, show pins, key help `⌘/`, **only projects** `⌘⇧B` — hides every folder that is neither a project nor ever had a session — and **expand/collapse all** `⌘⇧A`/`⌘⇧E`), and everything that cannot be a menu command — arrows, `⇥`/`⇧⇥`, `⏎`, type-to-search, the glyph legend — is one keystroke away in that key help (`⌘/`; Esc or a click closes it).
+**Current launcher:** choose **Claude / Codex** per folder. Both offer new sessions, direct
+resume, pins (`⌘P`), rename (`⌘E`) and shared follow-ups; Codex also keeps its native resume
+picker as a fallback. Codex titles are native, while Codex pins belong to the launcher.
+Provider badges distinguish actions and quota windows (including Claude's Fable quota).
+Claude-specific maintenance stays separately labelled; its status/color heuristics do not
+run on Codex panes. Codex has its own dismissible startup curtain.
 
-Above the tree a notice strip shows panes that are **waiting for you** (click → jump there; the same jump is the first action of a folder that already has a running pane) and due **follow-ups** from `~/.claude/wiedervorlage/`. The header on the right carries what the tree cannot: alias, CLAUDE.md headline, git state, last activity, and the last prompt of the session you would resume. Type-to-search also matches session titles.
+Home navigation groups **Projekte / Aufgaben / Pins**; tasks group due follow-ups and show
+the Inbox count. Open-pane results target the exact pane in the current window, not simply
+another pane with the same folder. Reliable live session identity is not yet available.
 
-The top right corner shows your subscription's **quota**: 5-hour window, week and model week with percentage and a live countdown to the reset (red from 85 %). It refreshes every 30 s via `projekte limits --json` (change the command in *Settings → Erweitert*) and stays empty if that command is missing.
+**One search bar:** `⌘K` and typing in Home open the same palette, preserving the first
+character. Ordinary text searches locally across projects, sessions and open panes. Start
+with `/` and press Enter to send a free AI prompt through the optional external
+`projekte assist` backend. This can find sessions with source excerpts, propose a session
+or Claude/Codex pair, answer questions, or compare answers deliberately pasted into the prompt.
+New sessions require a separate preview confirmation. Normal typing does not call a model;
+explicit AI requests use the configured backend/account quota and may send selected session
+excerpts. Search is bounded to recent candidates, not the full archive. Escape cancels.
+
+Additional controls live in the **Home menu**: new project `⌘⇧N`, reload `⌘R`,
+pin project/folder `⌘⇧P`, key help `⌘/`, only projects `⌘⇧B`, and expand/collapse all
+`⌘⇧A` / `⌘⇧E`. `⌘T` remains a plain shell inheriting the focused pane's working directory.
+Quota data refreshes via `projekte limits --json --agent <provider>`; unavailable or stale
+data is distinguished from zero usage. Follow-ups use the same external task store for both agents.
 
 The data comes from an external CLI — `projekte --json` (run through your login shell; change it in *Settings → Erweitert*). Without it the pane shows a hint and nothing else breaks. The contract (JSON shape) lives with the CLI, not in the app.
 

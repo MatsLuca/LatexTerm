@@ -27,6 +27,8 @@ struct ProjekteData: Decodable {
         var lastPrompt: String?    // letzte Eingabe — „wo war ich" beim Weitermachen
         var pinned: Bool?
         var context: Context?
+        var agent: String? = nil
+        var resumeAction: ActionTemplate? = nil
     }
     /// Angepinnte Session mit Projekt (Top-Level-Liste `pinned`).
     struct Pinned: Decodable {
@@ -37,7 +39,9 @@ struct ProjekteData: Decodable {
         var context: Context?
         var project: String
         var path: String
-        var session: Session { Session(id: id, lastAt: lastAt, turns: turns, title: title, pinned: true, context: context) }
+        var agent: String? = nil
+        var resumeAction: ActionTemplate? = nil
+        var session: Session { Session(id: id, lastAt: lastAt, turns: turns, title: title, pinned: true, context: context, agent: agent, resumeAction: resumeAction) }
     }
     /// Angepinntes Projekt / Ordner (Top-Level-Liste `pinnedProjects`).
     struct PinnedProject: Decodable {
@@ -89,6 +93,12 @@ struct ProjekteData: Decodable {
         var aliasCommand: String? // nur newProject: "hier {alias}"
         var placeCommand: String? // nur newProject: Ort offen → Start in der Wurzel mit --einordnen
         var followUp: String?     // nach dem Start tippen (compact: "/compact")
+        var agent: String? = nil
+        var integration: String? = nil // "terminal": eigene Start-UI, keine Claude-Folgebefehle
+        var isNewSession: Bool? = nil
+        var lastAt: String? = nil
+        var sessionID: String? = nil
+        var pinned: Bool? = nil
     }
     /// Projektfarbe auch in Claudes Box: neue Session tippt `followUp` (/color …), Weiter stellt
     /// `resumePrefix` (Farbzeile ins Transkript) vor das Kommando. {color}/{session} füllt die App.
@@ -111,6 +121,18 @@ struct ProjekteData: Decodable {
     struct Wiedervorlage: Decodable {
         var file: String; var slug: String; var due: String; var daysLeft: Int; var title: String
         var overdue: Bool; var dueToday: Bool
+        var agentActions: [String: ActionTemplate]?
+    }
+    struct AgentSession: Decodable {
+        var id: String
+        var path: String
+        var title: String
+        var lastAt: String
+        var action: ActionTemplate
+        var pinned: Bool?
+        var session: Session { Session(id: id, lastAt: lastAt, turns: 0, title: title, pinned: pinned, agent: "codex", resumeAction: action) }
+        var pin: Pinned { Pinned(id: id, lastAt: lastAt, turns: 0, title: title,
+            project: (path as NSString).lastPathComponent, path: path, agent: "codex", resumeAction: action) }
     }
     /// Quickstart (Dock-Menü): fertiger Ordner + Befehl aus `config.toml` der Datenschicht.
     struct Quickstart: Decodable {
@@ -122,6 +144,8 @@ struct ProjekteData: Decodable {
     /// Claude-Code-Farbpalette (Name → "#rrggbb") aus der Datenschicht.
     var accentPalette: [String: String]?
     var wiedervorlagen: [Wiedervorlage]?
+    struct Inbox: Decodable { var path: String; var count: Int }
+    var inbox: Inbox?
     /// Hintergrund-Sync von mats-tools + Klonen (Datenschicht `sync_status()`): nur zeigen, was hakt oder neu ist.
     struct Sync: Decodable {
         struct Behind: Decodable { var name: String; var path: String; var count: Int }
@@ -132,6 +156,9 @@ struct ProjekteData: Decodable {
     var projects: [Project]
     var areas: [Area]
     var actions: Actions?
+    var agentActions: [ActionTemplate]?
+    var agentSessions: [AgentSession]?
+    var defaultAgent: String?
     var pinned: [Pinned]?
     var pinnedProjects: [PinnedProject]?
 }
@@ -145,6 +172,7 @@ struct LaunchRequest {
     var accent: NSColor? = nil   // Projektfarbe aus der Datenschicht — Ring, Rahmen, HUD-Punkt der Kachel
     var accentName: String? = nil    // Claude-Code-Farbname dazu (Kollisionsschutz merkt ihn sich)
     var colorFollowUp: String? = nil // "/color <name>" für neue Sessions — VOR dem eigentlichen followUp
+    var integration: String? = nil
 }
 
 /// Lädt die Projektliste über das externe CLI `projekte` (Werkstatt-Datenschicht).
@@ -202,30 +230,45 @@ struct LimitsData: Decodable {
         var color: String?
     }
     var stale: Bool?
+    var fetchedAt: Double?
     var limits: [Limit]
 }
 
 enum LimitsLoader {
     static var command: String { CockpitSettings.shared.limitsCommand }
+    private static var pending: [String: [(LimitsData?) -> Void]] = [:]
+    private static var cached: [String: LimitsData] = [:]
+    private static var fetched: [String: Date] = [:]
 
-    /// Still: schlägt der Befehl fehl (kein Token, kein Netz, Befehl gar nicht da), liefert er nil
-    /// und die Zeile bleibt einfach leer — Kontingente sind Beiwerk, kein Grund für eine Fehlermeldung.
-    static func load(completion: @escaping (LimitsData?) -> Void) {
+    private static func complete(agent: String, data: LimitsData?) {
+        cached[agent] = data
+        fetched[agent] = Date()
+        let callbacks = pending.removeValue(forKey: agent) ?? []
+        callbacks.forEach { $0(data) }
+    }
+
+    /// Pro Anbieter zusammengefasste Abfrage; nil wird als „nicht verfügbar“ dargestellt.
+    static func load(agent: String, completion: @escaping (LimitsData?) -> Void) {
+        if Date().timeIntervalSince(fetched[agent] ?? .distantPast) < 25 {
+            completion(cached[agent]); return
+        }
+        if pending[agent] != nil { pending[agent]?.append(completion); return }
+        pending[agent] = [completion]
         DispatchQueue.global(qos: .utility).async {
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
-            proc.arguments = ["-lc", command]
+            proc.arguments = ["-lc", command + (agent == "codex" ? " --agent codex" : "")]
             let out = Pipe()
             proc.standardOutput = out
-            proc.standardError = Pipe()
+            proc.standardError = FileHandle.nullDevice
             do { try proc.run() } catch {
-                DispatchQueue.main.async { completion(nil) }
+                DispatchQueue.main.async { complete(agent: agent, data: nil) }
                 return
             }
             let data = out.fileHandleForReading.readDataToEndOfFile()
             proc.waitUntilExit()
             let parsed = try? JSONDecoder().decode(LimitsData.self, from: data)
-            DispatchQueue.main.async { completion(parsed) }
+            DispatchQueue.main.async { complete(agent: agent, data: parsed) }
         }
     }
 }
@@ -275,13 +318,14 @@ final class HomePaneView: NSView {
 
     /// (Pfad, Befehl-oder-nil, Label fürs Start-Overlay) → Kachel wird Terminal in `Pfad`.
     var onLaunch: ((LaunchRequest) -> Void)?
+    var onLaunchGroup: (([LaunchRequest]) -> Void)?
     var onClose: (() -> Void)?
     /// ⌘⏎ — Zoom wie bei Terminal-Kacheln (#26).
     var onZoom: (() -> Void)?
     /// First-Responder-Wechsel (Baum oder Aktionen) → Kachel-Dimmung.
     var onFocusChanged: ((Bool) -> Void)?
     /// (CWD, Claude-Status) der anderen gestarteten Kacheln → ● im Baum.
-    var otherPanes: (() -> [(String, String)])?
+    var otherPanes: (() -> [HomePaneInfo])?
     /// Sprung zu einer laufenden Kachel (CWD) — Fokus + ggf. Zoom wandert dorthin.
     var onFocusPane: ((String) -> Void)?
 
@@ -317,6 +361,7 @@ final class HomePaneView: NSView {
         case jump(cwd: String, state: String, name: String)   // → zur laufenden Kachel
         case wiedervorlage(ProjekteData.Wiedervorlage, path: String)
         case header(String)
+        case browse(path: String, name: String)
         var isHeader: Bool { if case .header = self { return true }; return false }
         /// Ab hier beginnt die Liste (Mehr, Kopfzeilen, Pin-Zeilen) — davor sind Knöpfe.
         var endsPrimary: Bool {
@@ -340,11 +385,25 @@ final class HomePaneView: NSView {
             subtitle.stringValue = sub.joined(separator: "   ·   ")
             var out: [Action] = []
             let byLevel = templates.byLevel[pp.level] ?? templates.byLevel["ordner"] ?? []
-            for t in byLevel where t.command != nil { out.append(.run(t, path: pp.path)) }
-            if let s = pp.lastSession {
+            for t in startTemplates(level: pp.level) { out.append(.run(t, path: pp.path)) }
+            let codex = codexSessions(in: pp.path)
+            if let s = codex.first { out.append(codexResume(s, in: pp.path)) }
+            if codex.isEmpty, let picker = codexPicker(in: pp.path) { out.append(picker) }
+            if selectedAgent == "claude", let s = pp.lastSession {
                 out.append(.resume(s, path: pp.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt), project: nil))
             }
             for t in byLevel where t.command == nil { out.append(.run(t, path: pp.path)) }
+            if !codex.isEmpty {
+                out.append(.more(count: max(0, codex.count - 1), expanded: showMore))
+                if showMore {
+                    if let s = codex.first?.session {
+                        out.append(.togglePin(s, pinned: s.pinned ?? false))
+                        out.append(.rename(s))
+                    }
+                    if let picker = codexPicker(in: pp.path) { out.append(picker) }
+                    for s in codex.dropFirst().prefix(20) { out.append(codexResume(s, in: pp.path)) }
+                }
+            }
             if templates.unpinProject != nil { out.append(.togglePinProject(path: pp.path, name: pp.name, pinned: true)) }
             actions = out
         } else if let pi = (item as? PinItem)?.p {
@@ -352,7 +411,7 @@ final class HomePaneView: NSView {
             title.stringValue = pi.project
             subtitle.stringValue = (s.title ?? "(ohne Titel)") + (s.context.map { "   ·   " + Self.contextLine($0) } ?? "")
             var out: [Action] = [.resume(s, path: pi.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt), project: nil)]
-            if templates.compact != nil { out.append(.compact(s, path: pi.path)) }
+            if s.agent != "codex", templates.compact != nil { out.append(.compact(s, path: pi.path)) }
             if templates.unpin != nil { out.append(.togglePin(s, pinned: true)) }
             if templates.rename != nil { out.append(.rename(s)) }
             actions = out
@@ -371,13 +430,10 @@ final class HomePaneView: NSView {
     }
 
     private func togglePinMode() {
+        todayMode = false
         pinMode.toggle()
         filter = ""
-        pinItems = (data?.pinned ?? []).map(PinItem.init)
-        let pinProjects = (data?.pinnedProjects ?? []).map(PinProjectItem.init)
-        pinGroups = []
-        if !pinProjects.isEmpty { pinGroups.append(PinGroup("Projekte", pinProjects)) }
-        if !pinItems.isEmpty { pinGroups.append(PinGroup("Sessions", pinItems)) }
+        rebuildPins()
         suppressExpansionSave = true
         tree.reloadData()
         if let root, !pinMode { tree.expandItem(root) }
@@ -391,6 +447,16 @@ final class HomePaneView: NSView {
         }
         window?.makeFirstResponder(tree)
         renderActions()
+    }
+
+    private func rebuildPins() {
+        pinItems = (data?.pinned ?? []).map(PinItem.init)
+        let codexPins = (data?.agentSessions ?? []).filter { $0.pinned == true }.map { PinItem($0.pin) }
+        let pinProjects = (data?.pinnedProjects ?? []).map(PinProjectItem.init)
+        pinGroups = []
+        if !pinProjects.isEmpty { pinGroups.append(PinGroup("Projekte", pinProjects)) }
+        if !pinItems.isEmpty { pinGroups.append(PinGroup("Claude-Sessions", pinItems)) }
+        if !codexPins.isEmpty { pinGroups.append(PinGroup("Codex-Sessions", codexPins)) }
     }
 
     /// „⎇ main ↑2 ↓1 · 3 geändert" — nur was abweicht; ein sauberes main ohne Abweichung bleibt kurz.
@@ -459,20 +525,288 @@ final class HomePaneView: NSView {
     }
     private func isPrimary(_ row: Int) -> Bool { row < primaryCount && !actions[row].isHeader }
     private var running: [String: String] = [:]  // cwd → state
+    private var livePanes: [HomePaneInfo] = []
+    private var palette: LauncherPalette?
+    private var todayMode = false
+
+    private func openSearch(_ query: String = "") {
+        if let palette { palette.focus(); return }
+        guard let d = data else { return }
+        var entries: [LauncherPalette.Entry] = []
+        let projectPaths = Set(d.projects.map(\.path))
+        for n in allFolders where !projectPaths.contains(n.path) {
+            entries.append(.init(title: n.name, detail: "Ordner · \(Self.rootRelative(n.path))") { [weak self] in self?.browse(n.path) })
+        }
+        for p in d.projects {
+            entries.append(.init(title: p.name, detail: "Projekt · \(Self.rootRelative(p.path))", keywords: p.aliases.joined(separator: " ")) { [weak self] in
+                self?.browse(p.path)
+            })
+            for s in p.sessions {
+                entries.append(.init(title: s.title ?? "(ohne Titel)", detail: "Claude · Session · \(p.name) · \(Self.age(s.lastAt))") { [weak self] in
+                    self?.run(.resume(s, path: p.path, title: s.title ?? "", age: Self.age(s.lastAt), project: p.name))
+                })
+            }
+        }
+        for s in d.agentSessions ?? [] {
+            entries.append(.init(title: s.title, detail: "Codex · Session · \(Self.rootRelative(s.path)) · \(Self.age(s.lastAt))") { [weak self] in
+                guard let self else { return }; self.run(self.codexResume(s, in: s.path))
+            })
+        }
+        for p in livePanes {
+            entries.append(.init(title: "Zur Kachel · \(p.label)", detail: "Läuft · \(Self.rootRelative(p.path)) · \(p.id.prefix(4))") { [weak self] in self?.onFocusPane?(p.id) })
+        }
+        let path = agentPath
+        for t in startTemplates(level: byPath[path]?.level ?? "ordner") {
+            entries.append(.init(title: t.label, detail: "Aktion · \(selectedAgent) · \(Self.rootRelative(path))") { [weak self] in self?.run(.run(t, path: path)) })
+        }
+        if let picker = codexPicker(in: path) {
+            entries.append(.init(title: "Codex Resume-Picker", detail: "Aktion · native Sessionauswahl") { [weak self] in self?.run(picker) })
+        }
+        for t in templates.byLevel[byPath[path]?.level ?? "ordner"] ?? [] where t.command == nil {
+            entries.append(.init(title: t.label, detail: "Aktion · \(Self.rootRelative(path))") { [weak self] in self?.run(.run(t, path: path)) })
+        }
+        entries.append(.init(title: "Aufgaben", detail: "Aktion · Heute · Wiedervorlagen und laufende Kacheln") { [weak self] in self?.menuToday() })
+        entries.append(.init(title: "Angepinnt", detail: "Aktion · Projekte und Sessions") { [weak self] in
+            guard let self else { return }; if !self.pinMode { self.togglePinMode() }
+        })
+        entries.append(.init(title: "Neu laden", detail: "Aktion · Launcher aktualisieren") { [weak self] in self?.reload() })
+        let view = LauncherPalette(frame: bounds, entries: entries, query: query)
+        view.onAI = { [weak self] mode, query, completion in
+            guard let self, let d = self.data else { return {} }
+            var sessions: [[String: Any]] = []
+            for project in d.projects {
+                for s in project.sessions {
+                    sessions.append(["id": s.id, "agent": "claude", "path": project.path,
+                                     "title": String((s.title ?? "").prefix(300)), "lastPrompt": String((s.lastPrompt ?? "").prefix(1200)), "lastAt": s.lastAt ?? ""])
+                }
+            }
+            for s in d.agentSessions ?? [] {
+                sessions.append(["id": s.id, "agent": "codex", "path": s.path, "title": String(s.title.prefix(300)), "lastAt": s.lastAt])
+            }
+            sessions.sort { ($0["lastAt"] as? String ?? "") > ($1["lastAt"] as? String ?? "") }
+            var projects = d.projects.map { ["path": $0.path, "name": $0.name] }
+            if !projects.contains(where: { $0["path"] == self.agentPath }) {
+                projects.insert(["path": self.agentPath, "name": (self.agentPath as NSString).lastPathComponent], at: 0)
+            }
+            let payload: [String: Any] = ["mode": mode, "query": query, "contextPath": self.agentPath,
+                                           "agent": self.selectedAgent, "projects": mode == "compare" ? [] : Array(projects.prefix(500)),
+                                           "sessions": ["find", "auto"].contains(mode) ? Array(sessions.prefix(160)) : []]
+            let request = LauncherAIRequest()
+            do {
+                let bytes = try JSONSerialization.data(withJSONObject: payload)
+                request.start(payload: bytes) { [weak self] result in
+                    guard let self else { return }
+                    switch result {
+                    case .failure(let error): completion(.failure(error))
+                    case .success(let response):
+                        var entries: [LauncherPalette.Entry] = []
+                        if response.comparison == true {
+                            entries.append(.init(title: "Antwort ansehen", detail: "KI · \(String(response.message.prefix(180)))", closesPalette: false) {
+                                let alert = NSAlert()
+                                alert.messageText = "KI · Antwort"
+                                alert.informativeText = "Antwort auf deinen freien Prompt — keine automatische Faktenprüfung."
+                                let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 540, height: 360))
+                                text.isEditable = false; text.isSelectable = true
+                                text.font = Self.mono(-2); text.string = response.message
+                                text.isVerticallyResizable = true
+                                text.textContainer?.widthTracksTextView = true
+                                let scroll = NSScrollView(frame: text.frame)
+                                scroll.documentView = text; scroll.hasVerticalScroller = true
+                                alert.accessoryView = scroll
+                                alert.addButton(withTitle: "Zurück"); alert.addButton(withTitle: "Kopieren")
+                                if alert.runModal() == .alertSecondButtonReturn {
+                                    NSPasteboard.general.clearContents()
+                                    NSPasteboard.general.setString(response.message, forType: .string)
+                                }
+                            })
+                        }
+                        for hit in response.hits {
+                            // Resolve against the existing launcher catalog, never model-supplied commands.
+                            let action: Action?
+                            if hit.agent == "codex", let s = d.agentSessions?.first(where: { $0.id == hit.sessionID && $0.path == hit.path }) {
+                                action = self.codexResume(s, in: s.path)
+                            } else if hit.agent == "claude", let p = d.projects.first(where: { $0.path == hit.path }),
+                                      let s = p.sessions.first(where: { $0.id == hit.sessionID }) {
+                                action = .resume(s, path: p.path, title: s.title ?? "", age: Self.age(s.lastAt), project: p.name)
+                            } else { action = nil }
+                            guard let action else { continue }
+                            entries.append(.init(title: hit.title, detail: "\(hit.agent == "codex" ? "Codex" : "Claude") · \(hit.source): \(hit.quote)", closesPalette: false) { [weak self] in
+                                guard let self else { return }
+                                let alert = NSAlert()
+                                alert.messageText = hit.title
+                                alert.informativeText = "\(hit.agent) · \(hit.path)\n\n\(hit.source):\n\(hit.quote)"
+                                alert.addButton(withTitle: "Session fortsetzen"); alert.addButton(withTitle: "Zurück")
+                                if alert.runModal() == .alertFirstButtonReturn { self.closePalette(); self.run(action) }
+                            })
+                        }
+                        if !response.launches.isEmpty {
+                            entries.append(.init(title: response.launches.count == 2 ? "Team-Briefing prüfen" : "Sessionstart prüfen",
+                                                 detail: "Aktion · \(response.launches.map(\.label).joined(separator: " + "))", closesPalette: false) { [weak self] in
+                                self?.confirmAIStart(response.launches)
+                            })
+                        }
+                        completion(.success(.init(entries: entries, message: response.comparison == true ? "Antwort bereit · öffnen zum Lesen oder Kopieren" : response.message)))
+                    }
+                }
+            } catch { DispatchQueue.main.async { completion(.failure(error)) } }
+            return { request.cancel() }
+        }
+        view.onClose = { [weak self] in
+            guard let self else { return }; self.palette?.removeFromSuperview(); self.palette = nil
+            self.window?.makeFirstResponder(self.tree)
+        }
+        palette = view; addSubview(view); view.focus()
+    }
+
+    private func closePalette() {
+        palette?.removeFromSuperview(); palette = nil
+        window?.makeFirstResponder(tree)
+    }
+
+    private func confirmAIStart(_ launches: [LauncherAIResponse.Launch]) {
+        guard (1...2).contains(launches.count), let onLaunchGroup,
+              launches.allSatisfy({ ["claude", "codex"].contains($0.agent) && FileManager.default.fileExists(atPath: $0.path) }) else { return }
+        let alert = NSAlert()
+        alert.messageText = launches.count == 2 ? "Claude und Codex starten?" : "Neue Session starten?"
+        alert.informativeText = "Prüfe Ziel, Auftrag und Berechtigungen. Es werden neue Kacheln geöffnet; bestehende Sessions bleiben unverändert."
+        let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 520, height: 300))
+        text.isEditable = false; text.isSelectable = true
+        text.font = Self.mono(-2)
+        text.string = launches.map { "\($0.label)\nProjekt: \($0.path)\nStart: \($0.command)\n\nAuftrag:\n\($0.prompt)" }.joined(separator: "\n\n────────────────────\n\n")
+        let scroll = NSScrollView(frame: text.frame)
+        scroll.documentView = text; scroll.hasVerticalScroller = true
+        text.isVerticallyResizable = true
+        text.textContainer?.widthTracksTextView = true
+        alert.accessoryView = scroll
+        alert.addButton(withTitle: launches.count == 2 ? "2 Kacheln starten" : "Kachel starten")
+        alert.addButton(withTitle: "Zurück")
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+        let requests = launches.map { item in
+            colored(LaunchRequest(path: item.path, command: item.command, label: item.label, followUp: nil, integration: item.integration), session: nil)
+        }
+        closePalette()
+        onLaunchGroup(requests)
+    }
+
+    private func browse(_ path: String) {
+        todayMode = false
+        if pinMode { togglePinMode() }
+        if let n = node(for: path) { reveal(n) }
+        renderActions(); focusList()
+    }
+
+    private func showToday() {
+        if pinMode { togglePinMode() }
+        todayMode = true
+        agentPicker.isEnabled = true
+        renderNotices()
+        title.stringValue = "Aufgaben"
+        subtitle.stringValue = "Wiedervorlage auswählen → mit \(selectedAgent == "codex" ? "Codex" : "Claude") öffnen"
+        var out: [Action] = []
+        let reminders = (data?.wiedervorlagen ?? []).filter { $0.daysLeft <= 7 }
+        let due = reminders.filter { $0.daysLeft <= 0 }
+        let upcoming = reminders.filter { $0.daysLeft > 0 }
+        out.append(.header(due.isEmpty ? "Heute nichts fällig" : "Fällige Wiedervorlagen"))
+        for w in due { out.append(.wiedervorlage(w, path: data?.root ?? agentPath)) }
+        if !upcoming.isEmpty {
+            out.append(.header("In den nächsten 7 Tagen"))
+            for w in upcoming { out.append(.wiedervorlage(w, path: data?.root ?? agentPath)) }
+        }
+        if let inbox = data?.inbox { out.append(.browse(path: inbox.path, name: "Inbox · \(inbox.count) Einträge")) }
+        if !livePanes.isEmpty { out.append(.header("Laufende Kacheln")) }
+        for p in livePanes { out.append(.jump(cwd: p.id, state: p.state, name: p.label + " · " + p.id.prefix(4))) }
+        let row = list.selectedRow
+        actions = out; list.reloadData()
+        if out.indices.contains(row), !out[row].isHeader {
+            list.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        } else if let first = out.firstIndex(where: { !$0.isHeader }) {
+            list.selectRowIndexes(IndexSet(integer: first), byExtendingSelection: false)
+        }
+    }
     private var refreshTimer: Timer?
     private var limitsTimer: Timer?
     private var limitsTick = 0
-    private var limitsData: LimitsData?
+    private var limitsData: [String: LimitsData] = [:]
+    private var limitsRequested: [String: Date] = [:]
+    private var limitsInFlight: Set<String> = []
     private var treeModeObserver: NSObjectProtocol?
 
     // MARK: Views
 
     private let tree = HomeOutline()
+    private let navigation = NSSegmentedControl(labels: ["Projekte", "Aufgaben", "Pins"], trackingMode: .selectOne, target: nil, action: nil)
+    private let searchButton = NSButton(title: "Suchen …   ⌘K", target: nil, action: nil)
+
+    @objc private func navigationChanged() {
+        switch navigation.selectedSegment {
+        case 1: menuToday()
+        case 2: if !pinMode { togglePinMode() }
+        default:
+            todayMode = false
+            if pinMode { togglePinMode() } else { renderActions() }
+            window?.makeFirstResponder(tree)
+        }
+    }
+    @objc private func searchClicked() { openSearch() }
     private let treeScroll = NSScrollView()
     private let title = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
     private let list = HomeTable()
     private let listScroll = NSScrollView()
+    private let agentPicker = NSSegmentedControl(labels: ["Claude", "Codex"], trackingMode: .selectOne, target: nil, action: nil)
+    private var agentPath: String {
+        if let p = (tree.item(atRow: tree.selectedRow) as? PinProjectItem)?.p { return p.path }
+        if let p = (tree.item(atRow: tree.selectedRow) as? PinItem)?.p { return p.path }
+        return selectedNode?.path ?? data?.root ?? ""
+    }
+    private var selectedAgent: String {
+        if let pin = tree.item(atRow: tree.selectedRow) as? PinItem { return pin.p.agent ?? "claude" }
+        guard data?.agentActions?.contains(where: { $0.agent == "codex" }) == true else { return "claude" }
+        let saved = UserDefaults.standard.dictionary(forKey: "LatexTerm.homeAgents") as? [String: String] ?? [:]
+        return saved[agentPath] ?? data?.defaultAgent ?? "claude"
+    }
+    @objc private func agentChanged() {
+        guard !isLaunching else { return }
+        var saved = UserDefaults.standard.dictionary(forKey: "LatexTerm.homeAgents") as? [String: String] ?? [:]
+        saved[agentPath] = agentPicker.selectedSegment == 1 ? "codex" : "claude"
+        UserDefaults.standard.set(saved, forKey: "LatexTerm.homeAgents")
+        renderActions()
+        focusList()
+    }
+    private func startTemplates(level: String) -> [ProjekteData.ActionTemplate] {
+        if selectedAgent == "codex" {
+            return (data?.agentActions ?? []).filter { $0.agent == "codex" && $0.isNewSession == true }.map { source in
+                var t = source
+                t.label = t.isNewSession == true ? "Neue Session" : "Session fortsetzen"
+                t.hint = nil
+                return t
+            }
+        }
+        guard var t = (templates.byLevel[level] ?? templates.byLevel["ordner"] ?? []).first(where: { $0.command != nil }) else { return [] }
+        t.agent = "claude"
+        return [t]
+    }
+
+    private func codexSessions(in path: String) -> [ProjekteData.AgentSession] {
+        guard selectedAgent == "codex" else { return [] }
+        return (data?.agentSessions ?? []).filter {
+            HomeSessionScope.contains($0.path, in: path)
+        }.sorted { $0.lastAt == $1.lastAt ? $0.id < $1.id : $0.lastAt > $1.lastAt }
+    }
+
+    private func codexResume(_ s: ProjekteData.AgentSession, in path: String) -> Action {
+        .resume(s.session, path: s.path, title: s.title, age: Self.age(s.lastAt),
+                project: s.path == path ? nil : (s.path as NSString).lastPathComponent)
+    }
+
+    private func codexPicker(in path: String) -> Action? {
+        guard selectedAgent == "codex", var t = data?.agentActions?.first(where: {
+            $0.agent == "codex" && $0.isNewSession == false
+        }) else { return nil }
+        t.label = "Andere Session suchen …"
+        t.hint = "Nativer Picker"
+        return .run(t, path: path)
+    }
     private let limitsLabel = NSTextField(labelWithString: "")
     private let keyHelp = NSView()
     private let notices = NSStackView()          // über dem Baum: wartet auf dich · fällige Wiedervorlagen
@@ -497,7 +831,7 @@ final class HomePaneView: NSView {
     static var orange: NSColor { claudePalette["orange"].flatMap { NSColor(ghostty: $0) } ?? NSColor(hex: 0xd97757) }
     static var pink: NSColor { claudePalette["pink"].flatMap { NSColor(ghostty: $0) } ?? NSColor(hex: 0xc46686) }
     /// Folgt der Terminalgröße, aber gedeckelt: der Baum soll bei 20 pt Terminal nicht mitwachsen.
-    static var base: CGFloat { min(ThemeStore.shared.fontSize, 18) }
+    static var base: CGFloat { min(max(ThemeStore.shared.fontSize, 14), 16) }
     static func mono(_ delta: CGFloat = 0, _ w: NSFont.Weight = .regular) -> NSFont {
         AppFonts.mono(size: base + delta, weight: w)
     }
@@ -613,9 +947,10 @@ final class HomePaneView: NSView {
         subtitle.lineBreakMode = .byTruncatingTail
         limitsLabel.font = Self.mono(-1)
         limitsLabel.alignment = .right
-        limitsLabel.lineBreakMode = .byClipping
+        limitsLabel.lineBreakMode = .byTruncatingTail
+        limitsLabel.maximumNumberOfLines = 2
         limitsLabel.toolTip = "Kontingente des Abos — 5-Stunden-Fenster, Woche, Modell-Woche; ↻ = Reset"
-        limitsLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
+        limitsLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         limitsLabel.setContentHuggingPriority(.required, for: .horizontal)
         title.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
         buildKeyHelp()
@@ -666,6 +1001,24 @@ final class HomePaneView: NSView {
         list.target = self
         list.doubleAction = #selector(runSelectedAction)
         list.onKey = { [weak self] ev in self?.listKey(ev) ?? false }
+        list.menuForRow = { [weak self] row in
+            guard let self, self.actions.indices.contains(row) else { return nil }
+            let action = self.actions[row]
+            guard case .resume(let session, let path, _, _, _) = action else { return nil }
+            let menu = NSMenu()
+            func add(_ title: String, _ callback: @escaping () -> Void) {
+                let handler = LauncherMenuAction(callback)
+                let item = NSMenuItem(title: title, action: #selector(LauncherMenuAction.invoke), keyEquivalent: "")
+                item.target = handler; item.representedObject = handler; menu.addItem(item)
+            }
+            add("\(session.agent == "codex" ? "Codex" : "Claude") · Fortsetzen") { [weak self] in self?.run(action) }
+            add(session.pinned == true ? "Pin lösen" : "Anpinnen") { [weak self] in self?.run(.togglePin(session, pinned: session.pinned ?? false)) }
+            add("Umbenennen …") { [weak self] in self?.renameSession(session) }
+            menu.addItem(.separator())
+            add("Session-ID kopieren") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(session.id, forType: .string) }
+            add("Projektpfad kopieren") { NSPasteboard.general.clearContents(); NSPasteboard.general.setString(path, forType: .string) }
+            return menu
+        }
         list.onFocus = { [weak self] in self?.focusDidChange() }
         listScroll.documentView = list
         listScroll.hasVerticalScroller = true
@@ -676,13 +1029,39 @@ final class HomePaneView: NSView {
         notices.orientation = .vertical
         notices.alignment = .leading
         notices.spacing = 4
-        for v in [notices, treeScroll, divider, title, subtitle, limitsLabel, listScroll] {
+        navigation.target = self
+        navigation.action = #selector(navigationChanged)
+        navigation.segmentStyle = .rounded
+        navigation.segmentDistribution = .fillEqually
+        navigation.font = Self.mono(-3, .medium)
+        navigation.setAccessibilityLabel("Launcher-Bereich")
+        navigation.setToolTip("Wiedervorlagen, Inbox und laufende Kacheln", forSegment: 1)
+        searchButton.target = self
+        searchButton.action = #selector(searchClicked)
+        searchButton.bezelStyle = .rounded
+        searchButton.font = Self.mono(-2)
+        searchButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        agentPicker.target = self
+        agentPicker.action = #selector(agentChanged)
+        agentPicker.segmentStyle = .rounded
+        agentPicker.font = Self.mono(-2, .medium)
+        agentPicker.setWidth(86, forSegment: 0)
+        agentPicker.setWidth(86, forSegment: 1)
+        agentPicker.setAccessibilityLabel("Agent auswählen")
+        agentPicker.toolTip = "Agent für dieses Projekt — Auswahl wird gemerkt"
+        for v in [navigation, searchButton, notices, treeScroll, divider, title, subtitle, limitsLabel, agentPicker, listScroll] {
             v.translatesAutoresizingMaskIntoConstraints = false
             addSubview(v)
         }
         let m: CGFloat = 18
         NSLayoutConstraint.activate([
-            notices.topAnchor.constraint(equalTo: topAnchor, constant: 22),
+            searchButton.topAnchor.constraint(equalTo: topAnchor, constant: 22),
+            searchButton.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
+            searchButton.trailingAnchor.constraint(equalTo: treeScroll.trailingAnchor),
+            navigation.topAnchor.constraint(equalTo: searchButton.bottomAnchor, constant: 10),
+            navigation.leadingAnchor.constraint(equalTo: searchButton.leadingAnchor),
+            navigation.trailingAnchor.constraint(equalTo: searchButton.trailingAnchor),
+            notices.topAnchor.constraint(equalTo: navigation.bottomAnchor, constant: 12),
             notices.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             notices.trailingAnchor.constraint(lessThanOrEqualTo: divider.leadingAnchor, constant: -8),
             { let c = treeScroll.topAnchor.constraint(equalTo: notices.bottomAnchor, constant: 0); noticesGap = c; return c }(),
@@ -697,18 +1076,21 @@ final class HomePaneView: NSView {
 
             title.topAnchor.constraint(equalTo: topAnchor, constant: 24),
             title.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: m),
-            title.trailingAnchor.constraint(lessThanOrEqualTo: limitsLabel.leadingAnchor, constant: -14),
+            title.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -m),
 
             // Kontingente oben rechts, auf der Grundlinie des Titels: immer im Blick, ohne die
             // Aktionsspalte zu belegen — der Countdown tickt sekündlich weiter.
-            limitsLabel.firstBaselineAnchor.constraint(equalTo: title.firstBaselineAnchor),
+            limitsLabel.topAnchor.constraint(equalTo: agentPicker.bottomAnchor, constant: 10),
             limitsLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -m),
-            limitsLabel.leadingAnchor.constraint(greaterThanOrEqualTo: divider.trailingAnchor, constant: m),
+            limitsLabel.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.topAnchor.constraint(equalTo: title.bottomAnchor, constant: 2),
             subtitle.leadingAnchor.constraint(equalTo: title.leadingAnchor),
             subtitle.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -m),
 
-            listScroll.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 12),
+            agentPicker.topAnchor.constraint(equalTo: subtitle.bottomAnchor, constant: 12),
+            agentPicker.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            agentPicker.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -m),
+            listScroll.topAnchor.constraint(equalTo: limitsLabel.bottomAnchor, constant: 12),
             listScroll.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: m - 8),
             listScroll.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -(m - 8)),
             listScroll.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
@@ -742,10 +1124,14 @@ final class HomePaneView: NSView {
     /// Sekundentakt: der Countdown wird jedes Mal neu gerechnet, die Zahlen selbst nur alle 30 s
     /// nachgeladen (die Datenschicht cacht ohnehin — der Endpoint drosselt).
     private func limitsTock() {
-        if limitsTick % 30 == 0 {
-            LimitsLoader.load { [weak self] d in
+        let agent = selectedAgent
+        if !limitsInFlight.contains(agent), Date().timeIntervalSince(limitsRequested[agent] ?? .distantPast) >= 30 {
+            limitsRequested[agent] = Date()
+            limitsInFlight.insert(agent)
+            LimitsLoader.load(agent: agent) { [weak self] d in
                 guard let self else { return }
-                if let d { self.limitsData = d }
+                self.limitsInFlight.remove(agent)
+                self.limitsData[agent] = d
                 self.renderLimits()
             }
         }
@@ -787,14 +1173,23 @@ final class HomePaneView: NSView {
     }
 
     private func renderLimits() {
-        guard let d = limitsData, !d.limits.isEmpty else {
-            limitsLabel.stringValue = ""
+        let agent = selectedAgent == "codex" ? "Codex" : "Claude"
+        guard let d = limitsData[selectedAgent], !d.limits.isEmpty,
+              d.fetchedAt.map({ Date().timeIntervalSince1970 - $0 <= 1800 }) ?? true else {
+            limitsLabel.stringValue = "\(agent) · " + (limitsInFlight.contains(selectedAgent) ? "Limits laden …" : "Limits nicht verfügbar")
+            limitsLabel.textColor = Self.faint
+            limitsLabel.alphaValue = 1
+            limitsLabel.toolTip = "Keine aktuellen Kontingentdaten. Nicht verfügbar bedeutet nicht 0 % Verbrauch."
             return
         }
         let out = NSMutableAttributedString()
         let dimA: [NSAttributedString.Key: Any] = [.font: Self.mono(-1), .foregroundColor: Self.dim]
-        // Kompakt: nur das 5h-Fenster (erstes Limit) — Woche/Modell erst ab 70 % oder mit „▸ Sessions".
-        let shown = d.limits.enumerated().filter { showMore || $0.offset == 0 || $0.element.percent >= 70 }.map(\.element)
+        // Claude: auch das separate Modellkontingent dauerhaft sichtbar.
+        // Codex: zwei Hauptfenster plus ein weiteres kritisches Limit; Details im Tooltip.
+        let shown = d.limits.enumerated().filter {
+            selectedAgent == "claude" || $0.offset < 2 || $0.element.percent >= 85
+        }.prefix(3).map(\.element)
+        out.append(NSAttributedString(string: agent + " · verbraucht  ", attributes: dimA))
         for l in shown {
             if out.length > 0 { out.append(NSAttributedString(string: "   ", attributes: dimA)) }
             out.append(NSAttributedString(string: l.label + " ", attributes: dimA))
@@ -803,18 +1198,24 @@ final class HomePaneView: NSView {
                 .font: Self.mono(-2), .foregroundColor: c.withAlphaComponent(c == Self.red ? 1 : 0.7)]))
             out.append(NSAttributedString(string: "\(l.percent)%", attributes: [
                 .font: Self.mono(-1, .bold), .foregroundColor: c]))
-            if showMore, let rest = Self.until(l.resetsAt) {
+            if let rest = Self.until(l.resetsAt) {
                 out.append(NSAttributedString(string: " ↻" + rest, attributes: [
                     .font: Self.mono(-2), .foregroundColor: Self.faint]))
             }
         }
         limitsLabel.attributedStringValue = out
-        limitsLabel.alphaValue = (d.stale == true) ? 0.5 : 1
+        let stale = d.stale == true || (d.fetchedAt.map { Date().timeIntervalSince1970 - $0 > 60 } ?? false)
+        if stale { out.append(NSAttributedString(string: " · älterer Stand", attributes: dimA)); limitsLabel.attributedStringValue = out }
+        limitsLabel.alphaValue = stale ? 0.6 : 1
+        limitsLabel.toolTip = d.limits.map { "\($0.label): \($0.percent)% verbraucht · Reset in \(Self.until($0.resetsAt) ?? "unbekannt")" }.joined(separator: "\n")
     }
 
     // MARK: Daten
 
     @objc func reload() {
+        let previousItem = tree.item(atRow: tree.selectedRow)
+        let previousPath = (previousItem as? Node)?.path ?? (previousItem as? PinProjectItem)?.p.path
+        let previousPin = (previousItem as? PinItem)?.p
         subtitle.stringValue = "lädt …"
         ProjekteLoader.load { [weak self] result in
             guard let self else { return }
@@ -829,14 +1230,37 @@ final class HomePaneView: NSView {
                 self.relevant = Self.relevantPaths(d)
                 self.index(root, depth: 0)
                 self.loadExpansion()
+                self.rebuildPins()
                 self.suppressExpansionSave = true
                 self.tree.reloadData()
-                self.tree.expandItem(root)
+                if self.pinMode {
+                    for group in self.pinGroups { self.tree.expandItem(group) }
+                } else { self.tree.expandItem(root) }
                 self.suppressExpansionSave = false
-                self.restoreExpansion()
+                if !self.pinMode, self.filter.isEmpty { self.restoreExpansion() }
                 self.refreshRunning()
                 self.renderNotices()
-                self.selectInitial()
+                if self.pinMode {
+                    let row = (0..<self.tree.numberOfRows).first { row in
+                        let item = self.tree.item(atRow: row)
+                        if let pin = item as? PinItem, let previousPin {
+                            return pin.p.id == previousPin.id && pin.p.agent == previousPin.agent
+                        }
+                        if let project = item as? PinProjectItem, let previousPath { return project.p.path == previousPath }
+                        return false
+                    } ?? (self.tree.numberOfRows > 1 ? 1 : -1)
+                    if row >= 0 { self.tree.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false) }
+                    self.renderActions()
+                } else if !self.filter.isEmpty {
+                    self.applyFilter()
+                    if let previousPath, let row = self.filtered.firstIndex(where: { $0.path == previousPath }) {
+                        self.tree.selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+                        self.renderActions()
+                    }
+                } else if let previousPath, let node = self.node(for: previousPath) {
+                    self.reveal(node)
+                    self.renderActions()
+                } else { self.selectInitial() }
             case .failure(let err):
                 self.data = nil
                 self.title.stringValue = "projekte nicht erreichbar"
@@ -902,9 +1326,9 @@ final class HomePaneView: NSView {
     /// Projektpfade plus alle Ordner darüber — nur die überleben den reduzierten Baum.
     private static func relevantPaths(_ d: ProjekteData) -> Set<String> {
         var out: Set<String> = [d.root]
-        for p in d.projects {
-            var path = p.path
-            while path.hasPrefix(d.root), path.count > d.root.count {
+        for sourcePath in d.projects.map(\.path) + (d.agentSessions ?? []).map(\.path) {
+            var path = sourcePath
+            while HomeSessionScope.contains(path, in: d.root), path.count > d.root.count {
                 out.insert(path)
                 path = (path as NSString).deletingLastPathComponent
             }
@@ -948,8 +1372,10 @@ final class HomePaneView: NSView {
 
     private func refreshRunning() {
         var m: [String: String] = [:]
-        for (cwd, st) in otherPanes?() ?? [] { m[cwd] = st }
-        if m != running {
+        let panes = otherPanes?() ?? []
+        for p in panes where m[p.path] != "awaitingInput" { m[p.path] = p.state }
+        if panes != livePanes {
+            livePanes = panes
             running = m
             tree.reloadData(forRowIndexes: IndexSet(integersIn: 0..<tree.numberOfRows), columnIndexes: IndexSet(integer: 0))
             renderNotices()
@@ -963,18 +1389,14 @@ final class HomePaneView: NSView {
     /// Dazu fällige Wiedervorlagen — die kämen sonst erst beim nächsten Session-Start ins Bild.
     private func renderNotices() {
         notices.arrangedSubviews.forEach { $0.removeFromSuperview() }
-        let waiting = running.filter { $0.value == "awaitingInput" }.keys.sorted()
-        for cwd in waiting {
-            let name = (cwd as NSString).lastPathComponent
+        navigation.selectedSegment = todayMode ? 1 : (pinMode ? 2 : 0)
+        let dueCount = (data?.wiedervorlagen ?? []).filter { $0.daysLeft <= 0 }.count
+        navigation.setLabel(dueCount > 0 ? "Aufgaben \(dueCount)" : "Aufgaben", forSegment: 1)
+        let waiting = livePanes.filter { $0.state == "awaitingInput" }
+        for pane in waiting.prefix(2) {
+            let name = pane.label + " · " + pane.id.prefix(4)
             notices.addArrangedSubview(noticeButton(glyph: "●", color: Self.orange, text: "\(name) wartet auf dich", hint: "→ zur Kachel") { [weak self] in
-                self?.onFocusPane?(cwd)
-            })
-        }
-        let due = (data?.wiedervorlagen ?? []).filter { $0.daysLeft <= 0 }
-        for w in due {
-            let when = w.overdue ? "seit \(-w.daysLeft) d fällig" : "heute fällig"
-            notices.addArrangedSubview(noticeButton(glyph: "⏰", color: Self.yellow, text: w.title, hint: when) { [weak self] in
-                self?.startWiedervorlage(w)
+                self?.onFocusPane?(pane.id)
             })
         }
         // Sync-Zustand: schweigt im Normalfall. Hängender Klon → Shell dort öffnen; Rest nur Info.
@@ -1005,7 +1427,7 @@ final class HomePaneView: NSView {
         let a = NSMutableAttributedString()
         a.append(NSAttributedString(string: glyph + " ", attributes: [.font: Self.mono(-2), .foregroundColor: color]))
         a.append(NSAttributedString(string: text, attributes: [.font: Self.mono(-1, .semibold), .foregroundColor: Self.fg]))
-        a.append(NSAttributedString(string: "  " + hint, attributes: [.font: Self.mono(-2), .foregroundColor: Self.faint]))
+        b.toolTip = hint
         b.attributedTitle = a
         b.onClick = action
         return b
@@ -1039,7 +1461,7 @@ final class HomePaneView: NSView {
         var out = req
         out.accentName = name
         out.accent = NSColor(srgbHex: palette[name] ?? info.color)
-        guard let cmd = req.command, !cmd.isEmpty, let tpl = templates.color else { return out }
+        guard req.integration != "terminal", let cmd = req.command, !cmd.isEmpty, let tpl = templates.color else { return out }
         func fill(_ s: String) -> String {
             s.replacingOccurrences(of: "{color}", with: name).replacingOccurrences(of: "{session}", with: session ?? "")
         }
@@ -1053,6 +1475,15 @@ final class HomePaneView: NSView {
 
     private func startWiedervorlage(_ w: ProjekteData.Wiedervorlage) {
         guard let rootPath = data?.root else { return }
+        if let t = w.agentActions?[selectedAgent], let command = t.command {
+            let agent = selectedAgent == "codex" ? "Codex" : "Claude"
+            onLaunch?(colored(LaunchRequest(path: rootPath, command: command,
+                label: "\(agent) · Wiedervorlage · \(w.title)", followUp: nil,
+                integration: t.integration), session: nil))
+            return
+        }
+        // Old data providers only support Claude; never silently switch the chosen agent.
+        guard selectedAgent == "claude" else { NSSound.beep(); return }
         let new = (templates.byLevel["router"] ?? templates.byLevel["ordner"] ?? []).first { $0.command != nil }
         guard let cmd = new?.command else { return }
         onLaunch?(LaunchRequest(path: rootPath, command: cmd, label: "Wiedervorlage · \(w.title)",
@@ -1062,11 +1493,9 @@ final class HomePaneView: NSView {
     // MARK: Filter
 
     private var lastTypedAt: Date = .distantPast
-    /// Tippen sucht: nach > 1 s Pause beginnt das nächste Zeichen eine NEUE Suche (kein Backspace nötig).
+    /// Tippen und Cmd-K öffnen dieselbe dauerhafte Suchfläche.
     private func typeToSearch(_ chars: String) {
-        let now = Date()
-        if now.timeIntervalSince(lastTypedAt) > 1.0 { filter = chars } else { filter += chars }
-        lastTypedAt = now
+        openSearch(chars)
     }
     /// Suche beenden, aber die aktuelle Auswahl behalten (wird im Baum aufgedeckt).
     private func endSearchKeepingSelection() {
@@ -1096,6 +1525,7 @@ final class HomePaneView: NSView {
                     || (byPath[n.path]?.aliases.contains { $0.lowercased().contains(q) } ?? false)
                     // … und über Session-Titel: „Japan" findet das Projekt, auch wenn der Ordner 030_Reise heißt
                     || (byPath[n.path]?.sessions.contains { ($0.title ?? "").lowercased().contains(q) } ?? false)
+                    || (data?.agentSessions?.contains { $0.path == n.path && $0.title.lowercased().contains(q) } ?? false)
             }.sorted { a, b in
                 let la = byPath[a.path]?.lastActivity ?? "", lb = byPath[b.path]?.lastActivity ?? ""
                 return la != lb ? la > lb : a.name.localizedStandardCompare(b.name) == .orderedAscending
@@ -1112,6 +1542,12 @@ final class HomePaneView: NSView {
     private var selectedNode: Node? { tree.item(atRow: tree.selectedRow) as? Node }
 
     private func renderActions(keepSelection: Bool = false) {
+        agentPicker.isEnabled = !(tree.item(atRow: tree.selectedRow) is PinItem)
+        agentPicker.selectedSegment = selectedAgent == "codex" ? 1 : 0
+        agentPicker.setEnabled(data?.agentActions?.contains(where: { $0.agent == "codex" }) == true, forSegment: 1)
+        renderLimits()
+        renderNotices()
+        if todayMode { showToday(); return }
         if pinMode { renderPinActions(); return }
         guard let node = selectedNode, let d = data else { actions = []; list.reloadData(); return }
         let keepRow = keepSelection ? list.selectedRow : 0
@@ -1124,7 +1560,8 @@ final class HomePaneView: NSView {
         if showMore, let a = p?.aliases, !a.isEmpty { sub.append(a.joined(separator: ", ")) }
         if let h = p?.claudeMdHeader { if showMore { sub.append(h) } } else if !isRoot { sub.append("keine CLAUDE.md") }
         if showMore, let g = Self.gitLine(p?.git) { sub.append(g) }
-        if let la = p?.lastActivity, !isRoot { sub.append("aktiv " + Self.age(la)) }
+        let activity = selectedAgent == "codex" ? codexSessions(in: node.path).first?.lastAt : p?.lastActivity
+        if let la = activity, !isRoot { sub.append("aktiv " + Self.age(la)) }
         subtitle.stringValue = sub.joined(separator: "   ·   ")
         renderLimits()
 
@@ -1139,18 +1576,22 @@ final class HomePaneView: NSView {
         let below = d.projects.filter { $0.path != node.path && $0.path.hasPrefix(node.path + "/") && !$0.sessions.isEmpty }
         for q in below { if let s = q.sessions.first { candidates.append((q, s)) } }
         candidates.sort { ($0.1.lastAt ?? "") > ($1.1.lastAt ?? "") }
+        if selectedAgent != "claude" { candidates = [] }
+        let codex = codexSessions(in: node.path)
         // Reihenfolge: erst die Start-Templates der Höhe (＋ Neue Session zuerst — das ist der
         // häufigste Griff: Alias tippen, ⏎), dann ↻ Weiter, dann Shell & Co. (Templates ohne Befehl).
         let level = p?.level ?? "ordner"
         let byLevel = templates.byLevel[level] ?? templates.byLevel["ordner"] ?? []
         // Läuft hier (oder darunter) schon eine Kachel, ist der Sprung dorthin die erste Zeile —
         // sonst öffnet ⏎ aus Gewohnheit eine zweite Session neben der laufenden. Wartende zuerst.
-        let here = running.filter { $0.key == node.path || $0.key.hasPrefix(node.path + "/") }
-            .sorted { ($0.value == "awaitingInput" ? 0 : 1, $0.key) < ($1.value == "awaitingInput" ? 0 : 1, $1.key) }
-        for (cwd, st) in here.prefix(3) {
-            out.append(.jump(cwd: cwd, state: st, name: (cwd as NSString).lastPathComponent))
+        let here = livePanes.filter { $0.path == node.path || $0.path.hasPrefix(node.path + "/") }
+            .sorted { ($0.state == "awaitingInput" ? 0 : 1, $0.id) < ($1.state == "awaitingInput" ? 0 : 1, $1.id) }
+        for pane in here.prefix(3) {
+            out.append(.jump(cwd: pane.id, state: pane.state, name: pane.label + " · " + pane.id.prefix(4)))
         }
-        for t in byLevel where t.command != nil { out.append(.run(t, path: node.path)) }
+        for t in startTemplates(level: level) { out.append(.run(t, path: node.path)) }
+        if let s = codex.first { out.append(codexResume(s, in: node.path)) }
+        if codex.isEmpty, let picker = codexPicker(in: node.path) { out.append(picker) }
         if let (q, s) = candidates.first {
             out.append(.resume(s, path: q.path, title: s.title ?? "(ohne Titel)", age: Self.age(s.lastAt),
                                project: q.path == node.path ? nil : q.name))
@@ -1162,17 +1603,29 @@ final class HomePaneView: NSView {
             out.append(.compact(s, path: q.path))
         }
         let rest = candidates.dropFirst()
-        if candidates.isEmpty, templates.pinProject != nil, !isRoot {
+        if candidates.isEmpty, codex.isEmpty, templates.pinProject != nil, !isRoot {
             out.append(.togglePinProject(path: node.path, name: node.name, pinned: p?.pinned ?? pinnedProjectPaths.contains(node.path)))
         }
-        if let (_, s) = candidates.first {
-            out.append(.more(count: rest.count, expanded: showMore))
+        if !codex.isEmpty || !candidates.isEmpty || byLevel.dropFirst().contains(where: { $0.command != nil }) && selectedAgent == "claude" {
+            out.append(.more(count: selectedAgent == "codex" ? max(0, codex.count - 1) : rest.count, expanded: showMore))
             if showMore {
+                for var t in byLevel.dropFirst() where t.command != nil && selectedAgent == "claude" {
+                    t.agent = "claude"
+                    out.append(.run(t, path: node.path))
+                }
                 if templates.pinProject != nil, !isRoot {
                     out.append(.togglePinProject(path: node.path, name: node.name, pinned: p?.pinned ?? pinnedProjectPaths.contains(node.path)))
                 }
-                if templates.pin != nil { out.append(.togglePin(s, pinned: s.pinned ?? false)) }
-                if templates.rename != nil { out.append(.rename(s)) }
+                if let (_, s) = candidates.first {
+                    if templates.pin != nil { out.append(.togglePin(s, pinned: s.pinned ?? false)) }
+                    if templates.rename != nil { out.append(.rename(s)) }
+                }
+                if let s = codex.first?.session {
+                    out.append(.togglePin(s, pinned: s.pinned ?? false))
+                    out.append(.rename(s))
+                }
+                if let picker = codexPicker(in: node.path) { out.append(picker) }
+                for s in codex.dropFirst().prefix(20) { out.append(codexResume(s, in: node.path)) }
                 if !rest.isEmpty {
                     out.append(.header(isRoot ? "Zuletzt überall" : "Zuletzt hier"))
                     for (q, s) in rest.prefix(20) {
@@ -1181,30 +1634,32 @@ final class HomePaneView: NSView {
                 }
             }
         }
-        // Fällige Wiedervorlagen an der Wurzel auch als Zeilen — die Hinweisleiste ist Maus, das hier ⏎.
-        if isRoot, let wv = d.wiedervorlagen?.filter({ $0.daysLeft <= 0 }), !wv.isEmpty {
-            out.append(.header("Fällig"))
-            for w in wv { out.append(.wiedervorlage(w, path: d.root)) }
-        }
         actions = out
         list.reloadData()
         list.selectRowIndexes(IndexSet(integer: min(max(keepRow, 0), max(out.count - 1, 0))), byExtendingSelection: false)
     }
 
     private func run(_ a: Action) {
-        guard !isLaunching else { return }   // ein Start pro Kachel — kein zweiter Prozess ins laufende Terminal
+        guard !isLaunching, !isUpdating else { return }   // ein Start pro Kachel
         switch a {
-        case .resume(let s, let path, let title, _, let project):
+        case .resume(let s, let path, _, _, let project):
+            if s.agent == "codex", let t = s.resumeAction {
+                onLaunch?(colored(LaunchRequest(path: path, command: t.command,
+                    label: "Codex · \(project ?? (path as NSString).lastPathComponent)",
+                    followUp: nil, integration: t.integration), session: nil))
+                return
+            }
             let cmd = (templates.resume.command ?? "").replacingOccurrences(of: "{session}", with: s.id)
-            onLaunch?(colored(LaunchRequest(path: path, command: cmd, label: "\(project ?? (path as NSString).lastPathComponent) · \(title)", followUp: nil), session: s.id))
+            onLaunch?(colored(LaunchRequest(path: path, command: cmd, label: "Claude · \(project ?? (path as NSString).lastPathComponent)", followUp: nil), session: s.id))
         case .compact(let s, let path):
             guard let t = templates.compact else { return }
             let cmd = (t.command ?? "").replacingOccurrences(of: "{session}", with: s.id)
-            onLaunch?(colored(LaunchRequest(path: path, command: cmd, label: "\((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp), session: s.id))
+            onLaunch?(colored(LaunchRequest(path: path, command: cmd, label: "Claude · \((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp), session: s.id))
         case .run(let t, let path):
-            onLaunch?(colored(LaunchRequest(path: path, command: t.command, label: "\((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp), session: nil))
+            let agent = t.agent == "codex" ? "Codex" : "Claude"
+            onLaunch?(colored(LaunchRequest(path: path, command: t.command, label: "\(agent) · \((path as NSString).lastPathComponent)", followUp: t.followUp, integration: t.integration), session: nil))
         case .togglePin(let s, let pinned):
-            setPin(s.id, pinned: !pinned)
+            setPin(s.id, pinned: !pinned, agent: s.agent ?? "claude")
         case .rename(let s):
             renameSession(s)
         case .togglePinProject(let path, _, let pinned):
@@ -1216,6 +1671,7 @@ final class HomePaneView: NSView {
         case .wiedervorlage(let w, _):
             startWiedervorlage(w)
         case .header: break
+        case .browse(let path, _): browse(path)
         }
     }
 
@@ -1241,15 +1697,16 @@ final class HomePaneView: NSView {
     }
 
     /// Pin über die Datenschicht setzen (`projekte pin|unpin <id>`), dann neu laden.
-    private func setPin(_ id: String, pinned: Bool) {
-        runProjekte([pinned ? "pin" : "unpin", id])
+    private func setPin(_ id: String, pinned: Bool, agent: String = "claude") {
+        runProjekte([pinned ? "pin" : "unpin", id, "--agent", agent])
     }
 
     /// Eigener Session-Titel (`projekte rename <id> [Titel]`); leer = zurück zum automatischen Titel.
     private func renameSession(_ s: ProjekteData.Session) {
+        guard !isUpdating else { return }
         let alert = NSAlert()
-        alert.messageText = "Session umbenennen"
-        alert.informativeText = "Leer lassen = wieder der automatische Titel."
+        alert.messageText = "\(s.agent == "codex" ? "Codex" : "Claude")-Session umbenennen"
+        alert.informativeText = s.agent == "codex" ? "Der Titel wird direkt in Codex gespeichert. Bitte einen Namen eingeben." : "Leer lassen = wieder der automatische Titel."
         alert.addButton(withTitle: "Umbenennen")
         alert.addButton(withTitle: "Abbrechen")
         let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 340, height: 22))
@@ -1258,18 +1715,43 @@ final class HomePaneView: NSView {
         alert.accessoryView = field
         alert.window.initialFirstResponder = field
         guard alert.runModal() == .alertFirstButtonReturn else { return }
-        runProjekte(["rename", s.id, field.stringValue.trimmingCharacters(in: .whitespaces)])
+        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard s.agent != "codex" || !name.isEmpty else { NSSound.beep(); return }
+        runProjekte(["rename", s.id, name, "--agent", s.agent ?? "claude"])
     }
 
     /// `projekte <args…>` über die Login-Shell (PATH), Argumente unverändert durchgereicht; danach neu laden.
+    private var isUpdating = false
     private func runProjekte(_ args: [String]) {
+        guard !isUpdating else { return }
+        isUpdating = true
+        subtitle.stringValue = "speichert …"
         let keepPin = pinMode
         DispatchQueue.global(qos: .userInitiated).async {
             let proc = Process()
             proc.executableURL = URL(fileURLWithPath: "/bin/zsh")
             proc.arguments = ["-lc", "projekte \"$@\"", "projekte"] + args
-            try? proc.run(); proc.waitUntilExit()
+            proc.standardOutput = FileHandle.nullDevice
+            let errors = Pipe()
+            proc.standardError = errors
+            var failure: String?
+            do {
+                try proc.run()
+                let output = errors.fileHandleForReading.readDataToEndOfFile()
+                proc.waitUntilExit()
+                if proc.terminationStatus != 0 {
+                    failure = String(decoding: output.prefix(2000), as: UTF8.self)
+                    if failure?.isEmpty != false { failure = "Die Änderung wurde nicht bestätigt. Bitte neu laden und prüfen." }
+                }
+            } catch { failure = error.localizedDescription }
             DispatchQueue.main.async { [weak self] in
+                self?.isUpdating = false
+                if let failure {
+                    let alert = NSAlert()
+                    alert.messageText = "Änderung nicht bestätigt"
+                    alert.informativeText = failure
+                    alert.runModal()
+                }
                 self?.pinMode = keepPin
                 self?.reload()
             }
@@ -1281,6 +1763,8 @@ final class HomePaneView: NSView {
 
     func menuNewProject()  { newProject() }
     func menuReload()      { reload() }
+    func menuSearch()      { openSearch() }
+    func menuToday()       { showToday(); window?.makeFirstResponder(list) }
     func menuPinSession()  { _ = pinSelectedFromList() }
     func menuPinProject()  { _ = pinSelectedProject() }
     func menuRename()      { _ = renameSelectedFromList() }
@@ -1330,7 +1814,7 @@ final class HomePaneView: NSView {
         ("→ ←", "zwischen Baum und Aktionen"),
         ("⇥ / ⇧⇥", "Spalte wechseln / Angepinntes zeigen"),
         ("⏎", "im Baum: Ordner auf/zu · rechts: ausführen"),
-        ("A–Z", "sucht im Baum, Esc leert"),
+        ("Tippen / ⌘K", "Projekte, Sessions, Aktionen suchen · Esc zurück"),
         ("⌘⇧N / ⌘R", "neues Projekt · neu laden"),
         ("⌘P / ⌘⇧P", "Session / Projekt anpinnen"),
         ("⌘E", "Session umbenennen"),
@@ -1417,7 +1901,7 @@ final class HomePaneView: NSView {
 
     /// ⌘P: Pin der markierten Session-Zeile (oder der „Weiter"-Session) umschalten.
     private func pinSelectedFromList() -> Bool {
-        if let s = sessionInFocus { setPin(s.id, pinned: !(s.pinned ?? false)) }
+        if let s = sessionInFocus { setPin(s.id, pinned: !(s.pinned ?? false), agent: s.agent ?? "claude") }
         return true
     }
 
@@ -1465,7 +1949,7 @@ final class HomePaneView: NSView {
     @objc private func newProject() {
         guard let selected = selectedNode, let rootPath = data?.root ?? root?.path else { return }
         let alert = NSAlert()
-        alert.messageText = "Neues Projekt"
+        alert.messageText = "Neues Projekt · Claude"
         alert.informativeText = "Claude übernimmt mit /neues-projekt: Interview, CLAUDE.md, Git."
         alert.addButton(withTitle: "Anlegen")
         alert.addButton(withTitle: "Abbrechen")
@@ -1608,7 +2092,6 @@ final class HomePaneView: NSView {
         case 51: if !filter.isEmpty { filter.removeLast(); lastTypedAt = Date() }; return true
         case 125, 126: return false
         default:
-            if pinMode { return true }
             if let chars = ev.characters, !chars.isEmpty,
                chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
                 typeToSearch(chars); return true
@@ -1629,7 +2112,7 @@ final class HomePaneView: NSView {
         case 125, 126: return false
         default:
             // Tippen in der Aktionsspalte = Suche im Baum (schnell woanders hin), Fokus wandert nach links.
-            if !pinMode, let chars = ev.characters, !chars.isEmpty,
+            if let chars = ev.characters, !chars.isEmpty,
                chars.unicodeScalars.allSatisfy({ !CharacterSet.controlCharacters.contains($0) }) {
                 window?.makeFirstResponder(tree)
                 typeToSearch(chars)
@@ -1649,6 +2132,8 @@ final class HomePaneView: NSView {
         if mods == .command, a == "\r" { onZoom?(); return true }
         // Alles Weitere (Neu laden, Pins, Umbenennen, Neues Projekt) ruht, solange der Vorhang liegt.
         if isLaunching { return true }
+        if mods == .command, a == "k" { openSearch(); return true }
+        if palette != nil { return super.performKeyEquivalent(with: event) }
         if mods == .command, a == "r" { reload(); return true }
         if mods == [.command, .shift], a.lowercased() == "n" { newProject(); return true }
         if mods == .command, a == "p" { return pinSelectedFromList() }
@@ -1766,7 +2251,7 @@ extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
     func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
         let v = HomeRowBackground(); v.accent = accent; return v
     }
-    func outlineViewSelectionDidChange(_ notification: Notification) { renderActions() }
+    func outlineViewSelectionDidChange(_ notification: Notification) { todayMode = false; renderActions() }
 }
 
 // MARK: - Aktionen (NSTableView)
@@ -1776,8 +2261,8 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
     func tableView(_ tableView: NSTableView, isGroupRow row: Int) -> Bool { actions[row].isHeader }
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { !actions[row].isHeader }
     func tableView(_ tableView: NSTableView, heightOfRow row: Int) -> CGFloat {
-        if actions[row].isHeader { return HomePaneView.base + 19 }
-        return isPrimary(row) ? HomePaneView.base + 22 : HomePaneView.base + 13
+        if actions[row].isHeader { return 32 }
+        return 54
     }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
         let id = NSUserInterfaceItemIdentifier("actionCell")
@@ -1786,26 +2271,31 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
         switch actions[row] {
         case .header(let t):
             cell.set(glyph: "", text: t, detail: "", meta: "", header: true, accent: Self.faint)
+        case .browse(_, let name):
+            cell.set(glyph: "▣", text: name, detail: "Ordner öffnen", meta: "", header: false, accent: Self.blue)
         case .resume(let s, _, let t, let age, let project):
             let r = templates.resume
             let star = (s.pinned ?? false) ? "★ " : ""
-            var meta = age
+            let agent = s.agent == "codex" ? "Codex" : "Claude"
+            var meta = agent + " · " + age
             var metaColor: NSColor? = nil
-            if let (badge, color) = Self.contextBadge(s.context) { meta = badge + "  " + age; metaColor = color }
+            if let (badge, color) = Self.contextBadge(s.context) { meta = agent + " · " + badge + "  " + age; metaColor = color }
             cell.set(glyph: r.glyph, text: star + (project.map { "\(r.label) · \($0)" } ?? r.label), detail: t, meta: meta, header: false, accent: Self.green, metaColor: metaColor)
             cell.toolTip = s.lastPrompt.map { "Zuletzt: „\($0)“" + (s.context.map { "\n" + Self.contextLine($0) } ?? "") }
         case .run(let t, _):
             let color: NSColor = t.command == nil ? Self.blue : (t.glyph == "+" ? Self.cyan : Self.violet)
-            cell.set(glyph: t.glyph, text: t.label, detail: t.hint ?? "", meta: "", header: false, accent: color)
+            let agent = t.agent == "codex" ? "Codex" : "Claude"
+            let meta = agent + (t.lastAt.map { " · " + Self.age($0) } ?? "")
+            cell.set(glyph: t.glyph, text: t.label, detail: t.hint ?? "", meta: t.command == nil ? "" : meta, header: false, accent: color)
         case .compact(let s, _):
             let t = templates.compact!
-            cell.set(glyph: t.glyph, text: t.label, detail: s.context.map(Self.contextLine) ?? (t.hint ?? ""), meta: "", header: false,
+            cell.set(glyph: t.glyph, text: t.label, detail: s.context.map(Self.contextLine) ?? (t.hint ?? ""), meta: "Claude", header: false,
                      accent: s.context?.advice == "critical" ? Self.red : Self.yellow)
         case .togglePin(_, let pinned):
             let t = (pinned ? templates.unpin : templates.pin)!
             cell.set(glyph: t.glyph, text: t.label, detail: pinned ? "im Pin-Screen (⇧⇥)" : "wichtig — in den Pin-Screen (⇧⇥)", meta: "", header: false, accent: Self.yellow)
         case .more(let n, let expanded):
-            cell.set(glyph: expanded ? "▾" : "▸", text: "Mehr", detail: (n == 0 ? "" : "\(n) ältere Sessions · ") + "anpinnen · umbenennen",
+            cell.set(glyph: expanded ? "▾" : "▸", text: "Mehr", detail: (n == 0 ? "" : "\(n) ältere Sessions · ") + (selectedAgent == "codex" ? "suchen · anpinnen · umbenennen" : "Wartung · anpinnen · umbenennen"),
                      meta: "", header: false, accent: Self.faint)
         case .togglePinProject(_, let name, let pinned):
             let t = (pinned ? templates.unpinProject : templates.pinProject)!
@@ -1818,7 +2308,7 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
             cell.set(glyph: "→", text: "Zur Kachel", detail: name + (waiting ? " — wartet auf dich" : (st == "working" ? " — arbeitet" : "")),
                      meta: "", header: false, accent: waiting ? Self.orange : Self.green)
         case .wiedervorlage(let w, _):
-            cell.set(glyph: "⏰", text: w.title, detail: w.overdue ? "seit \(-w.daysLeft) d fällig" : "heute fällig", meta: w.due, header: false, accent: Self.yellow)
+            cell.set(glyph: "⏰", text: w.title, detail: w.overdue ? "seit \(-w.daysLeft) d fällig" : "heute fällig", meta: (selectedAgent == "codex" ? "Codex · " : "Claude · ") + w.due, header: false, accent: Self.yellow)
         }
         cell.setPrimary(isPrimary(row))
         return cell
@@ -1892,12 +2382,14 @@ final class ActionCell: NSView {
         glyph.font = HomePaneView.mono(p ? 1 : -1, .bold)
         text.font = HomePaneView.mono(p ? 0 : -1, p ? .semibold : .regular)
         text.textColor = p ? HomePaneView.fg : HomePaneView.fg.withAlphaComponent(0.85)
-        detail.font = HomePaneView.mono(p ? 0 : -1)
+        detail.font = HomePaneView.mono(-3)
     }
     private let glyph = NSTextField(labelWithString: "")
     private let text = NSTextField(labelWithString: "")
     private let detail = NSTextField(labelWithString: "")
     private let meta = NSTextField(labelWithString: "")
+    private var titleTop: NSLayoutConstraint!
+    private var titleCenter: NSLayoutConstraint!
     override init(frame: NSRect) {
         super.init(frame: frame)
         for f in [glyph, text, detail, meta] {
@@ -1907,18 +2399,21 @@ final class ActionCell: NSView {
         }
         meta.alignment = .right
         meta.setContentCompressionResistancePriority(.required, for: .horizontal)
-        text.setContentCompressionResistancePriority(.required, for: .horizontal)
+        text.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+        titleTop = text.topAnchor.constraint(equalTo: topAnchor, constant: 8)
+        titleCenter = text.centerYAnchor.constraint(equalTo: centerYAnchor)
+        titleCenter.isActive = true
         NSLayoutConstraint.activate([
             glyph.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
             glyph.centerYAnchor.constraint(equalTo: centerYAnchor),
             glyph.widthAnchor.constraint(equalToConstant: 18),
             text.leadingAnchor.constraint(equalTo: glyph.trailingAnchor, constant: 4),
-            text.centerYAnchor.constraint(equalTo: centerYAnchor),
-            detail.leadingAnchor.constraint(equalTo: text.trailingAnchor, constant: 10),
-            detail.centerYAnchor.constraint(equalTo: centerYAnchor),
-            meta.leadingAnchor.constraint(greaterThanOrEqualTo: detail.trailingAnchor, constant: 10),
+            detail.leadingAnchor.constraint(equalTo: text.leadingAnchor),
+            detail.topAnchor.constraint(equalTo: text.bottomAnchor, constant: 3),
+            detail.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -12),
+            meta.leadingAnchor.constraint(greaterThanOrEqualTo: text.trailingAnchor, constant: 10),
             meta.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -12),
-            meta.centerYAnchor.constraint(equalTo: centerYAnchor),
+            meta.centerYAnchor.constraint(equalTo: text.centerYAnchor),
         ])
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -1927,10 +2422,14 @@ final class ActionCell: NSView {
         glyph.stringValue = g; glyph.textColor = accent
         glyph.font = HomePaneView.mono(primary ? 1 : -1, .bold)
         text.stringValue = header ? "── \(t) " : t
+        titleCenter.isActive = false
+        titleTop.isActive = false
+        if d.isEmpty { titleCenter.isActive = true } else { titleTop.isActive = true }
+        detail.isHidden = d.isEmpty
         text.font = header ? HomePaneView.mono(-2) : HomePaneView.mono(primary ? 0 : -1, primary ? .semibold : .regular)
         text.textColor = header ? HomePaneView.faint : (primary ? fg : fg.withAlphaComponent(0.85))
         detail.stringValue = d; detail.textColor = fg.withAlphaComponent(primary ? 0.6 : 0.5)
-        detail.font = HomePaneView.mono(primary ? 0 : -1)
+        detail.font = HomePaneView.mono(-3)
         meta.stringValue = m; meta.textColor = metaColor ?? HomePaneView.dim
         meta.font = HomePaneView.mono(-2)
     }
@@ -1963,6 +2462,13 @@ final class HomeRowBackground: NSTableRowView {
 
 /// Tabellen/Outline, die Tasten und Fokuswechsel an die Home-Kachel melden.
 final class HomeTable: NSTableView {
+    var menuForRow: ((Int) -> NSMenu?)?
+    override func menu(for event: NSEvent) -> NSMenu? {
+        let row = row(at: convert(event.locationInWindow, from: nil))
+        guard row >= 0 else { return nil }
+        selectRowIndexes(IndexSet(integer: row), byExtendingSelection: false)
+        return menuForRow?(row)
+    }
     var onKey: ((NSEvent) -> Bool)?
     var onFocus: (() -> Void)?
     override func becomeFirstResponder() -> Bool { let ok = super.becomeFirstResponder(); if ok { onFocus?() }; return ok }
@@ -1972,6 +2478,11 @@ final class HomeTable: NSTableView {
         super.mouseDown(with: event)
     }
     override func keyDown(with event: NSEvent) { if onKey?(event) == true { return }; super.keyDown(with: event) }
+}
+private final class LauncherMenuAction: NSObject {
+    let callback: () -> Void
+    init(_ callback: @escaping () -> Void) { self.callback = callback }
+    @objc func invoke() { callback() }
 }
 final class HomeOutline: NSOutlineView {
     var onKey: ((NSEvent) -> Bool)?

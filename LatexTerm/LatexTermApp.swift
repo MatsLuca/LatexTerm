@@ -143,14 +143,20 @@ struct LatexTermApp: App {
             // die Kachel ist vor dem Menü dran; die Einträge hier sind Schaufenster + Mausweg.
             CommandMenu("Home") {
                 let aus = homeFocus.active == nil
-                Button("Neues Projekt…") { HomeFocus.shared.active?.menuNewProject() }
+                Button("Projekte, Sessions, Aktionen suchen…") { HomeFocus.shared.active?.menuSearch() }
+                    .keyboardShortcut("k", modifiers: .command)
+                    .disabled(aus)
+                Button("Aufgaben und Wiedervorlagen") { HomeFocus.shared.active?.menuToday() }
+                    .disabled(aus)
+                Divider()
+                Button("Neues Projekt mit Claude…") { HomeFocus.shared.active?.menuNewProject() }
                     .keyboardShortcut("n", modifiers: [.command, .shift])
                     .disabled(aus)
                 Button("Neu laden") { HomeFocus.shared.active?.menuReload() }
                     .keyboardShortcut("r", modifiers: .command)
                     .disabled(aus)
                 Divider()
-                Button("Session anpinnen") { HomeFocus.shared.active?.menuPinSession() }
+                Button("Session anpinnen / lösen") { HomeFocus.shared.active?.menuPinSession() }
                     .keyboardShortcut("p", modifiers: .command)
                     .disabled(aus)
                 Button("Projekt anpinnen") { HomeFocus.shared.active?.menuPinProject() }
