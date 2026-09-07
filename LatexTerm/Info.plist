@@ -13,7 +13,13 @@
 			</array>
 		</dict>
 	</array>
+	<key>NSCalendarsFullAccessUsageDescription</key>
+	<string>Claude Code in LatexTerm kann Kalendertermine lesen und anlegen.</string>
 	<key>NSDockTilePlugIn</key>
 	<string>LatexTermDockTile.docktileplugin</string>
+	<key>NSRemindersFullAccessUsageDescription</key>
+	<string>Claude Code in LatexTerm legt Erinnerungen an, liest und ändert sie (Skill erinnerungen).</string>
+	<key>NSRemindersUsageDescription</key>
+	<string>Claude Code in LatexTerm legt Erinnerungen an, liest und ändert sie (Skill erinnerungen).</string>
 </dict>
 </plist>
