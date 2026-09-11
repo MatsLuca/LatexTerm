@@ -1313,6 +1313,8 @@ final class TerminalSplitView: NSView {
     private var isFirstLayout = true
     private var terminateObserver: NSObjectProtocol?
     private var newHomeObserver: NSObjectProtocol?
+
+    private var showHomeObserver: NSObjectProtocol?
     private var paneCommandObserver: NSObjectProtocol?
     private var quickstartObserver: NSObjectProtocol?
 
@@ -1357,6 +1359,15 @@ final class TerminalSplitView: NSView {
             self.addPane(home: true)
         }
 
+        // `latexterm://home` (Widget-Klick): nicht stapeln — unberührte Home-Kachel fokussieren, sonst anhängen.
+        showHomeObserver = NotificationCenter.default.addObserver(
+            forName: .latexTermShowHome, object: nil, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.window?.isKeyWindow == true else { return }
+            if let fresh = self.panes.first(where: { $0.isHome && !$0.isStarted }) { self.focusPane(fresh) }
+            else { self.focusPane(self.addPane(home: true)) }
+        }
+
         // Menü „Kachel“: Aktion auf die fokussierte Kachel des Key-Fensters (Fallback: erste).
         paneCommandObserver = NotificationCenter.default.addObserver(
             forName: .latexTermPaneCommand, object: nil, queue: .main
@@ -1399,6 +1410,7 @@ final class TerminalSplitView: NSView {
     deinit {
         if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
         if let newHomeObserver { NotificationCenter.default.removeObserver(newHomeObserver) }
+        if let showHomeObserver { NotificationCenter.default.removeObserver(showHomeObserver) }
         if let quickstartObserver { NotificationCenter.default.removeObserver(quickstartObserver) }
         if let paneCommandObserver { NotificationCenter.default.removeObserver(paneCommandObserver) }
     }

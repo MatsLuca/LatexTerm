@@ -17,11 +17,13 @@ final class CockpitSettings: ObservableObject {
         /// Historische Keys (vorher nur per `defaults write` erreichbar) — Namen bleiben; UI unter „Erweitert“.
         static let projekteCommand = "LatexTerm.projekteCommand"
         static let limitsCommand = "LatexTerm.limitsCommand"
+        static let widgetCommand = "LatexTerm.widgetCommand"
         static let homeOnlyProjects = "LatexTerm.homeOnlyProjects"
     }
 
     static let defaultProjekteCommand = "projekte --json"
     static let defaultLimitsCommand = "projekte limits --json"
+    static let defaultWidgetCommand = "projekte widget"
     static let defaultCooldown: TimeInterval = 5
     static let cooldownRange: ClosedRange<TimeInterval> = 0...30
 
@@ -62,6 +64,10 @@ final class CockpitSettings: ObservableObject {
     @Published var limitsCommand: String = CockpitSettings.defaultLimitsCommand {
         didSet { guard !loading else { return }; UserDefaults.standard.set(limitsCommand, forKey: Keys.limitsCommand); post() }
     }
+    /// Schreibt den Schnappschuss für die Desktop-Widgets (leer = Widgets nicht füttern).
+    @Published var widgetCommand: String = CockpitSettings.defaultWidgetCommand {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(widgetCommand, forKey: Keys.widgetCommand); post() }
+    }
     /// Reduzierter Ordnerbaum in der Home-Kachel (nur Projekte + die Ordner dorthin).
     @Published var homeOnlyProjects: Bool = false {
         didSet {
@@ -85,6 +91,7 @@ final class CockpitSettings: ObservableObject {
         statusBadgeMode = d.string(forKey: Keys.statusBadgeMode).flatMap(StatusBadgeMode.init(rawValue:)) ?? .detail
         projekteCommand = d.string(forKey: Keys.projekteCommand) ?? Self.defaultProjekteCommand
         limitsCommand = d.string(forKey: Keys.limitsCommand) ?? Self.defaultLimitsCommand
+        widgetCommand = d.string(forKey: Keys.widgetCommand) ?? Self.defaultWidgetCommand
         homeOnlyProjects = d.bool(forKey: Keys.homeOnlyProjects)
         loading = false
         guard !initial else { return }

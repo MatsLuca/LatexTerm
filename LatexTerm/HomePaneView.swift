@@ -284,6 +284,8 @@ enum PaneCommand {
 extension Notification.Name {
     /// ⌘N (Menü): das Key-Fenster hängt eine Home-Kachel an.
     static let latexTermNewHomePane = Notification.Name("LatexTerm.newHomePane")
+    /// `latexterm://home` (Widget, Dock-Tile): Key-Fenster fokussiert eine unberührte Home-Kachel oder hängt eine an.
+    static let latexTermShowHome = Notification.Name("LatexTerm.showHome")
     /// Menü „Kachel“ → fokussierte Kachel im Key-Fenster (`userInfo["command"]` = `PaneCommand`).
     static let latexTermPaneCommand = Notification.Name("LatexTerm.paneCommand")
     /// Dock-Menü → Quickstart starten; userInfo["quickstart"] = ProjekteData.Quickstart.

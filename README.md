@@ -76,6 +76,16 @@ data is distinguished from zero usage. Follow-ups use the same external task sto
 
 The data comes from an external CLI — `projekte --json` (run through your login shell; change it in *Settings → Erweitert*). Without it the pane shows a hint and nothing else breaks. The contract (JSON shape) lives with the CLI, not in the app.
 
+### Desktop widgets
+
+LatexTerm ships a WidgetKit extension with two widgets for the macOS desktop and
+Notification Center: **Claude-Cockpit** (5h / 7d / model quota rings plus what is due —
+follow-ups and Reminders; small, medium, large) and **Claude Wrapped** (today's sessions,
+replies, tokens, streak and a 28-day bar chart; small, medium). The widgets read only a
+JSON snapshot from the app group; the app writes it on launch and every 5 minutes through
+the configurable *Widget command* (`projekte widget`, *Settings → Erweitert*). Clicking a
+widget brings LatexTerm to the front and focuses a Home pane; reminder rows open Reminders.
+
 ### Status & notifications
 
 Each pane tracks its session: **working** (titlebar dot pulses, a floating pill in the pane shows the current tool live) → **done** / **needs input** (macOS notification if the pane is unwatched; clicking it focuses and zooms the pane).

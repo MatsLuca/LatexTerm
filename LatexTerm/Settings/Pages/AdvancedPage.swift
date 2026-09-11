@@ -10,19 +10,23 @@ struct AdvancedPage: View {
     var body: some View {
         Form {
             SettingsGroup("Datenquelle der Home-Kachel",
-                          help: "Die Projektliste und die Kontingent-Zeile kommen aus dem externen CLI „projekte“ (claude-werkstatt), ausgeführt in der Login-Shell. Nur ändern, wenn das CLI anders heißt oder woanders liegt; der Kontingent-Befehl darf fehlschlagen — die Zeile bleibt dann leer.") {
+                          help: "Projektliste, Kontingent-Zeile und der Schnappschuss für die Desktop-Widgets kommen aus dem externen CLI „projekte“ (claude-werkstatt), ausgeführt in der Login-Shell. Nur ändern, wenn das CLI anders heißt oder woanders liegt; Kontingent- und Widget-Befehl dürfen fehlschlagen — Zeile bzw. Widget bleiben dann leer.") {
                 TextField("Projekte-Befehl", text: $cockpit.projekteCommand)
                     .textFieldStyle(.roundedBorder)
                 TextField("Kontingent-Befehl", text: $cockpit.limitsCommand)
+                    .textFieldStyle(.roundedBorder)
+                TextField("Widget-Befehl", text: $cockpit.widgetCommand)
                     .textFieldStyle(.roundedBorder)
                 HStack {
                     Spacer()
                     Button("Standardbefehle") {
                         cockpit.projekteCommand = CockpitSettings.defaultProjekteCommand
                         cockpit.limitsCommand = CockpitSettings.defaultLimitsCommand
+                        cockpit.widgetCommand = CockpitSettings.defaultWidgetCommand
                     }
                     .disabled(cockpit.projekteCommand == CockpitSettings.defaultProjekteCommand
-                              && cockpit.limitsCommand == CockpitSettings.defaultLimitsCommand)
+                              && cockpit.limitsCommand == CockpitSettings.defaultLimitsCommand
+                              && cockpit.widgetCommand == CockpitSettings.defaultWidgetCommand)
                 }
             }
 

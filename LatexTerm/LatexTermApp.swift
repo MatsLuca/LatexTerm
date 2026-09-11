@@ -11,6 +11,10 @@ private let qlog = Logger(subsystem: "com.mats.LatexTerm", category: "quickstart
 /// - Dock-Menü (`applicationDockMenu`) bei laufender App — dieselbe Liste wie das Plugin.
 /// Die App kennt keine Pfade und keine Befehle; alles kommt aus `projekte` (`config.toml`).
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        WidgetRefresher.shared.start()   // Desktop-Widgets füttern (projekte widget), dann alle 5 min
+    }
+
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
         let items = QuickstartStore.shared.items
@@ -54,7 +58,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
             deliver(q)
         case "home":
-            newHomePane()
+            showHome()
         default:
             qlog.error("unbekannte URL \(url.absoluteString, privacy: .public)")
             NSSound.beep()
@@ -85,6 +89,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let items = QuickstartStore.shared.items
         guard items.indices.contains(sender.tag) else { return }
         deliver(items[sender.tag])
+    }
+
+    /// Widget/Dock-Tile/`open latexterm://home`: zur Home-Kachel, ohne zu stapeln. Kaltstart oder kein
+    /// sichtbares Fenster → das neue Fenster beginnt ohnehin mit Home, nichts anhängen. Sonst zeigt das
+    /// Key-Fenster eine unberührte Home-Kachel oder legt eine an (`.latexTermShowHome`).
+    private func showHome() {
+        NSApp.activate(ignoringOtherApps: true)
+        guard NSApp.windows.contains(where: { $0.isVisible && !($0 is NSPanel) }) else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+            NotificationCenter.default.post(name: .latexTermShowHome, object: nil)
+        }
     }
 
     @objc private func newHomePane() {
