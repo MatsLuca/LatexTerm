@@ -57,7 +57,7 @@ struct WidgetSnapshot: Decodable {
                 Ring(label: "7d", percent: 18, color: "#d75fff", resetsIn: "5d4h", stale: false),
                 Ring(label: "Fable", percent: 27, color: "#ff5faf", resetsIn: "5d4h", stale: false)],
         codexRings: [],
-        due: [Due(title: "Wiedervorlage: Vorgang abschließen", kind: "wiedervorlage", daysLeft: -1, overdue: true, when: "1 d über", url: nil),
+        due: [Due(title: "Wiedervorlage: Vorgang abschließen", kind: "wiedervorlage", daysLeft: -1, overdue: true, when: "−1 d", url: nil),
               Due(title: "Formular einreichen", kind: "erinnerung", daysLeft: 0, overdue: false, when: "heute", url: nil),
               Due(title: "Termin bestätigen", kind: "erinnerung", daysLeft: 1, overdue: false, when: "morgen", url: nil),
               Due(title: "Erinnerungen durchgehen", kind: "erinnerung", daysLeft: 2, overdue: false, when: "So", url: nil)],
