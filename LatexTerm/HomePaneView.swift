@@ -531,48 +531,171 @@ final class HomePaneView: NSView {
     private var palette: LauncherPalette?
     private var todayMode = false
 
-    private func openSearch(_ query: String = "") {
-        if let palette { palette.focus(); return }
-        guard let d = data else { return }
-        var entries: [LauncherPalette.Entry] = []
+    // MARK: ⌘K — Katalog für die Palette
+
+    private static func date(_ iso: String?) -> Date? { iso.flatMap { ISO8601DateFormatter().date(from: $0) } }
+    private func accentColor(for path: String) -> NSColor? {
+        guard let info = accentInfo(for: path) else { return nil }
+        let palette = data?.accentPalette ?? [:]
+        return NSColor(srgbHex: info.name.flatMap { palette[$0] } ?? info.color)
+    }
+    private static func paneBadge(_ state: String) -> LauncherPalette.Badge {
+        switch state {
+        case "awaitingInput": return .init(text: "wartet auf dich", color: orange)
+        case "working": return .init(text: "arbeitet", color: green)
+        default: return .init(text: "Shell", color: faint)
+        }
+    }
+    private static func taskBadge(_ w: ProjekteData.Wiedervorlage) -> LauncherPalette.Badge {
+        if w.daysLeft < 0 { return .init(text: "\(-w.daysLeft) d überfällig", color: red) }
+        if w.daysLeft == 0 { return .init(text: "heute", color: yellow) }
+        if w.daysLeft == 1 { return .init(text: "morgen", color: fg.withAlphaComponent(0.7)) }
+        return .init(text: "in \(w.daysLeft) d", color: faint)
+    }
+
+    private func sessionEntry(_ s: ProjekteData.Session, project p: ProjekteData.Project) -> LauncherPalette.Entry {
+        let title = s.title ?? "(ohne Titel)"
+        var sub = [p.name, Self.age(s.lastAt)]
+        if s.turns > 0 { sub.append("\(s.turns) Züge") }
+        var badge: LauncherPalette.Badge? = Self.contextBadge(s.context).map { .init(text: $0.0, color: $0.1) }
+        if badge == nil, s.context?.advice == "critical" { badge = .init(text: "kompakten!", color: Self.red) }
+        let resume = Action.resume(s, path: p.path, title: title, age: Self.age(s.lastAt), project: p.name)
+        var e = LauncherPalette.Entry(id: "s:" + s.id, kind: .session, title: title,
+            subtitle: sub.joined(separator: " · "),
+            keywords: p.aliases.joined(separator: " ") + " " + String((s.lastPrompt ?? "").prefix(240)),
+            agent: "claude", accent: accentColor(for: p.path), badge: badge, recency: Self.date(s.lastAt),
+            pinned: s.pinned ?? false, primaryHint: "⏎ Weiter", copyText: s.id) { [weak self] in self?.run(resume) }
+        if templates.compact != nil, s.context?.advice != nil, s.context?.advice != "ok" {
+            e.secondaryHint = "Weiter + /compact"
+            e.secondary = { [weak self] in self?.run(.compact(s, path: p.path)) }
+        } else {
+            e.secondaryHint = "Projekt zeigen"
+            e.secondary = { [weak self] in self?.browse(p.path) }
+        }
+        return e
+    }
+    private func codexEntry(_ s: ProjekteData.AgentSession) -> LauncherPalette.Entry {
+        let action = codexResume(s, in: s.path)
+        var e = LauncherPalette.Entry(id: "c:" + s.id, kind: .session, title: s.title,
+            subtitle: (s.path as NSString).lastPathComponent + " · " + Self.age(s.lastAt),
+            keywords: Self.rootRelative(s.path), agent: "codex", accent: accentColor(for: s.path),
+            recency: Self.date(s.lastAt), pinned: s.pinned ?? false, primaryHint: "⏎ Weiter", copyText: s.id) { [weak self] in self?.run(action) }
+        e.secondaryHint = "Projekt zeigen"
+        e.secondary = { [weak self] in self?.browse(s.path) }
+        return e
+    }
+    private func projectEntry(_ p: ProjekteData.Project) -> LauncherPalette.Entry {
+        var badge: LauncherPalette.Badge?
+        if let g = p.git {
+            if let d = g.dirty, d > 0 { badge = .init(text: "\(d) geändert", color: Self.yellow) }
+            else if let a = g.ahead, a > 0 { badge = .init(text: "↑\(a)", color: Self.cyan) }
+            else if let b = g.branch, b != "main", b != "master" { badge = .init(text: b, color: Self.faint) }
+        }
+        var e = LauncherPalette.Entry(id: "p:" + p.path, kind: .project, title: p.name,
+            subtitle: p.claudeMdHeader ?? Self.rootRelative(p.path),
+            keywords: p.aliases.joined(separator: " ") + " " + Self.rootRelative(p.path),
+            accent: accentColor(for: p.path), badge: badge, recency: Self.date(p.lastActivity),
+            pinned: pinnedProjectPaths.contains(p.path), primaryHint: "⏎ Öffnen", copyText: p.path) { [weak self] in self?.browse(p.path) }
+        if let t = startTemplates(level: p.level).first {
+            e.secondaryHint = "Neue Session"
+            e.secondary = { [weak self] in self?.run(.run(t, path: p.path)) }
+        }
+        return e
+    }
+    private func folderEntry(_ n: Node) -> LauncherPalette.Entry {
+        var e = LauncherPalette.Entry(id: "f:" + n.path, kind: .folder, title: n.name,
+            subtitle: Self.rootRelative(n.path), primaryHint: "⏎ Öffnen", copyText: n.path) { [weak self] in self?.browse(n.path) }
+        e.secondaryHint = "Nur Shell"
+        e.secondary = { [weak self] in self?.onLaunch?(LaunchRequest(path: n.path, command: nil, label: "Shell · \(n.name)", followUp: nil)) }
+        return e
+    }
+    private func paneEntry(_ p: HomePaneInfo) -> LauncherPalette.Entry {
+        LauncherPalette.Entry(id: "k:" + p.id, kind: .pane, title: p.label,
+            subtitle: Self.rootRelative(p.path), keywords: "kachel läuft " + String(p.id.prefix(4)),
+            accent: accentColor(for: p.path), badge: Self.paneBadge(p.state), primaryHint: "⏎ Zur Kachel", copyText: p.path) { [weak self] in self?.onFocusPane?(p.id) }
+    }
+    private func taskEntry(_ w: ProjekteData.Wiedervorlage) -> LauncherPalette.Entry {
+        LauncherPalette.Entry(id: "w:" + w.slug, kind: .task, title: w.title,
+            subtitle: "Wiedervorlage · \(w.due)", keywords: "wiedervorlage fällig " + w.slug,
+            badge: Self.taskBadge(w), recency: Self.date(w.due + "T00:00:00Z"),
+            primaryHint: "⏎ Mit \(selectedAgent == "codex" ? "Codex" : "Claude") öffnen", copyText: w.file) { [weak self] in self?.startWiedervorlage(w) }
+    }
+    private func actionEntry(_ id: String, _ title: String, _ subtitle: String, keywords: String = "", accent: NSColor? = nil,
+                             hint: String = "⏎ Ausführen", closes: Bool = true, _ run: @escaping () -> Void) -> LauncherPalette.Entry {
+        LauncherPalette.Entry(id: "a:" + id, kind: .action, title: title, subtitle: subtitle, keywords: keywords,
+                              accent: accent, primaryHint: hint, closesPalette: closes, action: run)
+    }
+
+    private func paletteCatalog() -> LauncherPalette.Catalog {
+        guard let d = data else { return .init(home: [], searchable: []) }
         let projectPaths = Set(d.projects.map(\.path))
-        for n in allFolders where !projectPaths.contains(n.path) {
-            entries.append(.init(title: n.name, detail: "Ordner · \(Self.rootRelative(n.path))") { [weak self] in self?.browse(n.path) })
-        }
+        var sessions: [LauncherPalette.Entry] = []
+        var projects: [LauncherPalette.Entry] = []
         for p in d.projects {
-            entries.append(.init(title: p.name, detail: "Projekt · \(Self.rootRelative(p.path))", keywords: p.aliases.joined(separator: " ")) { [weak self] in
-                self?.browse(p.path)
-            })
-            for s in p.sessions {
-                entries.append(.init(title: s.title ?? "(ohne Titel)", detail: "Claude · Session · \(p.name) · \(Self.age(s.lastAt))") { [weak self] in
-                    self?.run(.resume(s, path: p.path, title: s.title ?? "", age: Self.age(s.lastAt), project: p.name))
-                })
-            }
+            projects.append(projectEntry(p))
+            for s in p.sessions { sessions.append(sessionEntry(s, project: p)) }
         }
-        for s in d.agentSessions ?? [] {
-            entries.append(.init(title: s.title, detail: "Codex · Session · \(Self.rootRelative(s.path)) · \(Self.age(s.lastAt))") { [weak self] in
-                guard let self else { return }; self.run(self.codexResume(s, in: s.path))
-            })
-        }
-        for p in livePanes {
-            entries.append(.init(title: "Zur Kachel · \(p.label)", detail: "Läuft · \(Self.rootRelative(p.path)) · \(p.id.prefix(4))") { [weak self] in self?.onFocusPane?(p.id) })
-        }
+        for s in d.agentSessions ?? [] { sessions.append(codexEntry(s)) }
+        sessions.sort { ($0.recency ?? .distantPast) > ($1.recency ?? .distantPast) }
+        let folders = allFolders.filter { !projectPaths.contains($0.path) }.map(folderEntry)
+        let panes = livePanes.sorted { ($0.state == "awaitingInput" ? 0 : 1, $0.label) < ($1.state == "awaitingInput" ? 0 : 1, $1.label) }.map(paneEntry)
+        let tasks = (d.wiedervorlagen ?? []).filter { $0.daysLeft <= 7 }.sorted { $0.daysLeft < $1.daysLeft }.map(taskEntry)
+
+        // Aktionen hier: der gewählte Ordner, in Projektfarbe.
         let path = agentPath
+        let hereName = (path as NSString).lastPathComponent
+        let hereAccent = accentColor(for: path)
+        let agentName = selectedAgent == "codex" ? "Codex" : "Claude"
+        var here: [LauncherPalette.Entry] = []
         for t in startTemplates(level: byPath[path]?.level ?? "ordner") {
-            entries.append(.init(title: t.label, detail: "Aktion · \(selectedAgent) · \(Self.rootRelative(path))") { [weak self] in self?.run(.run(t, path: path)) })
+            here.append(actionEntry("start:" + t.label, t.label, "\(agentName) · \(hereName)" + (t.hint.map { " · " + $0 } ?? ""), keywords: "neu starten session", accent: hereAccent, hint: "⏎ Starten") { [weak self] in self?.run(.run(t, path: path)) })
+        }
+        if let last = byPath[path]?.sessions.first, selectedAgent == "claude" {
+            var e = sessionEntry(last, project: byPath[path]!)
+            e.id = "a:resume-here"; e.kind = .action; e.title = "Weiter · " + e.title; e.subtitle = "Letzte Session hier · " + Self.age(last.lastAt)
+            here.append(e)
         }
         if let picker = codexPicker(in: path) {
-            entries.append(.init(title: "Codex Resume-Picker", detail: "Aktion · native Sessionauswahl") { [weak self] in self?.run(picker) })
+            here.append(actionEntry("picker", "Andere Codex-Session suchen …", "Nativer Picker · \(hereName)", keywords: "codex resume", accent: hereAccent) { [weak self] in self?.run(picker) })
         }
         for t in templates.byLevel[byPath[path]?.level ?? "ordner"] ?? [] where t.command == nil {
-            entries.append(.init(title: t.label, detail: "Aktion · \(Self.rootRelative(path))") { [weak self] in self?.run(.run(t, path: path)) })
+            here.append(actionEntry("shell", t.label, "Shell ohne Agent · \(hereName)", keywords: "shell terminal", accent: hereAccent, hint: "⏎ Öffnen") { [weak self] in self?.run(.run(t, path: path)) })
         }
-        entries.append(.init(title: "Aufgaben", detail: "Aktion · Heute · Wiedervorlagen und laufende Kacheln") { [weak self] in self?.menuToday() })
-        entries.append(.init(title: "Angepinnt", detail: "Aktion · Projekte und Sessions") { [weak self] in
-            guard let self else { return }; if !self.pinMode { self.togglePinMode() }
-        })
-        entries.append(.init(title: "Neu laden", detail: "Aktion · Launcher aktualisieren") { [weak self] in self?.reload() })
-        let view = LauncherPalette(frame: bounds, entries: entries, query: query)
+
+        var global: [LauncherPalette.Entry] = [
+            actionEntry("today", "Aufgaben", "Wiedervorlagen, Inbox, laufende Kacheln", keywords: "heute fällig wiedervorlage", hint: "⏎ Anzeigen") { [weak self] in self?.menuToday() },
+            actionEntry("pins", "Angepinnt", "Projekte und Sessions mit Pin", keywords: "pin favoriten", hint: "⏎ Anzeigen") { [weak self] in
+                guard let self else { return }; if !self.pinMode { self.togglePinMode() }
+            },
+            actionEntry("new-project", "Neues Projekt …", "Interview, CLAUDE.md, Ort · ⌘⇧N", keywords: "anlegen neu projekt einordnen") { [weak self] in self?.newProject() },
+            actionEntry("reload", "Neu laden", "Launcher-Daten aktualisieren · ⌘R", keywords: "refresh aktualisieren") { [weak self] in self?.reload() }
+        ]
+        if let inbox = d.inbox {
+            global.insert(actionEntry("inbox", "Inbox", "\(inbox.count) Einträge zum Einsortieren", keywords: "eingang 0_inbox", hint: "⏎ Öffnen") { [weak self] in self?.browse(inbox.path) }, at: 0)
+        }
+
+        // Leerzustand: was gerade zählt, in dieser Reihenfolge.
+        var home: [LauncherPalette.Section] = []
+        let waiting = livePanes.filter { $0.state == "awaitingInput" }.map(paneEntry)
+        if !waiting.isEmpty { home.append(.init(title: "Wartet auf dich", entries: waiting)) }
+        let due = (d.wiedervorlagen ?? []).filter { $0.daysLeft <= 0 }.sorted { $0.daysLeft < $1.daysLeft }.map(taskEntry)
+        if !due.isEmpty { home.append(.init(title: "Fällig", entries: due)) }
+        home.append(.init(title: "Zuletzt", entries: Array(sessions.prefix(6))))
+        home.append(.init(title: "Hier · \(hereName)", entries: here))
+        var pinnedEntries: [LauncherPalette.Entry] = projects.filter(\.pinned)
+        pinnedEntries += sessions.filter(\.pinned).prefix(5)
+        if !pinnedEntries.isEmpty { home.append(.init(title: "Angepinnt", entries: Array(pinnedEntries.prefix(6)))) }
+        let others = livePanes.filter { $0.state != "awaitingInput" }.map(paneEntry)
+        if !others.isEmpty { home.append(.init(title: "Läuft", entries: others)) }
+        home.append(.init(title: "Launcher", entries: global))
+
+        return .init(home: home, searchable: sessions + projects + here + global + panes + tasks + folders)
+    }
+
+    private func openSearch(_ query: String = "") {
+        if let palette { palette.focus(); return }
+        guard data != nil else { return }
+        let view = LauncherPalette(frame: bounds, catalog: paletteCatalog(), query: query)
         view.onAI = { [weak self] mode, query, completion in
             guard let self, let d = self.data else { return {} }
             var sessions: [[String: Any]] = []
@@ -602,29 +725,13 @@ final class HomePaneView: NSView {
                     case .failure(let error): completion(.failure(error))
                     case .success(let response):
                         var entries: [LauncherPalette.Entry] = []
-                        if response.comparison == true {
-                            entries.append(.init(title: "Antwort ansehen", detail: "KI · \(String(response.message.prefix(180)))", closesPalette: false) {
-                                let alert = NSAlert()
-                                alert.messageText = "KI · Antwort"
-                                alert.informativeText = "Antwort auf deinen freien Prompt — keine automatische Faktenprüfung."
-                                let text = NSTextView(frame: NSRect(x: 0, y: 0, width: 540, height: 360))
-                                text.isEditable = false; text.isSelectable = true
-                                text.font = Self.mono(-2); text.string = response.message
-                                text.isVerticallyResizable = true
-                                text.textContainer?.widthTracksTextView = true
-                                let scroll = NSScrollView(frame: text.frame)
-                                scroll.documentView = text; scroll.hasVerticalScroller = true
-                                alert.accessoryView = scroll
-                                alert.addButton(withTitle: "Zurück"); alert.addButton(withTitle: "Kopieren")
-                                if alert.runModal() == .alertSecondButtonReturn {
-                                    NSPasteboard.general.clearContents()
-                                    NSPasteboard.general.setString(response.message, forType: .string)
-                                }
-                            })
+                        if response.comparison == true || (response.hits.isEmpty && response.launches.isEmpty && !response.message.isEmpty) {
+                            entries.append(.init(id: "ai:answer", kind: .answer, title: "Antwort", primaryHint: "⏎ Kopieren", body: response.message, closesPalette: false))
                         }
                         for hit in response.hits {
                             // Resolve against the existing launcher catalog, never model-supplied commands.
                             let action: Action?
+                            let accent = self.accentColor(for: hit.path)
                             if hit.agent == "codex", let s = d.agentSessions?.first(where: { $0.id == hit.sessionID && $0.path == hit.path }) {
                                 action = self.codexResume(s, in: s.path)
                             } else if hit.agent == "claude", let p = d.projects.first(where: { $0.path == hit.path }),
@@ -632,18 +739,25 @@ final class HomePaneView: NSView {
                                 action = .resume(s, path: p.path, title: s.title ?? "", age: Self.age(s.lastAt), project: p.name)
                             } else { action = nil }
                             guard let action else { continue }
-                            entries.append(.init(title: hit.title, detail: "\(hit.agent == "codex" ? "Codex" : "Claude") · \(hit.source): \(hit.quote)", closesPalette: false) { [weak self] in
+                            var e = LauncherPalette.Entry(id: "ai:" + hit.sessionID, kind: .session, title: hit.title,
+                                subtitle: "\(hit.source): \(hit.quote)", agent: hit.agent, accent: accent,
+                                primaryHint: "⏎ Beleg + Weiter", copyText: hit.sessionID, closesPalette: false) { [weak self] in
                                 guard let self else { return }
                                 let alert = NSAlert()
                                 alert.messageText = hit.title
                                 alert.informativeText = "\(hit.agent) · \(hit.path)\n\n\(hit.source):\n\(hit.quote)"
                                 alert.addButton(withTitle: "Session fortsetzen"); alert.addButton(withTitle: "Zurück")
                                 if alert.runModal() == .alertFirstButtonReturn { self.closePalette(); self.run(action) }
-                            })
+                            }
+                            e.secondaryHint = "Sofort weiter"
+                            e.secondary = { [weak self] in self?.run(action) }
+                            entries.append(e)
                         }
                         if !response.launches.isEmpty {
-                            entries.append(.init(title: response.launches.count == 2 ? "Team-Briefing prüfen" : "Sessionstart prüfen",
-                                                 detail: "Aktion · \(response.launches.map(\.label).joined(separator: " + "))", closesPalette: false) { [weak self] in
+                            entries.append(.init(id: "ai:launch", kind: .launch,
+                                                 title: response.launches.count == 2 ? "Team-Briefing prüfen" : "Sessionstart prüfen",
+                                                 subtitle: response.launches.map(\.label).joined(separator: " + "),
+                                                 primaryHint: "⏎ Vorschau", closesPalette: false) { [weak self] in
                                 self?.confirmAIStart(response.launches)
                             })
                         }
@@ -657,7 +771,7 @@ final class HomePaneView: NSView {
             guard let self else { return }; self.palette?.removeFromSuperview(); self.palette = nil
             self.window?.makeFirstResponder(self.tree)
         }
-        palette = view; addSubview(view); view.focus()
+        palette = view; addSubview(view); view.present()
     }
 
     private func closePalette() {
@@ -2130,6 +2244,7 @@ final class HomePaneView: NSView {
         let fr = window?.firstResponder as? NSView
         let focused = fr === self || (fr?.isDescendant(of: self) ?? false)
         guard focused else { return super.performKeyEquivalent(with: event) }
+        if let palette, palette.handleKeyEquivalent(event) { return true }
         if mods == .command, a == "w" { onClose?(); return true }
         if mods == .command, a == "\r" { onZoom?(); return true }
         // Alles Weitere (Neu laden, Pins, Umbenennen, Neues Projekt) ruht, solange der Vorhang liegt.
@@ -2310,7 +2425,14 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
             cell.set(glyph: "→", text: "Zur Kachel", detail: name + (waiting ? " — wartet auf dich" : (st == "working" ? " — arbeitet" : "")),
                      meta: "", header: false, accent: waiting ? Self.orange : Self.green)
         case .wiedervorlage(let w, _):
-            cell.set(glyph: "⏰", text: w.title, detail: w.overdue ? "seit \(-w.daysLeft) d fällig" : "heute fällig", meta: (selectedAgent == "codex" ? "Codex · " : "Claude · ") + w.due, header: false, accent: Self.yellow)
+            let detail: String
+            switch w.daysLeft {
+            case ..<0: detail = "seit \(-w.daysLeft) d fällig"
+            case 0: detail = "heute fällig"
+            case 1: detail = "morgen fällig"
+            default: detail = "in \(w.daysLeft) Tagen fällig"
+            }
+            cell.set(glyph: "⏰", text: w.title, detail: detail, meta: (selectedAgent == "codex" ? "Codex · " : "Claude · ") + w.due, header: false, accent: Self.yellow)
         }
         cell.setPrimary(isPrimary(row))
         return cell

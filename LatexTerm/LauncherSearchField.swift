@@ -1,8 +1,27 @@
 import AppKit
 
+/// Das große Eingabefeld der Palette: rahmenlos, eine Zeile, Platzhalter in Theme-Farbe.
 /// Activate the field editor before positioning the caret. makeFirstResponder alone can
 /// leave AppKit's select-all-on-entry pending, replacing a prefilled trigger on the next key.
-final class LauncherSearchField: NSSearchField {
+final class LauncherSearchField: NSTextField {
+    override init(frame: NSRect) {
+        super.init(frame: frame)
+        isBordered = false
+        drawsBackground = false
+        focusRingType = .none
+        isEditable = true
+        isSelectable = true
+        usesSingleLineMode = true
+        lineBreakMode = .byClipping
+        cell?.wraps = false
+        cell?.isScrollable = true
+    }
+    required init?(coder: NSCoder) { fatalError("init(coder:) not supported") }
+
+    func setPlaceholder(_ text: String, color: NSColor, font: NSFont) {
+        placeholderAttributedString = NSAttributedString(string: text, attributes: [.foregroundColor: color, .font: font])
+    }
+
     func focusForTyping() {
         guard let window else { return }
         window.makeFirstResponder(self)

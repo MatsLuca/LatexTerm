@@ -1,5 +1,34 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-14 — ⌘K neu gebaut (Palette als Karte, Gruppen, Zweitaktionen)
+
+`LauncherPalette` von Grund auf neu: schwebende Karte im oberen Drittel über abgedunkelter Kachel
+(Einblenden mit kurzem Slide), rahmenloses 18-pt-Feld mit Symbol (Lupe → Sparkles bei `/`),
+Filter-Chips Alles/Sessions/Projekte/Aktionen/Ordner (⇥ wechselt), Fußzeile mit Tastenhinweisen
+je gewählter Zeile. Leerzustand statt „alles in Ordner-Reihenfolge“: Wartet auf dich · Fällig ·
+Zuletzt (6 Sessions beider Agenten) · Hier (Aktionen des gewählten Ordners in Projektfarbe) ·
+Angepinnt · Läuft · Launcher. Suche: Gruppen nach Art, Reihenfolge nach bestem Treffer, Deckel je
+Gruppe („Sessions · 10 von 23“), Treffer im Titel hervorgehoben (`LauncherSearch.match` liefert
+UTF-16-Bereiche), Wortanfang schlägt Teilstring, kürzlich Gewähltes (+120, `LatexTerm.paletteRecent`)
+und Pins (+30) steigen. Sessions sind auch über den letzten Prompt findbar (Keywords).
+Zeilen: Akzentbalken/Tönung in Projektfarbe, Symbolkachel nach Art/Agent (Claude orange, Codex cyan),
+Pille rechts (Kontext-%, Kachelzustand, Fälligkeit, Git-Änderungen), ★ bei Pins. Maus: Hover wählt,
+Einzelklick führt aus, Klick ins Dunkel schließt. Tasten: ⏎ Hauptaktion, ⌘⏎ Zweitaktion (Session:
+Weiter + /compact bzw. Projekt zeigen · Projekt: Neue Session · Ordner: Nur Shell), ⌘C kopiert
+ID/Pfad/Antwort — beide laufen über `HomePaneView.performKeyEquivalent` → `handleKeyEquivalent`,
+vor Zoom (⌘⏎). KI-Modus: Beispiel-Prompts zum Übernehmen, Statuszeile mit Sekundenzähler, Antwort als
+Inline-Karte (⏎/⌘C kopiert, kein NSAlert mehr), Treffer mit Beleg als Untertitel (⏎ Beleg-Dialog,
+⌘⏎ sofort weiter), Start als eigene Zeile → bestehende Vorschau. Vertrag zur Datenschicht
+(`projekte assist`, Payload, Grenzen) unverändert. `LauncherSearchField` ist jetzt ein rahmenloses
+NSTextField (Fokus-Fix bleibt). Sichtabnahme durch Mats nach Neustart offen.
+
+## 2026-09-14 — Fälligkeit zukünftiger Wiedervorlagen (Codex)
+
+Die Aufgabenliste zeigte auch unter „In den nächsten 7 Tagen“ überall „heute fällig“:
+Die Zeilendarstellung unterschied nur überfällig/nicht überfällig. `HomePaneView` nutzt jetzt
+`daysLeft` für überfällig, heute, morgen und „in N Tagen fällig“. Datum und Gruppierung waren
+bereits korrekt; der Fehler lag ausschließlich im Untertitel.
+
 ## Archiviert beim Tagesabschluss 2026-09-05
 
 ## Aktueller Stand (2026-09-02)

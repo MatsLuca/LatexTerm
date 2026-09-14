@@ -60,7 +60,12 @@ the Inbox count. Open-pane results target the exact pane in the current window, 
 another pane with the same folder. Reliable live session identity is not yet available.
 
 **One search bar:** `⌘K` and typing in Home open the same palette, preserving the first
-character. Ordinary text searches locally across projects, sessions and open panes. Start
+character. Empty, it shows what matters now: panes waiting for input, due follow-ups, recent
+sessions, actions for the selected folder, pins. Ordinary text searches locally across
+sessions (titles and last prompt), projects, actions, panes and folders, grouped with match
+highlighting, filter chips (`⇥`), project colours and status pills; `⏎` runs the primary
+action, `⌘⏎` the secondary one (resume + `/compact`, new session, shell only), `⌘C` copies
+the session ID or path. Start
 with `/` and press Enter to send a free AI prompt through the optional external
 `projekte assist` backend. This can find sessions with source excerpts, propose a session
 or Claude/Codex pair, answer questions, or compare answers deliberately pasted into the prompt.
