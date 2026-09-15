@@ -15,7 +15,7 @@ struct ClaudePage: View {
             .onAppear { lokal.load() }
 
             SettingsGroup("Benachrichtigungen",
-                          help: "„Claude braucht Input“ / „Claude ist fertig“ kommen aus den Claude-Code-Hooks (OSC 5522); Terminal-Glocke und passive Erkennung sind Fallback. Klick auf ein Banner holt die Kachel nach vorn.") {
+                          help: "„Claude fertig · Projekt“ mit deiner Frage, Dauer, Schritten und dem Anfang der Antwort; „Claude braucht dich“ mit der offenen Frage; Fehler immer. Abbrüche (Ctrl+C) und Antworten unter 2 s bleiben stumm. Quelle ist der Bridge-Mod in Claude Code (OSC 5522); Terminal-Glocke und passive Erkennung sind Fallback. Klick auf ein Banner holt die Kachel nach vorn.") {
                 Toggle("Benachrichtigungen zeigen", isOn: $cockpit.notificationsEnabled)
                 Toggle("Nur wenn die Session unbeobachtet ist", isOn: $cockpit.notifyOnlyUnobserved)
                     .disabled(!cockpit.notificationsEnabled)
@@ -24,8 +24,8 @@ struct ClaudePage: View {
                     .disabled(!cockpit.notificationsEnabled)
             }
 
-            SettingsGroup("Status-Pille",
-                          help: "Kleine Pille oben rechts in der Kachel: „arbeitet…“ / „braucht Input“, mit Werkzeug auch das aktuelle Tool (z. B. „Bash“) — das kommt live aus den Claude-Code-Hooks. Der pulsierende Punkt in der Titelleiste bleibt in jedem Modus.") {
+            SettingsGroup("Status in der Titelleiste",
+                          help: "Je Kachel ein Chip rechts in der Titelleiste: der Punkt in Kachelfarbe (Klick springt hin), daneben der Status. Kompakt: „arbeitet · 0:42“, „braucht dich“, danach „✓ fertig · 1:42“ als Nachklang, bis du hingesehen hast. Mit Details zusätzlich Werkzeug und Schritte („Bash · 0:42 · 3 Schritte“). Alle Chips in voller Länge, solange sie in die Leiste passen; sonst stufenweise kürzer bis zum Zeichen. Abbruch grau, Fehler rot. Aus: nur die Punkte.") {
                 Picker("Anzeigen", selection: $cockpit.statusBadgeMode) {
                     ForEach(CockpitSettings.StatusBadgeMode.allCases) { Text($0.label).tag($0) }
                 }

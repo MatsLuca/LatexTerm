@@ -93,9 +93,9 @@ widget brings LatexTerm to the front and focuses a Home pane; reminder rows open
 
 ### Status & notifications
 
-Each pane tracks its session: **working** (titlebar dot pulses, a floating pill in the pane shows the current tool live) → **done** / **needs input** (macOS notification if the pane is unwatched; clicking it focuses and zooms the pane).
+Each pane tracks its session as a **chip in the titlebar** (its colored dot plus a live status: `Bash · 0:42 · 3 steps`, `needs you`, then `✓ done · 1:42` until you've looked; idle panes show only the dot). Clicking a chip focuses the pane. **done** / **needs input** also post a macOS notification when the pane is unwatched (your prompt, duration, steps and the first line of the answer); clicking it focuses and zooms the pane.
 
-- **Precise:** Claude Code hooks write `\e]5522;status=working|input|done|ready[;detail]\a` to the pane's tty — `detail` (e.g. the tool name from a `PreToolUse` hook) becomes the pill text. `ready` (from a `SessionStart` hook) only lifts the home-tile launch curtain.
+- **Precise:** a Claude Code hook (a settings hook or, richer, a function-hooks mod) writes `\e]5522;status=working|input|done|ready[;detail][;k=v…]\a` to the pane's tty. `detail` is the tool name or the open question; optional fields `t` (seconds), `n` (tool steps), `p` (prompt), `a` (answer), `r` (reason: answer/aborted/refusal/error) feed the pill (`◐ Bash · 0:42 · 3 steps`, then `✓ done · 1:42 · 7 steps` until you've looked) and the notification body. `ready` only lifts the home-tile launch curtain.
 - **Zero-config fallback:** the pane detects spinner vs. input box straight from the buffer grid; a fresh hook signal silences it for 10 minutes (hooks win, the fallback self-heals crashed sessions).
 - Terminal bell (`\a`) and OSC 777 (`\e]777;notify;Title;Body\a`) notify instantly too.
 

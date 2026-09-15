@@ -12,24 +12,6 @@ final class PaneContainerView: NSView {
     static var contentInset: CGFloat { ThemeStore.shared.padding }
     override var isFlipped: Bool { true }
 
-    /// Schwebende Live-Status-Pille (#25 v2) oben rechts — liegt ÜBER dem
-    /// Terminal-Inhalt (zPosition) und ist vom Innen-Layout ausgenommen:
-    /// die Fill-Loops unten würden sie sonst auf Kachelgröße aufblasen.
-    let statusBadge = PaneStatusBadgeView()
-
-    override init(frame: NSRect) {
-        super.init(frame: frame)
-        addSubview(statusBadge)
-    }
-
-    required init?(coder: NSCoder) { fatalError() }
-
-    /// Pille oben rechts verankern (flipped: y wächst nach unten).
-    func layoutStatusBadge() {
-        statusBadge.frame.origin = NSPoint(
-            x: bounds.width - statusBadge.frame.width - Self.contentInset - 6,
-            y: Self.contentInset + 6)
-    }
 
     /// Ziel einer laufenden (animierten) Umsortierung. Solange gesetzt, ignorieren
     /// die per Animations-Tick eintrudelnden Zwischengrößen die Subviews.
@@ -47,13 +29,12 @@ final class PaneContainerView: NSView {
             .insetBy(dx: Self.contentInset, dy: Self.contentInset)
         guard inner.width > 0, inner.height > 0 else { pinnedTargetSize = nil; return }
         pinnedTargetSize = target
-        for sub in subviews where !(sub is PaneStatusBadgeView) { sub.frame = inner }
+        for sub in subviews { sub.frame = inner }
     }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         // Die Pille folgt jeder Zwischengröße (gleitet in der Animation mit).
-        layoutStatusBadge()
         if let target = pinnedTargetSize {
             // Zwischengröße der Animation → Inhalt steht schon auf dem Ziel.
             // Ziel erreicht → Pin lösen (jede Umsortierung pinnt ohnehin neu).
@@ -64,7 +45,7 @@ final class PaneContainerView: NSView {
         // synchron mitziehen, damit der Inhalt der Hülle nie einen Tick hinterherläuft.
         let inner = bounds.insetBy(dx: Self.contentInset, dy: Self.contentInset)
         guard inner.width > 0, inner.height > 0 else { return }
-        for sub in subviews where !(sub is PaneStatusBadgeView) { sub.frame = inner }
+        for sub in subviews { sub.frame = inner }
     }
 }
 
@@ -134,7 +115,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         didSet {
             guard sessionState != oldValue else { return }
             // Session vorbei/unbekannt → kein veralteter Tool-Name beim nächsten Start.
-            if sessionState == .none { statusDetail = nil }
+            if sessionState == .none { statusDetail = nil; turnStartedAt = nil; turnSteps = 0 }
+            if sessionState == .working { turnSummary = nil }
             updateStatusBadge()
             onStyleChanged?()
         }
@@ -146,19 +128,142 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         didSet { if statusDetail != oldValue { updateStatusBadge() } }
     }
 
-    /// Text der Kachel-Pille aus Zustand + Detail ableiten. nil = Pille weg.
+    // MARK: Turn-Verlauf aus der Bridge (15.09.2026)
+
+    /// Laufender Turn aus dem Hook-Kanal: Start (die Pille tickt die Zeit lokal weiter),
+    /// Werkzeug-Schritte und der Prompt-Anfang fürs Fertig-Banner. Felder liefert nur der
+    /// Mod `latexterm-bridge` (Werkstatt); die alten Shell-Hooks starten höchstens die Uhr.
+    private var turnStartedAt: Date?
+    private var turnSteps = 0
+    private var turnPrompt: String?
+    private var badgeTicker: Timer?
+    /// Hat diese Session schon Bridge-Felder geschickt? Dann werden feldlose Signale der
+    /// alten Shell-Hooks (laufen parallel als Fallback) ignoriert — sonst Doppel-Banner.
+    private var bridgeSeen = false
+    /// Nachklang nach Turn-Ende („✓ fertig · 1:42 · 7 Schritte"): bleibt, bis jemand hingesehen
+    /// hat (Kachel beobachtet + 6 s), höchstens 10 min. Sichtbar nur bei `sessionState == .none`.
+    private struct TurnSummary {
+        let long: String; let short: String; let glyph: String
+        let tone: NSColor; let shownAt: Date; var seenAt: Date?
+    }
+    private var turnSummary: TurnSummary? {
+        didSet { updateStatusBadge() }
+    }
+    private var summaryTimer: Timer?
+    /// Sieht gerade jemand diese Kachel an (App aktiv + fokussiert)? Setzt die Split-View.
+    var isObservedProvider: (() -> Bool)?
+
+    /// Was die Titelleiste über diese Kachel zeigt (Chip = Punkt in Kachelfarbe + Text, 15.09.2026).
+    /// Drei Textlängen — die HUD wählt je nach Fokus und Kachelzahl; alle nil = nur der Punkt.
+    /// Tonfarben: arbeitet = Kachel-Akzent, braucht dich = Gelb, fertig = Grün, Fehler = Rot,
+    /// abgebrochen = gedimmt — alles aus dem Theme, keine festen Farben.
+    struct StatusChip: Equatable {
+        var long: String?
+        var short: String?
+        var glyph: String?
+        var tone: NSColor
+        var pulsing = false
+        var urgent = false
+        var tooltip: String?
+    }
+    private(set) var statusChip = StatusChip(tone: .clear) {
+        didSet { if statusChip != oldValue { onStyleChanged?() } }
+    }
+
+    /// Chip-Inhalt aus Zustand, Detail und Turn-Verlauf ableiten.
     private func updateStatusBadge() {
         let mode = CockpitSettings.shared.statusBadgeMode
-        let detail = mode == .detail ? statusDetail : nil
-        let text: String?
-        switch sessionState {
-        case .none: text = nil
-        case .working: text = mode == .off ? nil : (detail ?? "arbeitet…")
-        case .awaitingInput: text = mode == .off ? nil : (detail ?? "braucht Input")
+        let theme = ThemeStore.shared.theme
+        var chip = StatusChip(tone: effectiveAccent)
+        chip.tooltip = turnPrompt.map { "„\($0)“" }
+            ?? currentDirectory.map { ($0 as NSString).abbreviatingWithTildeInPath }
+        if mode != .off {
+            switch sessionState {
+            case .working:
+                chip.pulsing = true
+                let clock = turnStartedAt.map { Self.clock(Date().timeIntervalSince($0)) }
+                let tool = mode == .detail ? statusDetail : nil
+                let steps = (mode == .detail && turnSteps > 0) ? Self.stepsText(turnSteps) : nil
+                chip.long = [tool ?? "arbeitet", clock, steps].compactMap { $0 }.joined(separator: " · ")
+                let short = [tool, clock].compactMap { $0 }.joined(separator: " · ")
+                chip.short = short.isEmpty ? "arbeitet" : short
+                chip.glyph = "◐"
+            case .awaitingInput:
+                chip.tone = theme.yellow
+                chip.pulsing = true
+                chip.urgent = true
+                var line = "braucht dich"
+                if mode == .detail, let detail = statusDetail { line += " · " + String(detail.prefix(60)) }
+                chip.long = line
+                chip.short = "braucht dich"
+                chip.glyph = "●"
+            case .none:
+                if let summary = turnSummary {
+                    chip.tone = summary.tone
+                    chip.long = summary.long
+                    chip.short = summary.short
+                    chip.glyph = summary.glyph
+                }
+            }
         }
-        container.statusBadge.update(text: text, accent: effectiveAccent,
-                                     pulsing: sessionState == .working)
-        container.layoutStatusBadge()
+        statusChip = chip
+        syncBadgeTicker()
+    }
+
+    static func clock(_ seconds: TimeInterval) -> String {
+        let total = max(0, Int(seconds.rounded()))
+        return total < 60 ? "\(total) s" : String(format: "%d:%02d", total / 60, total % 60)
+    }
+
+    static func stepsText(_ steps: Int) -> String {
+        "\(steps) " + (steps == 1 ? "Schritt" : "Schritte")
+    }
+
+    /// Sekunden-Ticker nur, solange die Pille eine laufende Uhr zeigt.
+    private func syncBadgeTicker() {
+        let needed = sessionState == .working && turnStartedAt != nil
+            && CockpitSettings.shared.statusBadgeMode != .off
+        if needed {
+            guard badgeTicker == nil else { return }
+            let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.updateStatusBadge() }
+            RunLoop.main.add(timer, forMode: .common)
+            badgeTicker = timer
+        } else {
+            badgeTicker?.invalidate()
+            badgeTicker = nil
+        }
+    }
+
+    private func showTurnSummary(long: String, short: String, glyph: String, tone: NSColor) {
+        turnSummary = TurnSummary(long: long, short: short, glyph: glyph, tone: tone,
+                                  shownAt: Date(), seenAt: nil)
+        summaryTimer?.invalidate()
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in self?.tickSummary() }
+        RunLoop.main.add(timer, forMode: .common)
+        summaryTimer = timer
+        tickSummary()
+    }
+
+    private func tickSummary() {
+        guard var summary = turnSummary else {
+            summaryTimer?.invalidate(); summaryTimer = nil
+            return
+        }
+        let now = Date()
+        if summary.seenAt == nil, isObservedProvider?() ?? true {
+            summary.seenAt = now
+            turnSummary = summary
+        }
+        let seenLongEnough = summary.seenAt.map { now.timeIntervalSince($0) > 6 } ?? false
+        if seenLongEnough || now.timeIntervalSince(summary.shownAt) > 600 {
+            turnSummary = nil
+            summaryTimer?.invalidate(); summaryTimer = nil
+        }
+    }
+
+    /// Ordnername der Kachel für Banner-Titel („Claude fertig · LatexTerm").
+    private var folderName: String {
+        currentDirectory.map { ($0 as NSString).lastPathComponent }.flatMap { $0.isEmpty ? nil : $0 } ?? "Terminal"
     }
     /// Feuert bei BESTÄTIGTEM Übergang working→awaitingInput — der Moment,
     /// in dem eine unbeobachtete Session Aufmerksamkeit braucht (#27 v1).
@@ -611,6 +716,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         if let themeObserver { NotificationCenter.default.removeObserver(themeObserver) }
         if let cockpitObserver { NotificationCenter.default.removeObserver(cockpitObserver) }
         rainbowTimer?.invalidate()
+        badgeTicker?.invalidate()
+        summaryTimer?.invalidate()
     }
 
     /// Verarbeitet eine OSC-5522-Payload (`key=value`; das Format ist bewusst
@@ -643,35 +750,86 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// `.none`: der anschließend sichtbaren Eingabe-Box darf die passive
     /// Erkennung NICHT „working→awaitingInput" unterstellen (ihr Notification-
     /// Trigger verlangt old == .working, .none → .awaitingInput bleibt stumm).
-    private func applyHookStatus(_ value: String) {
-        let pieces = value.split(separator: ";", maxSplits: 1)
-        guard let state = pieces.first else { return }
-        // Detail kommt aus untrusted Programm-Output und landet als Klartext in
-        // Badge + Notification: Steuerzeichen raus, Länge gedeckelt, leer = nil.
-        var detail = pieces.count > 1
-            ? String(pieces[1].prefix(200)).filter { ch in
+    /// Payload seit 15.09.2026 (Bridge-Mod): `status=<state>[;detail][;k=v…]` — Stücke nach dem
+    /// Zustand sind Felder (`t` Sekunden, `n` Schritte, `p` Prompt, `a` Antwort, `r` Grund) oder
+    /// ein freier Detailtext (Tool-Name, Frage). Die alten Shell-Hooks schicken nur `state;detail`.
+    struct HookStatus {
+        var state: String
+        var detail: String?
+        var fields: [String: String] = [:]
+        var seconds: Int? { fields["t"].flatMap { Int($0) } }
+        var steps: Int? { fields["n"].flatMap { Int($0) } }
+    }
+
+    /// Zerlegt die Payload; alles kommt aus untrusted Programm-Output: Steuerzeichen raus,
+    /// jedes Stück gedeckelt, unbekannte Schlüssel bleiben harmlos im Wörterbuch.
+    static func parseHookStatus(_ value: String) -> HookStatus? {
+        let pieces = value.split(separator: ";", omittingEmptySubsequences: true)
+        guard let first = pieces.first else { return nil }
+        var status = HookStatus(state: String(first))
+        for raw in pieces.dropFirst() {
+            let piece = String(raw.prefix(200)).filter { ch in
                 !ch.unicodeScalars.contains { $0.value < 0x20 || $0.value == 0x7F }
             }
-            : nil
-        if detail?.isEmpty == true { detail = nil }
+            if piece.isEmpty { continue }
+            if let eq = piece.firstIndex(of: "="),
+               piece.distance(from: piece.startIndex, to: eq) <= 4,
+               piece[..<eq].allSatisfy({ $0.isLetter && $0.isLowercase }) {
+                status.fields[String(piece[..<eq])] = String(piece[piece.index(after: eq)...])
+            } else if status.detail == nil {
+                status.detail = piece
+            }
+        }
+        return status
+    }
+
+    private func applyHookStatus(_ value: String) {
+        guard let hook = Self.parseHookStatus(value) else { return }
         pendingSessionScans = 0
 #if DEBUG
-        Self.statusLog("HOOK status=\(state) detail=\(detail ?? "-")")
+        Self.statusLog("HOOK status=\(hook.state) detail=\(hook.detail ?? "-") fields=\(hook.fields)")
 #endif
-        switch state {
+        // Bridge und alte Shell-Hooks laufen parallel: sobald die Bridge (mit Feldern) spricht,
+        // schweigen die feldlosen Legacy-Signale dieser Session — sonst zweimal „fertig".
+        if hook.state == "ready" {
+            bridgeSeen = false
+        } else if !hook.fields.isEmpty {
+            bridgeSeen = true
+        } else if bridgeSeen {
+            lastHookStatusAt = Date()
+            return
+        }
+        switch hook.state {
         case "working":
             lastHookStatusAt = Date()
+            if let steps = hook.steps {
+                // Turn-Start (t=0, n=0) setzt die Uhr; spätere Schritte tragen nur die Zahl nach.
+                if turnStartedAt == nil || (steps == 0 && hook.seconds == 0) {
+                    turnStartedAt = Date().addingTimeInterval(-Double(hook.seconds ?? 0))
+                    turnPrompt = hook.fields["p"]
+                }
+                turnSteps = steps
+            } else if turnStartedAt == nil {
+                turnStartedAt = Date()
+            }
             sessionState = .working
-            statusDetail = detail          // nil (z. B. UserPromptSubmit) löscht bewusst
+            statusDetail = hook.detail     // nil (Turn-Start) löscht den alten Tool-Namen bewusst
+            updateStatusBadge()            // Uhr/Schritte ändern sich auch ohne Zustandswechsel
         case "input":
             lastHookStatusAt = Date()
             sessionState = .awaitingInput
-            statusDetail = detail
-            onAttentionSignal?(self, "Claude braucht Input", detail)
+            statusDetail = hook.detail
+            onAttentionSignal?(self, "Claude braucht dich · \(folderName)", hook.detail ?? turnPrompt)
         case "done":
             lastHookStatusAt = Date()
+            let seconds = hook.seconds.map(Double.init)
+                ?? turnStartedAt.map { Date().timeIntervalSince($0) } ?? 0
+            let steps = hook.steps ?? turnSteps
+            let prompt = turnPrompt
+            turnStartedAt = nil; turnSteps = 0; turnPrompt = nil
             sessionState = .none           // räumt statusDetail im didSet mit ab
-            onAttentionSignal?(self, "Claude ist fertig", detail)
+            finishTurn(reason: hook.fields["r"] ?? "answer", seconds: seconds, steps: steps,
+                       prompt: prompt, answer: hook.fields["a"])
         case "ready":
             // SessionStart-Hook: Session steht, wartet auf die erste Eingabe. Hebt nur den
             // Home-Vorhang (launch) — kein Zustand, keine Pille, keine Notification. Erneuert
@@ -680,6 +838,34 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             launchReady = true
         default:
             break                          // unbekannter/kaputter Status erneuert NICHT
+        }
+    }
+
+    /// Turn-Ende: Nachklang-Pille je nach Grund, Banner nur wenn es sich lohnt — Abbruch (Ctrl+C)
+    /// bleibt stumm, Fertig unter 2 s (Slash-Command, Einzeiler) auch. Fehler melden immer.
+    private func finishTurn(reason: String, seconds: Double, steps: Int, prompt: String?, answer: String?) {
+        let theme = ThemeStore.shared.theme
+        let clock = Self.clock(seconds)
+        let stepsPart = steps > 0 ? " · " + Self.stepsText(steps) : ""
+        switch reason {
+        case "aborted":
+            showTurnSummary(long: "■ abgebrochen · \(clock)\(stepsPart)", short: "■ \(clock)", glyph: "■",
+                            tone: theme.dim)
+        case "error", "refusal":
+            let label = reason == "error" ? "Fehler" : "abgelehnt"
+            showTurnSummary(long: "⚠ \(label) · \(clock)\(stepsPart)", short: "⚠ \(label)", glyph: "⚠",
+                            tone: theme.red)
+            let body = [prompt.map { "„\($0)“" }, answer].compactMap { $0 }.joined(separator: "\n")
+            onAttentionSignal?(self, "Claude: \(label) · \(folderName)", body.isEmpty ? nil : body)
+        default:
+            showTurnSummary(long: "✓ fertig · \(clock)\(stepsPart)", short: "✓ \(clock)", glyph: "✓",
+                            tone: theme.green)
+            guard seconds >= 2 else { return }
+            var lines: [String] = []
+            if let prompt { lines.append("„\(prompt)“") }
+            lines.append(clock + stepsPart)
+            if let answer { lines.append(answer) }
+            onAttentionSignal?(self, "Claude fertig · \(folderName)", lines.joined(separator: "\n"))
         }
     }
 
@@ -1535,6 +1721,10 @@ final class TerminalSplitView: NSView {
         pane.onAttentionSignal = { [weak self] p, title, body in
             self?.notifyAttention(p, title: title, body: body)
         }
+        pane.isObservedProvider = { [weak self, weak pane] in
+            guard let self, let pane else { return true }
+            return NSApp.isActive && self.isFocused(pane)
+        }
         // Grid-Änderung beendet einen aktiven Zoom: die neue Kachel soll sichtbar
         // im Grid entstehen, nicht unsichtbar unter der gezoomten (⌘T/⌘1–9-Policy).
         setZoomedPane(nil)
@@ -1630,56 +1820,112 @@ final class TerminalSplitView: NSView {
     /// solange gezoomt ist. Accessory-VC statt Subview: kollidiert nicht mit
     /// Terminal-Content/Traffic-Lights. Wird bei jeder Stil-/Struktur-Änderung
     /// komplett neu aufgebaut — eine Handvoll kleiner Views, trivial billig.
+    /// Chips je Kachel in der HUD, per Pane-ID; Struktur (welche Kacheln, Zoom) in `hudSignature`.
+    private var hudChips: [UUID: PaneChipView] = [:]
+
+    /// Titelleisten-HUD (15.09.2026: Chips statt Punkte + schwebender Pille). Ein Chip je Kachel:
+    /// Punkt in Kachelfarbe, daneben der Statustext aus `TerminalPane.statusChip` — fokussierte
+    /// Kachel lang, andere kurz, ab fünf Kacheln nur ein Zeichen. Ruhende Kacheln zeigen nur den
+    /// Punkt (und den nur ab zwei Kacheln); ein Chip mit Text erscheint auch bei einer einzigen.
+    /// Bleibt stehen und wird in place aktualisiert (die Uhr tickt sekündlich, gleiche Breite dank
+    /// Monospace-Ziffern); nur wenn sich Struktur oder Gesamtbreite ändern, wird das Accessory neu
+    /// angelegt — wie früher bei jedem Zustandswechsel.
     private func updateTitlebarHUD() {
         guard let window else { return }
-        let showDots = panes.count > 1
+        let mode = CockpitSettings.shared.statusBadgeMode
         let showZoom = zoomedPane != nil
+        let showDots = panes.count > 1
 
-        let signature = panes.map {
-            "\($0.effectiveAccent.srgbHexString ?? "-")\(isFocused($0) ? "*" : "")"
-                + ($0.sessionState == .working ? "~" : "")
-        }.joined(separator: ",") + "|zoom:\(showZoom)"
-        if signature == hudSignature, titlebarHUD != nil || !(showDots || showZoom) { return }
-        hudSignature = signature
-
-        if let hud = titlebarHUD { hud.removeFromParent(); titlebarHUD = nil }
-        guard showDots || showZoom else { return }
-
-        var elements: [NSView] = []
-        if showDots {
+        // Platz in der Titelleiste: Fensterbreite minus Ampel (links) und Luft. Stufen von
+        // ausführlich nach knapp — die erste, die passt, gewinnt (Mats, 15.09.: „alle in voller
+        // Größe, solange sie nicht links in Richtung Ampel volllaufen").
+        let zoomWidth: CGFloat = showZoom ? 120 : 0
+        let available = window.frame.width - 92 - 24 - zoomWidth
+        enum Level { case allLong, focusedLong, allShort, glyph }
+        let levels: [Level] = [.allLong, .focusedLong, .allShort, .glyph]
+        var specs: [(pane: TerminalPane, spec: PaneChipView.Spec)] = []
+        for level in levels {
+            specs = []
             for pane in panes {
+                let chip = pane.statusChip
                 let focused = isFocused(pane)
-                let dot = PaneDotView(color: pane.effectiveAccent, focused: focused,
-                                      pulsing: pane.sessionState == .working) { [weak self, weak pane] in
-                    guard let self, let pane else { return }
-                    self.focusPane(pane)
+                let text: String?
+                switch level {
+                case .allLong: text = chip.long
+                case .focusedLong: text = focused ? chip.long : chip.short
+                case .allShort: text = chip.short
+                case .glyph: text = chip.glyph
                 }
-                dot.toolTip = pane.currentDirectory.map { ($0 as NSString).abbreviatingWithTildeInPath }
-                elements.append(dot)
+                let shown = mode == .off ? nil : text
+                guard showDots || shown != nil else { continue }
+                let long = level == .allLong || (level == .focusedLong && focused)
+                specs.append((pane, PaneChipView.Spec(
+                    color: pane.effectiveAccent, tone: chip.tone, focused: focused, text: shown,
+                    pulsing: chip.pulsing, urgent: chip.urgent, tooltip: chip.tooltip,
+                    maxWidth: long ? 360 : 160)))
             }
+            let width = specs.reduce(CGFloat(0)) { $0 + PaneChipView.width(for: $1.spec) }
+                + 6 * CGFloat(max(0, specs.count - 1))
+            if width <= available || level == .glyph { break }
+        }
+
+        guard !specs.isEmpty || showZoom else {
+            if let hud = titlebarHUD { hud.removeFromParent() }
+            titlebarHUD = nil; hudChips = [:]; hudSignature = ""
+            return
+        }
+
+        let structure = specs.map { $0.pane.id.uuidString }.joined(separator: ",")
+            + "|zoom:\(showZoom ? zoomedPane?.effectiveAccent.srgbHexString ?? "-" : "")"
+        if structure == hudSignature, let hud = titlebarHUD {
+            for (pane, spec) in specs { hudChips[pane.id]?.apply(spec) }
+            if Self.layoutHUD(hud.view) { return }   // Breite unverändert → fertig
+        }
+
+        // Struktur oder Breite neu: Accessory frisch anlegen.
+        if let hud = titlebarHUD { hud.removeFromParent(); titlebarHUD = nil }
+        hudChips = [:]
+        let wrapper = NSView(frame: .zero)
+        for (pane, spec) in specs {
+            let chip = PaneChipView { [weak self, weak pane] in
+                guard let self, let pane else { return }
+                self.focusPane(pane)
+            }
+            chip.apply(spec)
+            hudChips[pane.id] = chip
+            wrapper.addSubview(chip)
         }
         if showZoom, let zoomed = zoomedPane {
-            elements.append(Self.makeZoomPill(accent: zoomed.effectiveAccent))
+            wrapper.addSubview(Self.makeZoomPill(accent: zoomed.effectiveAccent))
         }
-
-        let spacing: CGFloat = 6
-        let contentWidth = elements.reduce(0) { $0 + $1.frame.width }
-            + spacing * CGFloat(max(0, elements.count - 1))
-        let contentHeight = elements.map(\.frame.height).max() ?? 20
-        // Wrapper gibt dem Accessory Höhe (≈ Titlebar) und rechts etwas Luft.
-        let wrapper = NSView(frame: NSRect(x: 0, y: 0, width: contentWidth + 10, height: contentHeight + 8))
-        var x: CGFloat = 0
-        for element in elements {
-            element.frame.origin = NSPoint(x: x, y: ((wrapper.frame.height - element.frame.height) / 2).rounded())
-            wrapper.addSubview(element)
-            x += element.frame.width + spacing
-        }
+        _ = Self.layoutHUD(wrapper)
 
         let vc = NSTitlebarAccessoryViewController()
         vc.view = wrapper
         vc.layoutAttribute = .trailing
         window.addTitlebarAccessoryViewController(vc)
         titlebarHUD = vc
+        hudSignature = structure
+    }
+
+    /// Elemente nebeneinander setzen, Wrapper auf Inhalt + Luft. false = Breite hat sich geändert
+    /// (der Aufrufer legt das Accessory dann neu an, damit die Titelleiste den Platz neu vergibt).
+    @discardableResult
+    private static func layoutHUD(_ wrapper: NSView) -> Bool {
+        let elements = wrapper.subviews
+        let spacing: CGFloat = 6
+        let contentWidth = elements.reduce(0) { $0 + $1.frame.width }
+            + spacing * CGFloat(max(0, elements.count - 1))
+        let contentHeight = elements.map(\.frame.height).max() ?? 20
+        let size = NSSize(width: contentWidth + 10, height: contentHeight + 8)
+        let unchanged = wrapper.frame.size == size
+        if !unchanged { wrapper.setFrameSize(size) }
+        var x: CGFloat = 0
+        for element in elements {
+            element.frame.origin = NSPoint(x: x, y: ((size.height - element.frame.height) / 2).rounded())
+            x += element.frame.width + spacing
+        }
+        return unchanged
     }
 
     private static func makeZoomPill(accent: NSColor) -> NSView {
@@ -1799,6 +2045,12 @@ final class TerminalSplitView: NSView {
 
     /// Setzt die Frames aller Kacheln gemäß aktuellem Grid. Kanten werden pixelgerundet,
     /// damit keine Lücken/Überlappungen durch Rundung entstehen; `gap` als dunkler Steg.
+    /// Fensterbreite entscheidet, wie ausführlich die Titelleisten-Chips sein dürfen.
+    override func viewDidEndLiveResize() {
+        super.viewDidEndLiveResize()
+        updateTitlebarHUD()
+    }
+
     private func relayout(animated: Bool = false) {
         let n = panes.count
         guard n > 0 else { return }
@@ -1959,110 +2211,111 @@ extension TerminalSplitView: ControlCommandHandler {
     }
 }
 
-/// Live-Status-Pille (#25 v2): schwebt oben rechts über dem Terminal-Inhalt
-/// einer Kachel und zeigt, was die Claude-Session dort gerade tut (Tool-Name
-/// aus dem PreToolUse-Hook bzw. generisch „arbeitet…"/„braucht Input").
-/// Rein visuell: `hitTest` = nil, Klicks/Selektion gehen ans Terminal durch.
-final class PaneStatusBadgeView: NSView {
-    private let label = NSTextField(labelWithString: "")
-    private var lastText: String?
-
-    init() {
-        super.init(frame: .zero)
-        wantsLayer = true
-        layer?.zPosition = 10          // über dem später hinzugefügten Terminal-View
-        layer?.borderWidth = 1
-        label.font = AppFonts.mono(size: 10.5, weight: .semibold)
-        label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 1
-        addSubview(label)
-        isHidden = true
+/// Chip in der Titelleisten-HUD (15.09.2026, ersetzt `PaneDotView` + die schwebende Pille):
+/// Punkt in Kachelfarbe (fokussiert = voll + heller Ring; pulsiert bei Arbeit, schneller bei
+/// „braucht dich") und daneben der Statustext in der Tonfarbe. Ohne Text nur der Punkt (18 px
+/// Klickfläche wie früher). Klick fokussiert die Kachel. `apply` aktualisiert in place — die Uhr
+/// tickt so ohne Neuaufbau.
+private final class PaneChipView: NSView {
+    struct Spec: Equatable {
+        var color: NSColor
+        var tone: NSColor
+        var focused: Bool
+        var text: String?
+        var pulsing: Bool
+        var urgent: Bool
+        var tooltip: String?
+        var maxWidth: CGFloat
     }
 
-    required init?(coder: NSCoder) { fatalError() }
+    private static let height: CGFloat = 20
+    private static let font = AppFonts.mono(size: 11, weight: .semibold)
 
-    override func hitTest(_ point: NSPoint) -> NSView? { nil }
-
-    /// nil blendet aus. Größe passt sich dem Text an (Deckel 240px, dann „…");
-    /// der Aufrufer positioniert danach via `layoutStatusBadge()` neu.
-    func update(text: String?, accent: NSColor, pulsing: Bool) {
-        defer { lastText = text }
-        guard let text else {
-            isHidden = true
-            layer?.removeAnimation(forKey: "badgePulse")
-            return
-        }
-        isHidden = false
-        // Dunkler, fast opaker Grund: die Pille liegt über Terminal-Text und
-        // muss lesbar bleiben (das 0.16-Alpha der Zoom-Pille reicht hier nicht).
-        layer?.backgroundColor = ThemeStore.shared.theme.badgeBackground.cgColor
-        layer?.borderColor = accent.withAlphaComponent(0.55).cgColor
-        label.textColor = accent
-
-        if text != lastText {
-            label.stringValue = text
-            label.sizeToFit()
-            label.frame.size.width = min(label.frame.width, 240)
-            setFrameSize(NSSize(width: label.frame.width + 16, height: label.frame.height + 6))
-            label.frame.origin = NSPoint(x: 8, y: 3)
-            layer?.cornerRadius = frame.height / 2
-        }
-
-        // Dezenter Atem-Puls solange gearbeitet wird (Optik wie der HUD-Punkt).
-        if pulsing {
-            if layer?.animation(forKey: "badgePulse") == nil {
-                let pulse = CABasicAnimation(keyPath: "opacity")
-                pulse.fromValue = 1.0
-                pulse.toValue = 0.55
-                pulse.duration = 0.9
-                pulse.autoreverses = true
-                pulse.repeatCount = .infinity
-                pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                layer?.add(pulse, forKey: "badgePulse")
-            }
-        } else {
-            layer?.removeAnimation(forKey: "badgePulse")
-        }
+    /// Breite, die `apply(spec)` ergeben wird — zum Vorab-Messen, welche Textstufe in die Leiste passt.
+    static func width(for spec: Spec) -> CGFloat {
+        guard let text = spec.text else { return 18 }
+        let measured = (text as NSString).size(withAttributes: [.font: font]).width.rounded(.up)
+        return 6 + 12 + 6 + min(measured, spec.maxWidth) + 9
     }
-}
 
-/// Klickbarer Session-Punkt in der Titlebar-HUD: trägt die Akzentfarbe seiner
-/// Kachel, der fokussierte bekommt vollen Alpha + hellen Ring. Die Klickfläche
-/// (18×18) ist bewusst größer als der gemalte Kreis (12×12).
-private final class PaneDotView: NSView {
     private let onClick: () -> Void
+    private let circle = CALayer()
+    private let label = NSTextField(labelWithString: "")
+    private var spec: Spec?
 
     /// Ohne das frisst der Fenster-Drag den Klick: `isMovableByWindowBackground`
     /// + nicht-opaker View ⇒ AppKit deutet mouseDown als „Fenster anfassen".
     override var mouseDownCanMoveWindow: Bool { false }
 
-    init(color: NSColor, focused: Bool, pulsing: Bool, onClick: @escaping () -> Void) {
+    init(onClick: @escaping () -> Void) {
         self.onClick = onClick
-        super.init(frame: NSRect(x: 0, y: 0, width: 18, height: 18))
+        super.init(frame: NSRect(x: 0, y: 0, width: 18, height: Self.height))
         wantsLayer = true
-        let circle = CALayer()
-        circle.frame = CGRect(x: 3, y: 3, width: 12, height: 12)
         circle.cornerRadius = 6
-        circle.backgroundColor = color.withAlphaComponent(focused ? 1.0 : 0.55).cgColor
-        circle.borderWidth = focused ? 1.5 : 0
-        circle.borderColor = ThemeStore.shared.theme.foreground.withAlphaComponent(0.8).cgColor
         layer?.addSublayer(circle)
-        // Live-Status v1 (#25): dezenter Atem-Puls, solange die Session arbeitet.
-        if pulsing {
-            let pulse = CABasicAnimation(keyPath: "opacity")
-            pulse.fromValue = 1.0
-            pulse.toValue = 0.35
-            pulse.duration = 0.9
-            pulse.autoreverses = true
-            pulse.repeatCount = .infinity
-            pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-            circle.add(pulse, forKey: "sessionPulse")
-        }
+        label.font = Self.font
+        label.lineBreakMode = .byTruncatingTail
+        label.maximumNumberOfLines = 1
+        label.isHidden = true
+        addSubview(label)
     }
 
     required init?(coder: NSCoder) { fatalError() }
 
     override func mouseDown(with event: NSEvent) { onClick() }
+
+    func apply(_ spec: Spec) {
+        guard spec != self.spec else { return }
+        let old = self.spec
+        self.spec = spec
+        toolTip = spec.tooltip
+
+        let dotColor = spec.urgent ? spec.tone : spec.color
+        circle.backgroundColor = dotColor.withAlphaComponent(spec.focused ? 1.0 : 0.55).cgColor
+        circle.borderWidth = spec.focused ? 1.5 : 0
+        circle.borderColor = ThemeStore.shared.theme.foreground.withAlphaComponent(0.8).cgColor
+
+        let height = Self.height
+        if let text = spec.text {
+            label.isHidden = false
+            label.textColor = spec.tone
+            if text != old?.text || spec.maxWidth != old?.maxWidth {
+                label.stringValue = text
+                label.sizeToFit()
+                label.frame.size.width = min(label.frame.width, spec.maxWidth)
+            }
+            setFrameSize(NSSize(width: 6 + 12 + 6 + label.frame.width + 9, height: height))
+            circle.frame = CGRect(x: 6, y: 4, width: 12, height: 12)
+            label.frame.origin = NSPoint(x: 24, y: ((height - label.frame.height) / 2).rounded())
+            layer?.cornerRadius = height / 2
+            layer?.borderWidth = 1
+            layer?.backgroundColor = spec.tone.withAlphaComponent(0.10).cgColor
+            layer?.borderColor = spec.tone.withAlphaComponent(0.45).cgColor
+        } else {
+            label.isHidden = true
+            setFrameSize(NSSize(width: 18, height: height))
+            circle.frame = CGRect(x: 3, y: 4, width: 12, height: 12)
+            layer?.borderWidth = 0
+            layer?.backgroundColor = nil
+            layer?.borderColor = nil
+        }
+
+        if spec.pulsing {
+            if circle.animation(forKey: "sessionPulse") == nil || old?.urgent != spec.urgent {
+                circle.removeAnimation(forKey: "sessionPulse")
+                let pulse = CABasicAnimation(keyPath: "opacity")
+                pulse.fromValue = 1.0
+                pulse.toValue = 0.35
+                pulse.duration = spec.urgent ? 0.5 : 0.9
+                pulse.autoreverses = true
+                pulse.repeatCount = .infinity
+                pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                circle.add(pulse, forKey: "sessionPulse")
+            }
+        } else {
+            circle.removeAnimation(forKey: "sessionPulse")
+        }
+    }
 }
 
 extension NSColor {

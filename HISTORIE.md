@@ -1,5 +1,39 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-15 — Status-Pille und Banner neu gedacht (Bridge-Mod als Fundament)
+
+Anlass: Claude Mods (function hooks, early access) erlauben einen Mod *in* Claude Code, der den echten
+Session-Zustand kennt — `claude-werkstatt/mods/latexterm-bridge` schickt seitdem OSC 5522 aus
+`session.start`/`turn.start`/`tool.call`/`classic.Notification`/`turn.complete`, inklusive Ctrl+C
+(`reason: aborted`). Mats hatte die Pille „seit längerem" abgeschaltet: „nicht nützlich, nicht zuverlässig".
+Mit der neuen Wahrheit wurde sie neu gedacht, Mats' Auftrag: „Feature, Nützlichkeit, Design, Nutzen und
+die Mac-Benachrichtigungen — alles cooler, testweise wieder aktivieren."
+
+Payload erweitert (abwärtskompatibel, `parseHookStatus`): `status=<state>[;detail][;k=v…]` mit `t` Sekunden,
+`n` Werkzeug-Schritte, `p` Prompt-Anfang, `a` Antwort-Anfang, `r` Grund (`answer|aborted|refusal|error`).
+Pille: `◐ Bash · 0:42 · 3 Schritte` (Uhr tickt lokal, Sekunden-Timer nur solange sichtbar), `● braucht dich
+· <Frage>` in Gelb, Nachklang `✓ fertig · 1:42 · 7 Schritte` in Grün, `■ abgebrochen` gedimmt, `⚠ Fehler` rot —
+der Nachklang bleibt, bis die Kachel beobachtet wurde (App aktiv + fokussiert) plus 6 s, höchstens 10 min.
+Farben nur aus dem Theme. Modi umbenannt: Aus / Kompakt / Mit Details. Banner: „Claude fertig · <Ordner>"
+mit „Frage", Dauer, Schritten und Antwort-Anfang; „Claude braucht dich · <Ordner>" mit der offenen Frage;
+Fehler immer; Abbruch und Turns unter 2 s stumm; `threadIdentifier` = Kachel. Legacy-Shell-Hooks laufen
+parallel weiter — sobald eine Session Bridge-Felder geschickt hat (`bridgeSeen`), werden ihre feldlosen
+Signale ignoriert (sonst zwei „fertig"-Banner, das ärmere gewinnt durch den Cooldown).
+
+Lehren: `private struct` als Rückgabetyp einer `static func` schlägt fehl („method must be declared private") —
+`HookStatus` ist deshalb internal. Notification-Text kommt aus untrusted Output: jedes Stück gekappt, Steuerzeichen
+raus, kein `;` (Feldtrenner) — die Bridge filtert dasselbe schon auf ihrer Seite.
+
+**Nachtrag (abends, zweite Runde):** Mats nahm Pille + Banner ab („sieht tatsächlich super aus"), wollte aber die
+Pille nicht frei im Terminal schweben sehen — Vorschlag: mit den Titelleisten-Punkten verschmelzen. Umgesetzt als
+`PaneChipView`: Punkt in Kachelfarbe + Text in Tonfarbe, ruhend nur Punkt, fokussiert lang / sonst kurz / ab fünf
+Kacheln nur Zeichen; Chip auch bei einer einzigen Kachel, sobald Status da ist. HUD wird nicht mehr bei jedem
+Signal neu gebaut, sondern in place aktualisiert — Neuaufbau nur bei Strukturwechsel oder anderer Gesamtbreite
+(Monospace-Ziffern halten die Breite beim Ticken). `PaneStatusBadgeView` und `PaneDotView` entfernt.
+Offen: ob `NSTitlebarAccessoryViewController` eine reine Frame-Änderung sauber nachlayoutet, war nicht zu
+belegen — deshalb der Neuaufbau bei Breitenänderung als sicherer Weg.
+
+
 ## 2026-09-14 — ⌘K neu gebaut (Palette als Karte, Gruppen, Zweitaktionen)
 
 `LauncherPalette` von Grund auf neu: schwebende Karte im oberen Drittel über abgedunkelter Kachel

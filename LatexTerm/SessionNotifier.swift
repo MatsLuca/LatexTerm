@@ -39,6 +39,7 @@ final class SessionNotifier: NSObject, UNUserNotificationCenterDelegate {
             content.title = title
             if let body { content.body = body }
             content.sound = .default
+            content.threadIdentifier = paneID.uuidString   // Banner derselben Kachel stapeln sich
             center.add(UNNotificationRequest(identifier: paneID.uuidString,
                                              content: content, trigger: nil))
         }

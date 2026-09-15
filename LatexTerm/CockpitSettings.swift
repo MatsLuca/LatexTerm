@@ -47,8 +47,8 @@ final class CockpitSettings: ObservableObject {
         var label: String {
             switch self {
             case .off: return "Aus"
-            case .status: return "Nur Status"
-            case .detail: return "Status + Werkzeug"
+            case .status: return "Kompakt"
+            case .detail: return "Mit Details"
             }
         }
     }
