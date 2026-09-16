@@ -15,7 +15,7 @@ enum ControlProtocol {
 }
 
 struct ControlRequest: Codable {
-    /// "list-panes" | "new-pane" | "send" | "zoom" | "focus"
+    /// "list-panes" | "new-pane" | "send" | "zoom" | "focus" | "close-pane"
     var cmd: String
     /// Ziel-Kachel: 1-basierter Index ("2") oder UUID(-Präfix). Fehlt er, nimmt
     /// die App bei zoom/focus/send die Kachel aus `paneID` (= LATEXTERM_PANE_ID
@@ -31,6 +31,10 @@ struct ControlRequest: Codable {
     var cwd: String?
     /// new-pane: Kommando, das nach dem Shell-Start ausgeführt wird.
     var exec: String?
+    /// close-pane: auch schließen, wenn Claude arbeitet oder ein Vordergrundprozess
+    /// läuft (= Cmd+W ohne Rückfrage). Default false: dann nur nackte Shell oder
+    /// Claude, das auf Eingabe wartet.
+    var force: Bool?
 }
 
 struct PaneInfo: Codable {

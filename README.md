@@ -133,6 +133,7 @@ Agents (or you) can drive the terminal from any shell — the app listens on a p
 
 ```sh
 latexterm list-panes [--json]                     # index, UUID, CWD, session state
+latexterm close-pane [--pane SEL] [--force]       # close a pane; without --force only an idle shell or Claude awaiting input
 latexterm new-pane [--cwd DIR] [--exec CMD]
 latexterm send [--pane SEL] [--no-enter] TEXT...  # type into a pane (Enter by default)
 latexterm zoom [--pane SEL]

@@ -2,7 +2,7 @@ import Foundation
 
 // latexterm — Steuerkanal-CLI (#28). Spricht die JSON-Zeilen des ControlProtocol
 // über den Unix-Socket der laufenden App. Bewusst ohne ArgumentParser-Dependency:
-// fünf Verben, eine Handvoll Flags. Wird ins App-Bundle eingebettet
+// sechs Verben, eine Handvoll Flags. Wird ins App-Bundle eingebettet
 // (LatexTerm.app/Contents/MacOS/latexterm); Nutzung via Symlink oder PATH.
 
 let usage = """
@@ -14,10 +14,15 @@ Verwendung:
   latexterm send [--pane ZIEL] [--no-enter] TEXT…
   latexterm zoom [--pane ZIEL]
   latexterm focus [--pane ZIEL]
+  latexterm close-pane [--pane ZIEL] [--force]
 
 ZIEL ist der 1-basierte Index aus `list-panes` oder eine Pane-UUID (auch Präfix).
-Ohne --pane verwenden send/zoom/focus $LATEXTERM_PANE_ID — also die Kachel,
+Ohne --pane verwenden send/zoom/focus/close-pane $LATEXTERM_PANE_ID — also die Kachel,
 in deren Shell dieses Kommando läuft.
+
+close-pane schließt ohne --force nur eine nackte Shell oder ein Claude, das auf
+Eingabe wartet; arbeitet Claude oder läuft ein Vordergrundprozess, Exit 1 mit Grund.
+--force entspricht Cmd+W ohne Rückfrage.
 
 Exit-Codes: 0 ok · 1 Fehler aus der App · 2 Aufruffehler · 3 App nicht erreichbar
 """
@@ -50,6 +55,7 @@ while !args.isEmpty {
     case "--cwd":      request.cwd = value(for: arg)
     case "--exec":     request.exec = value(for: arg)
     case "--no-enter": request.enter = false
+    case "--force":    request.force = true
     case "--json":     wantsJSON = true
     case "--help", "-h": print(usage); exit(0)
     default:
@@ -59,7 +65,7 @@ while !args.isEmpty {
 }
 
 switch cmd {
-case "list-panes", "zoom", "focus", "new-pane":
+case "list-panes", "zoom", "focus", "new-pane", "close-pane":
     guard positional.isEmpty else { fail("\(cmd) nimmt keine freien Argumente\n\n\(usage)", code: 2) }
 case "send":
     guard !positional.isEmpty else { fail("send braucht einen Text\n\n\(usage)", code: 2) }
@@ -147,5 +153,5 @@ case "list-panes":
 case "new-pane":
     if let pane = response.pane { print(describe(pane)) }
 default:
-    break   // send/zoom/focus: Erfolg ist still (Unix-Konvention)
+    break   // send/zoom/focus/close-pane: Erfolg ist still (Unix-Konvention)
 }

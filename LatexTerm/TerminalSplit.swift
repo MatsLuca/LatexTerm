@@ -1415,6 +1415,20 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Aktuelles Arbeitsverzeichnis dieser Pane (OSC 7), falls die Shell eins gemeldet hat.
     var currentDirectory: String? { view.currentWorkingDirectory() }
 
+    /// Name des Prozesses, der die PTY gerade im Vordergrund hält, oder nil, wenn das die
+    /// Shell selbst ist (Prompt sichtbar) bzw. nichts läuft. Grundlage für `close-pane`
+    /// ohne `--force`: eine Kachel mit laufendem Vordergrundprozess (claude, vim, ssh …)
+    /// schließt der Steuerkanal nicht ungefragt.
+    var foregroundProcessName: String? {
+        guard isStarted, let process = view.process, process.childfd >= 0 else { return nil }
+        let pgrp = tcgetpgrp(process.childfd)
+        guard pgrp > 0, pgrp != process.shellPid else { return nil }
+        var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
+        let n = proc_name(pgrp, &buffer, UInt32(buffer.count))
+        let name = n > 0 ? String(cString: buffer) : ""
+        return name.isEmpty ? "pid \(pgrp)" : name
+    }
+
     /// Startet die Login-Shell des Users. `directory` (z.B. das CWD der fokussierten
     /// Kachel bei ⌘T, #8) geht als Arbeitsverzeichnis an den KINDPROZESS
     /// (`startProcess(currentDirectory:)`) statt prozessweit an die ganze App (#20).
@@ -2156,6 +2170,22 @@ extension TerminalSplitView: ControlCommandHandler {
                 pane.view.send(txt: exec + "\r")
             }
             return ControlResponse(ok: true, pane: info(for: pane))
+
+        case "close-pane":
+            guard let pane = resolvePane(request.pane ?? request.paneID) else {
+                return .failure("Kachel nicht gefunden: „\(request.pane ?? request.paneID ?? "kein Ziel angegeben")“ — `latexterm list-panes` zeigt Index und ID")
+            }
+            if !(request.force ?? false) {
+                if pane.sessionState == .working {
+                    return .failure("Kachel \(panes.firstIndex(where: { $0 === pane }).map { $0 + 1 } ?? 0) arbeitet gerade (Claude) — warten oder --force")
+                }
+                if let name = pane.foregroundProcessName {
+                    return .failure("Kachel \(panes.firstIndex(where: { $0 === pane }).map { $0 + 1 } ?? 0) hat einen laufenden Prozess (\(name)) — erst beenden oder --force")
+                }
+            }
+            let snapshot = info(for: pane)
+            closePane(pane)
+            return ControlResponse(ok: true, pane: snapshot)
 
         case "send", "zoom", "focus":
             guard let pane = resolvePane(request.pane ?? request.paneID) else {

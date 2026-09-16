@@ -1,5 +1,20 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-16 — `latexterm close-pane` (Kacheln vom Agenten schließen lassen)
+
+Anlass: Mats, nach dem Briefkasten-Mod: „wäre es nicht sinnvoller, wenn Agenten mit dem latexterm-Skill
+eine Kachel direkt schließen, wie ⌘W?" Bis dahin ging das nur über `/exit` + `exit` per `send`, und
+das scheiterte, sobald in der Kachel etwas hing. Neu: `close-pane [--pane ZIEL] [--force]` im Protokoll
+(`ControlRequest.force`), Handler ruft denselben `closePane` wie ⌘W. Ohne `--force` schließt er nur
+eine nackte Shell oder ein Claude im Zustand `awaitingInput`: `sessionState == .working` → Fehler
+„arbeitet gerade“, ein Vordergrundprozess (`tcgetpgrp(childfd) != shellPid`, Name über `proc_name`) →
+Fehler mit Prozessname. Skill-Regel in der Werkstatt: eigene Kacheln nach getaner Arbeit schließen,
+fremde nur auf Auftrag, `--force` nie ungefragt.
+
+Nebenbefund: Xcode-Update hatte die Metal-Toolchain gelöscht, Build brach ab — `xcodebuild
+-downloadComponent MetalToolchain` (840 MB), dann grün.
+
+
 ## 2026-09-15 — Status-Pille und Banner neu gedacht (Bridge-Mod als Fundament)
 
 Anlass: Claude Mods (function hooks, early access) erlauben einen Mod *in* Claude Code, der den echten
