@@ -18,6 +18,7 @@ final class FormulaSettings: ObservableObject {
         static let formulaColorAlpha = "LatexTerm.formulaColor.alpha"
         static let formulasEnabled   = "LatexTerm.formulasEnabled"
         static let formulaScale      = "LatexTerm.formulaScale"
+        static let formulaSans       = "LatexTerm.formulaSans"
     }
 
     // MARK: - Defaults
@@ -41,6 +42,12 @@ final class FormulaSettings: ObservableObject {
 
     @Published var formulaScale: CGFloat = FormulaSettings.defaultFormulaScale {
         didSet { guard !loading else { return }; UserDefaults.standard.set(Double(formulaScale), forKey: Keys.formulaScale); post() }
+    }
+
+    /// Serifenlose Formelschrift: KaTeX setzt die Formel in `\mathsf{…}` (nur Buchstaben/Ziffern,
+    /// Symbole bleiben). Default aus = klassische LaTeX-Optik.
+    @Published var formulaSans: Bool = false {
+        didSet { guard !loading else { return }; UserDefaults.standard.set(formulaSans, forKey: Keys.formulaSans); post() }
     }
 
     // MARK: - Init
@@ -74,6 +81,8 @@ final class FormulaSettings: ObservableObject {
         // formulasEnabled laden (default: true)
         formulasEnabled = d.object(forKey: Keys.formulasEnabled) != nil
             ? d.bool(forKey: Keys.formulasEnabled) : true
+
+        formulaSans = d.bool(forKey: Keys.formulaSans)
 
         // Formelgröße laden (default: 1.0)
         let scale = d.object(forKey: Keys.formulaScale) != nil

@@ -111,7 +111,13 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
     <script>
     var root=document.getElementById('root');
     var els={};                 // key -> {wrap,bg,m,latex}
-    var cfg={fontPx:13,cellH:16,fg:'rgb(230,225,225)',userScale:1};
+    var cfg={fontPx:13,cellH:16,fg:'rgb(230,225,225)',userScale:1,sans:false};
+    // Serifenlos = Formel in \\mathsf{…}; verträgt ein Konstrukt das nicht, rendert es klassisch.
+    function tex(latex,display){
+      var o={displayMode:display,throwOnError:true};
+      if(cfg.sans){ try{ return katex.renderToString('\\\\mathsf{'+latex+'}',o); }catch(_){} }
+      return katex.renderToString(latex,o);
+    }
 
     function styleEl(e){ e.m.style.color=cfg.fg; }
 
@@ -162,7 +168,7 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
         if(e.latex!==it.latex || e.display!==!!it.display){
           e.latex=it.latex; e.display=!!it.display; e.geom=geom;
           try{ e.m.className='m';
-               e.m.innerHTML=katex.renderToString(it.latex,{displayMode:e.display,throwOnError:true});
+               e.m.innerHTML=tex(it.latex,e.display);
                e.err=null; }
           catch(err){ e.m.className='m fallback err'; e.m.textContent=it.latex;
                e.err=(err&&err.message)?err.message:String(err); }
@@ -376,13 +382,14 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         // Gleiche Formel wie zuletzt gerendert → KaTeX nicht neu evaluieren (sonst flutet
         // der pro-Pixel-Hover die WebView). Nur sicherstellen, dass das Popover sichtbar
         // ist; die Maße liegen aus dem vorigen Render bereits vor.
-        if renderedKey == latex {
+        let renderKey = latex + (FormulaSettings.shared.formulaSans ? "\u{1}sf" : "")
+        if renderedKey == renderKey {
             if isHidden, lastContentW > 0, let host = hostView {
                 layoutPreview(contentW: lastContentW, contentH: lastContentH, in: host)
             }
             return
         }
-        renderedKey = latex
+        renderedKey = renderKey
         isError = (error != nil)
 
         let escaped = Self.jsString(latex)
@@ -391,7 +398,7 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
             js = "renderError(\(escaped), \(Self.jsString(error)));"
         } else {
             let big = max(30, fontPx * 2.4)
-            js = "render(\(escaped), \(big), \(Self.jsString(Self.css(foreground))));"
+            js = "render(\(escaped), \(big), \(Self.jsString(Self.css(foreground))), \(FormulaSettings.shared.formulaSans));"
         }
         if loaded { web.evaluateJavaScript(js) } else { pendingJS = js }
     }
@@ -542,7 +549,7 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         isError = false
         renderedKey = latex
         let big = max(30, lastShowFontPx * 2.4)
-        let js = "render(\(Self.jsString(latex)), \(big), \(Self.jsString(Self.css(lastShowForeground))));"
+        let js = "render(\(Self.jsString(latex)), \(big), \(Self.jsString(Self.css(lastShowForeground))), \(FormulaSettings.shared.formulaSans));"
         if loaded { web.evaluateJavaScript(js) } else { pendingJS = js }
     }
 
@@ -682,9 +689,14 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
     <script>
     var el=document.getElementById('m');
     function post(){ window.webkit.messageHandlers.size.postMessage({w:el.offsetWidth, h:el.offsetHeight}); }
-    function render(latex, fontPx, fg){
+    function tex(latex, sans){
+      var o={displayMode:true,throwOnError:true};
+      if(sans){ try{ return katex.renderToString('\\\\mathsf{'+latex+'}',o); }catch(_){} }
+      return katex.renderToString(latex,o);
+    }
+    function render(latex, fontPx, fg, sans){
       el.style.fontSize=fontPx+'px'; el.style.color=fg; el.className='';
-      try{ el.innerHTML=katex.renderToString(latex,{displayMode:true,throwOnError:true}); }
+      try{ el.innerHTML=tex(latex, sans); }
       catch(e){ el.className='fallback'; el.textContent=latex; }
       if(document.fonts&&document.fonts.ready){document.fonts.ready.then(post);} else {requestAnimationFrame(post);}
     }

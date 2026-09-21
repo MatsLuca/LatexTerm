@@ -552,7 +552,8 @@ final class OverlayController {
             "fontPx": fontPx,
             "cellH": cell.height,
             "fg": Self.css(fg),
-            "userScale": scale
+            "userScale": scale,
+            "sans": settings.formulaSans
         ])
         let itemsJSON = Self.json(items)
 
