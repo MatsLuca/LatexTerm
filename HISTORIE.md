@@ -1,5 +1,17 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-21 — Status über den Socket statt über die TTY (Rendering-Artefakte in Claude Code)
+
+Anlass: Mats' Screenshot — im Claude-Code-TUI stand `;255;255;255mjo` als Text, Zeilen waren versetzt,
+Reste alter Zeilen blieben stehen. Das ist der Schwanz von `ESC[38;2;255;255;255m`: Bridge-Mod und die
+fünf Fallback-Hooks schrieben OSC 5522 per `printf > /dev/ttysN` in dieselbe Leitung, in die Claude Code
+gerade malte; landete die Meldung mitten in einer CSI-Sequenz, brach der Parser sie ab und druckte den Rest.
+Im Vollbild-TUI (Diff-Rendering) blieb der Müll stehen. Im Terminal nicht heilbar — die Bytes kommen schon
+vermischt an. Fix: neues Steuerkommando `status` (`ControlRequest.text` = Payload, Ziel per `--pane`) ruft
+dasselbe `applyHookStatus`; der Mod meldet nur noch darüber, die fünf settings.json-Hooks sind entfernt.
+OSC-5522-Empfang bleibt für `accent=` (kommt aus der Shell, nicht neben einem TUI) und Altsender.
+Lehre: **in eine TTY schreibt nur der Prozess, dem sie gerade gehört.**
+
 ## 2026-09-16 — `latexterm close-pane` (Kacheln vom Agenten schließen lassen)
 
 Anlass: Mats, nach dem Briefkasten-Mod: „wäre es nicht sinnvoller, wenn Agenten mit dem latexterm-Skill

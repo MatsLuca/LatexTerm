@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Anzeige-Müll in Claude Code („;255;255;255m“, versetzte Zeilen, stehen gebliebene Reste) (21.09.).** Ursache waren die Status-Melder, die OSC 5522 von außen in die TTY schrieben und dabei Claude Codes Escape-Sequenzen zerrissen. Neu: `latexterm status [--pane ZIEL] PAYLOAD` über den Steuerkanal; der Bridge-Mod nutzt nur noch diesen Weg. CLI versteht `--` als Ende der Optionen.
+
 ### Added
 - **Neues App-Icon (21.09., Testwoche).** Drei Kacheln in schwarzem Alu: Session mit Status-LED, Σ für die Formeln, leuchtende Prompt-Kachel. Als Icon-Composer-Datei (`AppIcon.icon`, eine vollflächige Ebene) — macOS 26/27 schneidet die Form selbst zu, das alte Icon saß dort im grauen Kasten. PNG-Satz für macOS 14/15 aus derselben Quelle. Rezept und Messwerte: `design/icon/README.md`.
 - **Serifenlose Formelschrift (21.09.).** Einstellungen → Formeln → „Schrift“: *Klassisch* (Standard) oder *Serifenlos*. Serifenlos setzt jede Formel in KaTeX' eigene Sans-Schrift (`\mathsf{…}`) — Buchstaben und Ziffern aufrecht und serifenlos, Symbole, griechische Kleinbuchstaben und `\text{…}` bleiben. Gilt für Overlays, Hover-Vorschau und Bild-Export; „LaTeX kopieren“ liefert weiter den unveränderten Quelltext. Verträgt ein Konstrukt `\mathsf` nicht, rendert diese Formel klassisch.

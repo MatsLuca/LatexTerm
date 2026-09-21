@@ -783,7 +783,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         return status
     }
 
-    private func applyHookStatus(_ value: String) {
+    fileprivate func applyHookStatus(_ value: String) {
         guard let hook = Self.parseHookStatus(value) else { return }
         pendingSessionScans = 0
 #if DEBUG
@@ -2225,6 +2225,19 @@ extension TerminalSplitView: ControlCommandHandler {
             let snapshot = info(for: pane)
             closePane(pane)
             return ControlResponse(ok: true, pane: snapshot)
+
+        case "status":
+            // Session-Status des Bridge-Mods — derselbe Inhalt wie OSC 5522 `status=…`, aber
+            // NICHT über die TTY: ein fremder Schreiber in der Leitung zerreißt die Escape-
+            // Sequenzen, die Claude Code gerade malt (Artefakte wie „;255;255;255m").
+            guard let pane = resolvePane(request.pane ?? request.paneID) else {
+                return .failure("Kachel nicht gefunden: „\(request.pane ?? request.paneID ?? "kein Ziel angegeben")“")
+            }
+            guard let text = request.text, !text.isEmpty else {
+                return .failure("status braucht eine Payload")
+            }
+            pane.applyHookStatus(text)
+            return ControlResponse(ok: true)
 
         case "send", "zoom", "focus":
             guard let pane = resolvePane(request.pane ?? request.paneID) else {

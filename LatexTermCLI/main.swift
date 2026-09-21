@@ -2,7 +2,7 @@ import Foundation
 
 // latexterm — Steuerkanal-CLI (#28). Spricht die JSON-Zeilen des ControlProtocol
 // über den Unix-Socket der laufenden App. Bewusst ohne ArgumentParser-Dependency:
-// sechs Verben, eine Handvoll Flags. Wird ins App-Bundle eingebettet
+// sieben Verben, eine Handvoll Flags. Wird ins App-Bundle eingebettet
 // (LatexTerm.app/Contents/MacOS/latexterm); Nutzung via Symlink oder PATH.
 
 let usage = """
@@ -15,6 +15,7 @@ Verwendung:
   latexterm zoom [--pane ZIEL]
   latexterm focus [--pane ZIEL]
   latexterm close-pane [--pane ZIEL] [--force]
+  latexterm status [--pane ZIEL] PAYLOAD
 
 ZIEL ist der 1-basierte Index aus `list-panes` oder eine Pane-UUID (auch Präfix).
 Ohne --pane verwenden send/zoom/focus/close-pane $LATEXTERM_PANE_ID — also die Kachel,
@@ -23,6 +24,9 @@ in deren Shell dieses Kommando läuft.
 close-pane schließt ohne --force nur eine nackte Shell oder ein Claude, das auf
 Eingabe wartet; arbeitet Claude oder läuft ein Vordergrundprozess, Exit 1 mit Grund.
 --force entspricht Cmd+W ohne Rückfrage.
+
+status meldet den Claude-Code-Zustand einer Kachel (`working;Bash;t=12;n=3`) — der Weg des
+Bridge-Mods, damit niemand neben Claude Code in die TTY schreibt.
 
 Exit-Codes: 0 ok · 1 Fehler aus der App · 2 Aufruffehler · 3 App nicht erreichbar
 """
@@ -58,6 +62,9 @@ while !args.isEmpty {
     case "--force":    request.force = true
     case "--json":     wantsJSON = true
     case "--help", "-h": print(usage); exit(0)
+    case "--":
+        // Ende der Optionen: der Rest ist Text, auch wenn er mit „--" beginnt.
+        positional.append(contentsOf: args); args.removeAll()
     default:
         if arg.hasPrefix("--") { fail("Unbekannte Option \(arg)\n\n\(usage)", code: 2) }
         positional.append(arg)
@@ -69,6 +76,9 @@ case "list-panes", "zoom", "focus", "new-pane", "close-pane":
     guard positional.isEmpty else { fail("\(cmd) nimmt keine freien Argumente\n\n\(usage)", code: 2) }
 case "send":
     guard !positional.isEmpty else { fail("send braucht einen Text\n\n\(usage)", code: 2) }
+    request.text = positional.joined(separator: " ")
+case "status":
+    guard !positional.isEmpty else { fail("status braucht eine Payload\n\n\(usage)", code: 2) }
     request.text = positional.joined(separator: " ")
 default:
     fail("Unbekanntes Kommando „\(cmd)“\n\n\(usage)", code: 2)

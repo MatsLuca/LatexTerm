@@ -15,7 +15,7 @@ enum ControlProtocol {
 }
 
 struct ControlRequest: Codable {
-    /// "list-panes" | "new-pane" | "send" | "zoom" | "focus" | "close-pane"
+    /// "list-panes" | "new-pane" | "send" | "zoom" | "focus" | "close-pane" | "status"
     var cmd: String
     /// Ziel-Kachel: 1-basierter Index ("2") oder UUID(-Präfix). Fehlt er, nimmt
     /// die App bei zoom/focus/send die Kachel aus `paneID` (= LATEXTERM_PANE_ID
@@ -23,7 +23,7 @@ struct ControlRequest: Codable {
     var pane: String?
     /// Vom CLI aus der Env übernommene LATEXTERM_PANE_ID (Fallback-Ziel).
     var paneID: String?
-    /// send: zu tippender Text.
+    /// send: zu tippender Text. status: Payload `<state>[;detail][;k=v…]` (wie OSC 5522 `status=`).
     var text: String?
     /// send: abschließendes Enter (\r) mitschicken. Default true.
     var enter: Bool?
