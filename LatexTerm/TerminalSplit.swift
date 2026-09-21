@@ -1693,6 +1693,45 @@ final class TerminalSplitView: NSView {
 
         // Steuerkanal (#28): dieses Fenster als Ziel für `latexterm`-Kommandos.
         ControlServer.shared.register(self)
+
+        // Dock-Streifen-Bug: bei automatisch ausgeblendetem Dock meldet AppKit
+        // zeitweise ein `visibleFrame`, das unten noch die Dock-Höhe reserviert;
+        // Kantenziehen und Rectangle-„Maximize“ enden dann ~80 px über dem Rand.
+        // Nach jedem Resize/Move prüfen und das Fenster auf den Boden ziehen.
+        if dockGapObserver == nil {
+            dockGapObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didEndLiveResizeNotification, object: window, queue: .main
+            ) { [weak self] _ in self?.closeDockGapIfNeeded() }
+            dockGapMoveObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResizeNotification, object: window, queue: .main
+            ) { [weak self] n in
+                guard let w = n.object as? NSWindow, !w.inLiveResize else { return }
+                self?.closeDockGapIfNeeded()
+            }
+        }
+    }
+
+    private var dockGapObserver: NSObjectProtocol?
+    private var dockGapMoveObserver: NSObjectProtocol?
+
+    /// Fenster füllt Breite und Oberkante des sichtbaren Bereichs, endet aber
+    /// genau auf dessen Unterkante, obwohl das Dock automatisch ausgeblendet ist
+    /// → Reserve-Streifen ist ein Phantom; Fenster bis zum Bildschirmrand ziehen.
+    private func closeDockGapIfNeeded() {
+        guard let window, !window.styleMask.contains(.fullScreen),
+              let screen = window.screen else { return }
+        let autohide = UserDefaults(suiteName: "com.apple.dock")?.bool(forKey: "autohide") ?? false
+        guard autohide else { return }
+        let f = window.frame, vis = screen.visibleFrame, full = screen.frame
+        let gap = vis.minY - full.minY
+        guard gap > 8,
+              abs(f.minY - vis.minY) < 2,
+              abs(f.maxY - vis.maxY) < 2,
+              abs(f.width - vis.width) < 2 else { return }
+        var target = f
+        target.origin.y = full.minY
+        target.size.height = f.maxY - full.minY
+        window.setFrame(target, display: true)
     }
 
     override var isFlipped: Bool { true }   // Reihe 0 oben
