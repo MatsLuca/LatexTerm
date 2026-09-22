@@ -50,12 +50,16 @@ final class TerminalSplitView: NSView {
             forName: ThemeStore.didChange, object: nil, queue: .main
         ) { [weak self] _ in self?.layer?.backgroundColor = Self.gapColor.cgColor }
 
-        // Session-Restore (#11): letztes Layout (Pane-Anzahl + CWDs) wiederherstellen;
-        // ohne/mit korruptem Snapshot startet wie bisher eine Kachel im Home.
         // Erste Kachel = Projekt-Launcher (Mats' Entscheidung 24.08.). Der Session-Snapshot (#11)
-        // wird weiter geschrieben, aber nicht mehr als Startlayout benutzt — die Home-Kachel
-        // zeigt ohnehin, woran zuletzt gearbeitet wurde.
-        addPane(home: true)
+        // wird bei jedem Beenden geschrieben, als Startlayout aber nur einmal nach „Neu starten“ /
+        // „Beenden und Kacheln merken“ benutzt (Marke im Snapshot, `SessionStore.takeRestore`).
+        if let plan = Self.restoreQueue.claim() {
+            restore(plan)
+            // Fenster, die macOS nach dem Beenden nicht wieder öffnet, kommen als Kacheln hierher.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.restoreLeftovers() }
+        } else {
+            addPane(home: true)
+        }
 
         // ⌘N (Menü „Neue Home-Kachel"): nur das Key-Fenster reagiert.
         newHomeObserver = NotificationCenter.default.addObserver(
@@ -125,7 +129,9 @@ final class TerminalSplitView: NSView {
         Logger(subsystem: "com.mats.LatexTerm", category: "quickstart").notice("runQuickstart \(q.key, privacy: .public) in \(q.path, privacy: .public); panes \(self.panes.count)")
         QuickstartStore.shared.pending = nil
         // Terminal-Cast 1/3: gestartet wird in einer Home-Kachel, und die ist ein TerminalPane.
-        let fresh = (panes.count == 1 && panes[0].kind == "home") ? panes[0] as? TerminalPane : nil
+        // Eine Home-Kachel, die gleich eine Session fortsetzt (Neustart), ist nicht unberührt.
+        let fresh = (panes.count == 1 && panes[0].kind == "home")
+            ? (panes[0] as? TerminalPane).flatMap { $0.hasPendingResume ? nil : $0 } : nil
         let pane = fresh ?? addPane(home: true)
         focusPane(pane)
         // Quickstart: nur die Kachelfarbe — der Prompt startet sofort einen Turn, ein getipptes
@@ -163,6 +169,55 @@ final class TerminalSplitView: NSView {
         })
     }
 
+    /// Beim ersten Zugriff einmal von der Platte geholt, dann fensterweise verteilt.
+    private static var restoreQueue = RestoreQueue(SessionStore.takeRestore() ?? [])
+    /// Fokus und Zoom des wiederhergestellten Fensters — gesetzt wird erst mit Fenster.
+    private var pendingRestoreLayout: (focused: (any Pane)?, zoomed: (any Pane)?)?
+
+    /// Kacheln eines gespeicherten Fensters in derselben Reihenfolge anlegen.
+    private func restore(_ plan: SessionSnapshot.Window) {
+        let restored = plan.panes.map { restorePane(RestoreStep($0)) }
+        pendingRestoreLayout = (focused: plan.focused.flatMap { restored.indices.contains($0) ? restored[$0] : nil },
+                                zoomed: plan.zoomed.flatMap { restored.indices.contains($0) ? restored[$0] : nil })
+    }
+
+    /// Eine Kachel wie gespeichert: Agenten-Session → Home, das sie per „Weiter“ fortsetzt
+    /// (gleicher Befehl, Farbe, Vorhang wie der Klick); sonst Shell im Verzeichnis oder Home.
+    @discardableResult
+    private func restorePane(_ step: RestoreStep) -> TerminalPane {
+        switch step {
+        case .home:
+            return addPane(home: true)
+        case .shell(let cwd):
+            return addPane(startingIn: cwd)
+        case .resume(let agent, let sessionID, let cwd, let accentName):
+            let pane = addPane(home: true)
+            pane.resumeSession(HomePaneView.PendingResume(agent: agent, sessionID: sessionID,
+                                                          cwd: cwd, accentName: accentName))
+            return pane
+        }
+    }
+
+    private func restoreLeftovers() {
+        let leftovers = Self.restoreQueue.drain()
+        guard !leftovers.isEmpty else { return }
+        let focused = panes.first(where: { isFocused($0) }), zoomed = zoomedPane
+        for window in leftovers { window.panes.forEach { restorePane(RestoreStep($0)) } }
+        // Nach den Fokus-Sprüngen der neuen Kacheln (addPane fokussiert im nächsten Durchlauf).
+        DispatchQueue.main.async { [weak self] in self?.applyRestoredLayout(focused: focused, zoomed: zoomed) }
+    }
+
+    private func applyRestoredLayout(focused: (any Pane)?, zoomed: (any Pane)?) {
+        let alive = { (p: (any Pane)?) in p.flatMap { p in self.panes.contains { $0 === p } ? p : nil } }
+        if let zoomed = alive(zoomed), panes.count > 1 {
+            setZoomedPane(zoomed)
+            updateFocusBorders()
+            relayout(animated: false)
+        }
+        if let target = alive(focused) ?? alive(zoomed) { window?.makeFirstResponder(target.focusTarget) }
+        updateTitlebarHUD()
+    }
+
     /// Für Home: alle anderen Kacheln aus allen Fenstern, mit expliziter Session-Identität.
     func homePaneSummary(excluding me: any Pane) -> [HomePaneInfo] {
         ControlServer.shared.router.panes.compactMap { p in
@@ -177,6 +232,14 @@ final class TerminalSplitView: NSView {
         super.viewDidMoveToWindow()
         firstResponderObservation = nil
         guard let window = window else { return }
+
+        // Wiederhergestelltes Fenster: Fokus/Zoom nach den Fokus-Sprüngen der angelegten Kacheln.
+        if let layout = pendingRestoreLayout {
+            pendingRestoreLayout = nil
+            DispatchQueue.main.async { [weak self] in
+                self?.applyRestoredLayout(focused: layout.focused, zoomed: layout.zoomed)
+            }
+        }
 
         // Kaltstart per URL/Dock-Plugin: die Anforderung kam, bevor es ein Fenster gab.
         if let q = QuickstartStore.shared.pending {

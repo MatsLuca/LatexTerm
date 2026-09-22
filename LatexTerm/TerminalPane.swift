@@ -254,6 +254,22 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         homeView = home
     }
 
+    /// Neustart mit Kacheln: diese Home-Kachel setzt die Session fort, sobald Home seine Daten hat —
+    /// über „Weiter“, also mit demselben Befehl, derselben Farbe und demselben Vorhang wie der Klick.
+    func resumeSession(_ request: HomePaneView.PendingResume) {
+        guard let homeView, !isStarted else { return }
+        quietLaunch = true
+        homeView.resumeWhenLoaded(request)
+    }
+    var hasPendingResume: Bool { homeView?.hasPendingResume ?? false }
+    /// Start ohne Fokus-Klau (Neustart: mehrere Kacheln decken nacheinander auf): Vorhang und
+    /// Terminal nehmen den Fokus nur, wenn er schon in dieser Kachel liegt.
+    private var quietLaunch = false
+    private var ownsFocus: Bool {
+        (container.window?.firstResponder as? NSView)?.isDescendant(of: container) ?? false
+    }
+    private var takesFocus: Bool { !quietLaunch || ownsFocus }
+
     /// Home → Terminal: Shell in `directory` starten und `command` tippen (Kernel puffert,
     /// die Shell liest es nach dem Prompt — gleicher Pfad wie `new-pane --exec`).
     func launch(in directory: String, command: String?, label: String? = nil, followUps: [String] = [],
@@ -279,15 +295,17 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         start(in: directory)
         guard let command, !command.isEmpty, let home = homeView else {
             // Nur Shell: sofort zeigen.
+            let focus = takesFocus
+            quietLaunch = false
             homeView?.removeFromSuperview(); homeView = nil
             DispatchQueue.main.async { [weak self] in
-                guard let self else { return }
+                guard let self, focus else { return }
                 self.view.window?.makeFirstResponder(self.view)
             }
             return
         }
         if !usesClaudeIntegration {
-            home.beginLaunch(label ?? "Codex", eta: 2, accent: effectiveAccent)
+            home.beginLaunch(label ?? "Codex", eta: 2, accent: effectiveAccent, takeFocus: takesFocus)
             home.launchOverlay?.allowReveal { [weak self] in
                 self?.launchTimer?.invalidate()
                 self?.launchTimer = nil
@@ -330,7 +348,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         // (Hook-Status / passive Erkennung), höchstens 12 s — der User sieht weder das getippte
         // Kommando noch Plugin-Sync und Ladezeilen. Der Ring im Vorhang füllt sich gegen die
         // erwartete Dauer (Mittel der letzten echten Starts).
-        home.beginLaunch(label ?? "Claude", eta: Self.launchEta, accent: effectiveAccent)
+        home.beginLaunch(label ?? "Claude", eta: Self.launchEta, accent: effectiveAccent, takeFocus: takesFocus)
         // Start-Timer: T0 = dieser Tastendruck, als Umgebung vor das Kommando (zsh exportiert
         // Zuweisungen vor einem Funktionsaufruf an dessen Kinder). Der SessionStart-Hook
         // hooks/start-timer.sh (mats-tools) rechnet daraus die Phasen und loggt sie; wir
@@ -435,8 +453,9 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     /// Home-Ansicht schließt ihren Ring (bei Erfolg) und blendet dann aus.
     private func revealTerminal(success: Bool) {
         guard let home = homeView else { return }
+        if takesFocus { view.window?.makeFirstResponder(view) }
+        quietLaunch = false
         homeView = nil
-        view.window?.makeFirstResponder(view)
         home.finishLaunch(success: success) { home.removeFromSuperview() }
     }
 

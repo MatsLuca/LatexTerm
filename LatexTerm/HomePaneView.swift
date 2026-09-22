@@ -1026,7 +1026,7 @@ final class HomePaneView: NSView {
     /// Vorhang zeigen. `eta` = erwartete Startdauer (TerminalPane mittelt die letzten Starts),
     /// gegen die sich der Ring füllt. Fokus wandert auf den Vorhang: die Tastatur bleibt still,
     /// aber die Kachel gilt weiter als fokussiert (keine Dimmung, kein Fokus-Flackern).
-    func beginLaunch(_ label: String, eta: TimeInterval, accent launchAccent: NSColor? = nil) {
+    func beginLaunch(_ label: String, eta: TimeInterval, accent launchAccent: NSColor? = nil, takeFocus: Bool = true) {
         guard launchOverlay == nil else { return }
         _ = closeKeyHelpIfOpen()
         let overlay = LaunchOverlayView(frame: bounds, label: label, accent: launchAccent ?? accent, fg: Self.fg, dim: Self.dim,
@@ -1035,7 +1035,7 @@ final class HomePaneView: NSView {
         addSubview(overlay)
         launchOverlay = overlay
         NSAnimationContext.runAnimationGroup { ctx in ctx.duration = 0.15; overlay.animator().alphaValue = 1 }
-        window?.makeFirstResponder(overlay)
+        if takeFocus { window?.makeFirstResponder(overlay) }
     }
 
     /// Start beendet: bei `success` Ring schließen + Puls, dann Vorhang samt Home-Ansicht
@@ -1375,6 +1375,7 @@ final class HomePaneView: NSView {
                     self.reveal(node)
                     self.renderActions()
                 } else { self.selectInitial() }
+                self.runPendingResume()
             case .failure(let err):
                 self.data = nil
                 self.title.stringValue = "projekte nicht erreichbar"
@@ -1569,9 +1570,16 @@ final class HomePaneView: NSView {
     /// Weiter (`session`): Farbzeile per `resumePrefix` ins Transkript, unsichtbar hinter dem Vorhang;
     /// neu: `/color <name>` als erster Folgebefehl (eine Systemzeile in der TUI).
     private func colored(_ req: LaunchRequest, session: String?) -> LaunchRequest {
-        guard let info = accentInfo(for: req.path), let wanted = info.name else { return req }
+        guard let info = accentInfo(for: req.path), var wanted = info.name else { return req }
         let palette = data?.accentPalette ?? [:]
-        let name = resolveAccentName?(wanted, info.alternatives ?? [], Array(palette.keys).sorted()) ?? wanted
+        var alternatives = info.alternatives ?? []
+        // Neustart: die Farbe von vorher behalten, solange sie zur Familie gehört und frei ist —
+        // sonst tauschten Nachbarkacheln je nach Ladereihenfolge die Farben.
+        if let keep = restoredAccentName, keep != wanted, alternatives.contains(keep) {
+            alternatives = [wanted] + alternatives.filter { $0 != keep }
+            wanted = keep
+        }
+        let name = resolveAccentName?(wanted, alternatives, Array(palette.keys).sorted()) ?? wanted
         var out = req
         out.accentName = name
         out.accent = NSColor(srgbHex: palette[name] ?? info.color)
@@ -1585,6 +1593,55 @@ final class HomePaneView: NSView {
             out.colorFollowUp = fill(fu)
         }
         return out
+    }
+
+    // MARK: Neustart mit Kacheln
+
+    /// Session, die diese Kachel nach dem Laden fortsetzt (`TerminalPane.resumeSession`).
+    struct PendingResume: Equatable {
+        var agent: String
+        var sessionID: String
+        var cwd: String?
+        var accentName: String?
+    }
+    private var pendingResume: PendingResume?
+    /// Farbname der Kachel vor dem Neustart — nur während `run` gesetzt, `colored` liest ihn.
+    private var restoredAccentName: String?
+    var hasPendingResume: Bool { pendingResume != nil }
+
+    func resumeWhenLoaded(_ request: PendingResume) {
+        pendingResume = request
+        if data != nil { runPendingResume() }
+    }
+
+    /// Einmal „Weiter“ für die gemerkte Session. Claude: Befehl aus `actions.resume`, Pfad = Projekt
+    /// der Session, sonst das gemerkte Verzeichnis. Codex: nur mit `resumeAction` aus
+    /// `agentSessions` — fehlt die Session dort, bleibt Home stehen, ihr Ordner ausgewählt.
+    /// Scheitert das Laden, wartet der Auftrag auf das nächste erfolgreiche Neu laden (⌘R).
+    private func runPendingResume() {
+        guard let r = pendingResume, let d = data, !isLaunching, !isUpdating else { return }
+        pendingResume = nil
+        let log = Logger(subsystem: "com.mats.LatexTerm", category: "restore")
+        let action: Action
+        if r.agent == "codex" {
+            guard let s = d.agentSessions?.first(where: { $0.id == r.sessionID }) else {
+                log.notice("Codex-Session \(r.sessionID, privacy: .public) fehlt in projekte --json — Home bleibt")
+                if let cwd = r.cwd, let node = node(for: cwd) { reveal(node); renderActions() }
+                return
+            }
+            action = codexResume(s, in: s.path)
+        } else {
+            let hit = d.projects.lazy.compactMap { p in p.sessions.first { $0.id == r.sessionID }.map { (p, $0) } }.first
+            guard let path = hit?.0.path ?? r.cwd else {
+                log.notice("Claude-Session \(r.sessionID, privacy: .public) ohne Verzeichnis — Home bleibt")
+                return
+            }
+            let session = hit?.1 ?? ProjekteData.Session(id: r.sessionID, lastAt: nil, turns: 0, title: nil, agent: "claude")
+            action = .resume(session, path: path, title: session.title ?? "", age: "", project: hit?.0.name)
+        }
+        restoredAccentName = r.accentName
+        run(action)
+        restoredAccentName = nil
     }
 
     private func startWiedervorlage(_ w: ProjekteData.Wiedervorlage) {
