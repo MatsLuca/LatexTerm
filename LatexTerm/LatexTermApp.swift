@@ -13,20 +13,22 @@ private let qlog = Logger(subsystem: "com.mats.LatexTerm", category: "quickstart
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         WidgetRefresher.shared.start()   // Desktop-Widgets füttern (projekte widget), dann alle 5 min
-        // macOS hängt ans App-Menü ein verstecktes „Quit and Keep Windows“ (⌥ gedrückt) mit ⌥⌘Q —
-        // doppelt zu „Beenden und Kacheln merken“. SwiftUI baut Menüs neu auf, darum bei jedem
-        // Einfügen ins App-Menü wieder entfernen.
+        // macOS hängt ans App-Menü ein verstecktes „Quit and Keep Windows“ (⌥-Variante von „Beenden“) —
+        // doppelt zu „Beenden und Kacheln merken“. AppKit/SwiftUI fügen es auch später noch ein
+        // (Menüaufbau, Öffnen des Menüs), darum bei beidem wieder entfernen.
         DispatchQueue.main.async { Self.removeSystemKeepWindowsItem() }
-        NotificationCenter.default.addObserver(forName: NSMenu.didAddItemNotification, object: nil, queue: .main) { note in
-            guard (note.object as? NSMenu) === NSApp.mainMenu?.items.first?.submenu else { return }
-            Self.removeSystemKeepWindowsItem()
+        for name in [NSMenu.didAddItemNotification, NSMenu.didBeginTrackingNotification] {
+            NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { _ in
+                Self.removeSystemKeepWindowsItem()
+            }
         }
     }
 
+    private static let systemKeepWindowsTitles: Set<String> = ["Quit and Keep Windows", "Beenden und Fenster behalten"]
+
     private static func removeSystemKeepWindowsItem() {
         guard let appMenu = NSApp.mainMenu?.items.first?.submenu else { return }
-        for item in appMenu.items where item.keyEquivalent == "q"
-            && item.keyEquivalentModifierMask == [.command, .option] && item.title != "Beenden und Kacheln merken" {
+        for item in appMenu.items where systemKeepWindowsTitles.contains(item.title) {
             appMenu.removeItem(item)
         }
     }
