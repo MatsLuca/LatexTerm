@@ -45,6 +45,8 @@ protocol PaneContent: AnyObject {
     func applyTheme(_ theme: TerminalTheme)
     /// Steuerkanal `send`; false = nimmt diesen Text nicht an.
     func receive(_ text: String) -> Bool
+    /// Steuerkanal `call`: Anfrage mit Antwort; wirft `PaneArgsError` mit Grund (Default: versteht keine).
+    func call(_ text: String) throws -> String
     /// Menü-Aktion (⌘F …); false = nicht zuständig.
     func handle(_ command: PaneCommand) -> Bool
     /// Kachel geht zu: Timer, Observer, Ladevorgänge beenden.
@@ -62,6 +64,9 @@ extension PaneContent {
     var closeGuard: CloseGuard { .free }
     func applyTheme(_ theme: TerminalTheme) {}
     func receive(_ text: String) -> Bool { false }
+    func call(_ text: String) throws -> String {
+        throw PaneArgsError("\(Self.kind) beantwortet keine Abfragen (call)")
+    }
     func handle(_ command: PaneCommand) -> Bool { false }
     func willClose() {}
     func snapshotArgs() -> [String: String]? { nil }
@@ -75,6 +80,12 @@ protocol PaneContentDelegate: AnyObject {
     func contentRequestsClose()
     /// Notification, wenn niemand hinsieht.
     func contentRequestsAttention(title: String, body: String?)
+    /// Wer die Kachel geöffnet hat (`Pane.openedBy`): Kachel-UUID eines Agenten, "user" oder nil.
+    var contentOpener: String? { get }
+    /// Kacheln mit laufender Claude-/Codex-Session (alle Fenster).
+    func contentAgentPanes() -> [PaneInfo]
+    /// Text in eine andere Kachel einfügen (bracketed paste) und sie fokussieren.
+    func contentPaste(_ text: String, intoPaneID: String) -> Bool
 }
 
 /// Was eine App-Kachelart Agenten über sich sagt; Art und Anzeigename ergänzt die Registry.

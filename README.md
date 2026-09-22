@@ -152,7 +152,9 @@ Allgemein (home tree, Ghostty import), Darstellung, Kacheln (accent, focus), Cla
 
 A pane can be a shell, the home launcher, or an **app pane**: grid, borders, focus, zoom, `⌘W` and
 the title-bar chips work the same for every kind. Two app panes ship today — **Scratchpad** (pen, highlighter,
-eraser, theme colours; `⌘Z`/`⇧⌘Z`, `⌘S` saves a PNG, `⌘C` copies it; survives a restart) and **Web** (shows a *local* HTML file: plots, reports,
+eraser, theme colours; `⌘Z`/`⇧⌘Z`, `⌘S` saves a PNG, `⌘C` copies it; survives a restart; **➤ / `⇧⌘⏎` hands the
+sketch to a Claude/Codex pane** as an image attachment in its prompt, and agents look at it and draw into it with
+`scratch_look`/`scratch_draw`, see below) and **Web** (shows a *local* HTML file: plots, reports,
 previews a script just wrote; `http(s)` is refused by design, see [SECURITY.md](SECURITY.md)). Open them
 from the **Kachel** menu or the CLI; `send … reload` refreshes a web pane after its file changed.
 A new kind is one Swift file in `LatexTerm/Panes/Contents/` plus one line in `PaneKindRegistry`.
@@ -196,6 +198,12 @@ codex mcp add latexterm -- /opt/homebrew/bin/latexterm mcp   # then add env_vars
   `pane_action`, `focus_pane`, `close_pane` — plus one `open_<kind>` per app pane kind (`open_web`, `open_scratchpad`),
   generated from each kind's self-description (`pane-kinds` → `kindInfos`). A new pane kind becomes a new tool with no
   server change.
+- **Shared scratchpad:** `scratch_look` returns the pad as an image with a labelled coordinate grid (world units,
+  0,0 = pane centre, y down) plus where the user's and the agent's strokes are; `scratch_draw` takes an SVG subset
+  (paths incl. arcs, basic shapes, text, transforms, `marker-end` arrowheads) and turns it into native, erasable
+  elements in theme colours — a `viewBox` is fitted into the visible area, no viewBox means world coordinates;
+  `replace: "mats"` swaps the user's sketch for a clean version in one undo step. `scratch_clear` removes a layer.
+  Underneath: control command `call` (request with reply, `latexterm call`), `send --paste` (bracketed paste).
 - **Situational instructions:** on `initialize` the server tells the model which pane it is in, what else is open and
   what panes are good for (show results, run long processes beside the chat, parallel agents).
 - **Guard rails by construction:** new panes open without stealing focus; no `force` close; never types into its own

@@ -39,6 +39,22 @@ final class FakeApp: ControlTransport {
         case "close-pane":
             panes.removeAll { $0.id == request.pane }
             return ControlResponse(ok: true)
+        case "call":
+            // Scratchpad-Attrappe: look schreibt ein „PNG“ an den Pfad, draw/clear melden Zahlen.
+            guard details else { return .failure("Unbekanntes Kommando „call“") }
+            let text = request.text ?? ""
+            var reply: String
+            if text.hasPrefix("look ") {
+                FileManager.default.createFile(atPath: String(text.dropFirst(5)), contents: Data([0x89, 0x50, 0x4E, 0x47]))
+                reply = #"{"grid":50,"pixelsPerUnit":1.75,"region":{"x":-400,"y":-300,"w":800,"h":600},"visible":{"x":-400,"y":-300,"w":800,"h":600},"mats":{"count":3,"bounds":{"x":-10,"y":-5,"w":20,"h":10}},"claude":{"count":0,"bounds":null}}"#
+            } else if text.hasPrefix("draw") {
+                reply = #"{"added":4,"removed":3,"fitted":true,"bounds":{"x":0,"y":0,"w":10,"h":10},"warnings":["<foo> unbekannt, übergangen"]}"#
+            } else {
+                reply = #"{"removed":2,"left":1}"#
+            }
+            var response = ControlResponse(ok: true, pane: panes.first { $0.id == request.pane })
+            response.reply = reply
+            return response
         default:
             return ControlResponse(ok: true, pane: panes.first { $0.id == request.pane })
         }
@@ -61,6 +77,12 @@ func call(_ server: MCPServer, _ name: String, _ arguments: [String: Any] = [:])
     }
     let text = ((result["content"] as? [[String: Any]])?.first?["text"] as? String) ?? ""
     return (text, result["isError"] as? Bool ?? false)
+}
+
+func callContent(_ server: MCPServer, _ name: String, _ arguments: [String: Any] = [:]) -> [[String: Any]] {
+    let response = server.handle(["jsonrpc": "2.0", "id": 8, "method": "tools/call",
+                                  "params": ["name": name, "arguments": arguments]])!
+    return ((response["result"] as? [String: Any])?["content"] as? [[String: Any]]) ?? []
 }
 
 func toolNames(_ server: MCPServer) -> [String] {
@@ -200,6 +222,38 @@ struct MCPServerTests {
         assert(toolNames(legacyServer).contains("open_web"))
         assert(!call(legacyServer, "open_web", ["args": ["url": html]]).error)
         assert(legacy.sent("new-pane").last?.args?["url"] == html)
+
+        // Scratchpad: ohne offenes → Hinweis auf open_scratchpad; sonst eigenes > einziges; Bild + Lage.
+        let pads = FakeApp([pane("SELF-0000", 1, agent: "claude")])
+        let padServer = makeServer(pads)
+        for expected in ["scratch_look", "scratch_draw", "scratch_clear"] { assert(toolNames(padServer).contains(expected)) }
+        let none = call(padServer, "scratch_look")
+        assert(none.error && none.text.contains("open_scratchpad"), none.text)
+        pads.panes.append(pane("PAD1-0000", 2, kind: "scratchpad"))
+        let look = callContent(padServer, "scratch_look")
+        assert(look.count == 2 && look[0]["type"] as? String == "image" && look[0]["mimeType"] as? String == "image/png")
+        assert((look[0]["data"] as? String) == Data([0x89, 0x50, 0x4E, 0x47]).base64EncodedString())
+        let lookText = look[1]["text"] as? String ?? ""
+        assert(lookText.contains("x -400…400") && lookText.contains("Raster alle 50") && lookText.contains("Nutzer: 3 Striche"), lookText)
+        let lookPath = String(pads.sent("call").last!.text!.dropFirst(5))
+        assert(!FileManager.default.fileExists(atPath: lookPath), "Bild wird nach dem Lesen gelöscht")
+        // Zwei Scratchpads: das von dieser Session geöffnete gewinnt, sonst Rückfrage.
+        pads.panes.append(pane("PAD2-0000", 3, kind: "scratchpad"))
+        assert(call(padServer, "scratch_clear", ["who": "claude"]).error, "zwei fremde → pane angeben")
+        assert(!call(padServer, "open_scratchpad").error)
+        let drawn = call(padServer, "scratch_draw", ["svg": "<svg viewBox='0 0 10 10'><foo/></svg>", "replace": "mats"])
+        assert(!drawn.error && drawn.text.contains("4 Elemente") && drawn.text.contains("3 entfernt") && drawn.text.contains("Hinweise"), drawn.text)
+        let drawCall = pads.sent("call").last!
+        assert(drawCall.pane == pads.panes.last!.id && drawCall.text!.hasPrefix("draw replace=mats\n<svg"))
+        assert(call(padServer, "scratch_draw", ["svg": "<line/>", "replace": "alles"]).error)
+        assert(call(padServer, "scratch_draw", ["svg": "  "]).error)
+        assert(call(padServer, "scratch_look", ["pane": "1"]).error, "Kachel 1 ist kein Scratchpad")
+        let cleared = call(padServer, "scratch_clear", ["who": "claude", "pane": "2"])
+        assert(!cleared.error && cleared.text.contains("2 entfernt"), cleared.text)
+        assert(pads.sent("call").last!.pane == "PAD1-0000" && pads.sent("call").last!.text == "clear claude")
+        // Alte App ohne call: klare Meldung.
+        pads.details = false
+        assert(call(padServer, "scratch_clear", ["who": "all", "pane": "2"]).text.contains("neu starten"))
 
         print("mcp-server: ok")
     }

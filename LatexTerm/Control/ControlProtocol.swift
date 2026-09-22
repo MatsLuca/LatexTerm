@@ -25,7 +25,7 @@ enum ControlProtocol {
 }
 
 struct ControlRequest: Codable {
-    /// "list-panes" | "new-pane" | "send" | "zoom" | "focus" | "close-pane" | "status" | "pane-kinds"
+    /// "list-panes" | "new-pane" | "send" | "call" | "zoom" | "focus" | "close-pane" | "status" | "pane-kinds"
     var cmd: String
     /// Ziel-Kachel: 1-basierter Index ("2") oder UUID(-Präfix). Fehlt er, nimmt
     /// die App bei zoom/focus/send die Kachel aus `paneID` (= LATEXTERM_PANE_ID
@@ -37,6 +37,9 @@ struct ControlRequest: Codable {
     var text: String?
     /// send: abschließendes Enter (\r) mitschicken. Default true.
     var enter: Bool?
+    /// send an ein Terminal: Text als Einfügen (bracketed paste) statt als Tippen — eine Agenten-TUI macht aus
+    /// einem eingefügten Bildpfad ein Bild-Attachment (Capability `paste`). App-Kacheln ignorieren es.
+    var paste: Bool?
     /// new-pane: Arbeitsverzeichnis der neuen Shell.
     var cwd: String?
     /// new-pane: Kommando, das nach dem Shell-Start ausgeführt wird.
@@ -95,6 +98,15 @@ struct PaneKindInfo: Codable, Equatable {
     var actions: [PaneKindAction] = []
 }
 
+extension PaneInfo {
+    /// Agent in der Kachel: gemeldete Identität, sonst das Vordergrundprogramm (Sessions ohne Status-Sender).
+    var runningAgent: String? {
+        if let agent { return agent }
+        guard (kind ?? "terminal") == "terminal", let program = foreground?.lowercased() else { return nil }
+        return ["claude", "codex"].first { program == $0 || program.hasPrefix($0 + "-") }
+    }
+}
+
 struct PaneKindArg: Codable, Equatable {
     var name: String
     var summary: String
@@ -109,7 +121,8 @@ struct PaneKindAction: Codable, Equatable {
 
 struct ControlResponse: Codable {
     var ok: Bool
-    var capabilities: [String]? = ["agent-sessions", "all-windows", "pane-kinds", "pane-kind-info", "pane-details", "mailbox", "quiet-new-pane"]
+    var capabilities: [String]? = ["agent-sessions", "all-windows", "pane-kinds", "pane-kind-info", "pane-details", "mailbox",
+                                   "quiet-new-pane", "paste", "pane-call"]
     var error: String?
     /// list-panes: alle Kacheln.
     var panes: [PaneInfo]?
@@ -119,6 +132,8 @@ struct ControlResponse: Codable {
     var kinds: [String]? = nil
     /// pane-kinds: Selbstbeschreibung je Art (neuere Apps; ältere liefern nur `kinds`).
     var kindInfos: [PaneKindInfo]? = nil
+    /// call: Antwort des Kachel-Inhalts (Capability `pane-call`; Scratchpad: JSON).
+    var reply: String? = nil
 
     static func failure(_ message: String) -> ControlResponse {
         ControlResponse(ok: false, error: message)

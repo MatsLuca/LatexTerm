@@ -37,8 +37,12 @@ protocol Pane: AnyObject {
     /// Menü-Aktion, die die Kachel selbst ausführt (⌘F-Suche); false = nicht zuständig.
     func handle(_ command: PaneCommand) -> Bool
     /// Steuerkanal `send`: Terminal tippt, andere Arten deuten den Text selbst; false = nimmt
-    /// keinen Text an. `enter` ist das abschließende ⏎ (nur für Kacheln mit Eingabezeile).
-    func receive(_ text: String, enter: Bool) -> Bool
+    /// keinen Text an. `enter` ist das abschließende ⏎, `paste` = als Einfügen (bracketed paste) —
+    /// beides nur für Kacheln mit Eingabezeile.
+    func receive(_ text: String, enter: Bool, paste: Bool) -> Bool
+    /// Steuerkanal `call`: Anfrage mit Antwort (Scratchpad: ansehen, zeichnen). Wirft mit Grund, wenn
+    /// die Kachel sie nicht versteht.
+    func call(_ text: String) throws -> String
     /// Kachel wird geschlossen: Prozess beenden, Timer stoppen, Observer lösen — hier, nicht in
     /// `deinit`.
     func willClose()
@@ -112,4 +116,11 @@ protocol PaneHost: AnyObject {
     func homePaneSummary(excluding pane: any Pane) -> [HomePaneInfo]
     /// Home: Sprung zu einer laufenden Kachel (Pane-ID, fensterübergreifend).
     func paneRequestsFocus(paneID: String)
+
+    // App-Kacheln, die etwas an eine Agenten-Session übergeben (Scratchpad → „An Agent schicken“).
+
+    /// Alle Kacheln aller Fenster, in denen eine Claude- oder Codex-Session läuft.
+    func agentPanes() -> [PaneInfo]
+    /// Text als Einfügen in eine Kachel (fensterübergreifend) und diese fokussieren; false = ging nicht.
+    func paneRequestsPaste(_ text: String, intoPaneID: String) -> Bool
 }

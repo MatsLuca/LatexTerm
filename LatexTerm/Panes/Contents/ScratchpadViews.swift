@@ -5,6 +5,10 @@ import AppKit
 final class ScratchpadView: NSView {
     let canvas = ScratchpadCanvas()
     private let toolbar = ScratchpadToolbar()
+    private let note = NSTextField(labelWithString: "")
+    private var noteTimer: Timer?
+    /// ➤ in der Werkzeugleiste (true = mit ⌥: Ziel immer auswählen).
+    var onSend: ((Bool) -> Void)?
 
     override var isFlipped: Bool { true }
     override var mouseDownCanMoveWindow: Bool { false }
@@ -15,7 +19,38 @@ final class ScratchpadView: NSView {
         addSubview(canvas)
         addSubview(toolbar)
         toolbar.canvas = canvas
+        toolbar.onSend = { [weak self] choose in self?.onSend?(choose) }
         canvas.onStateChange = { [weak toolbar] in toolbar?.needsDisplay = true }
+        note.wantsLayer = true
+        note.layer?.cornerRadius = 6
+        note.alignment = .center
+        note.font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        note.isHidden = true
+        addSubview(note)
+    }
+
+    /// Wo das Auswahlmenü des Senden-Knopfs aufgeht.
+    var sendAnchor: (view: NSView, rect: NSRect) { (toolbar, toolbar.sendRect) }
+
+    /// Kurzer Hinweis unten mittig (Senden ging/ging nicht), blendet sich selbst aus.
+    func showNote(_ text: String) {
+        noteTimer?.invalidate()
+        note.stringValue = "  \(text)  "
+        note.sizeToFit()
+        layoutNote()
+        note.alphaValue = 1
+        note.isHidden = false
+        noteTimer = Timer.scheduledTimer(withTimeInterval: 2.4, repeats: false) { [weak self] _ in
+            guard let self else { return }
+            NSAnimationContext.runAnimationGroup({ $0.duration = 0.3; self.note.animator().alphaValue = 0 },
+                                                 completionHandler: { [weak self] in self?.note.isHidden = true })
+        }
+    }
+
+    private func layoutNote() {
+        let size = NSSize(width: min(note.fittingSize.width + 8, bounds.width - 16), height: 24)
+        note.frame = NSRect(x: (bounds.width - size.width) / 2, y: bounds.height - size.height - 12,
+                            width: size.width, height: size.height)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
@@ -23,6 +58,8 @@ final class ScratchpadView: NSView {
     func apply(_ theme: TerminalTheme) {
         canvas.apply(theme)
         toolbar.apply(theme)
+        note.textColor = theme.foreground.withAlphaComponent(1)
+        note.layer?.backgroundColor = theme.badgeBackground.withAlphaComponent(0.95).cgColor
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -32,6 +69,7 @@ final class ScratchpadView: NSView {
         toolbar.frame = toolbar.vertical
             ? NSRect(x: margin, y: margin, width: thickness, height: length)
             : NSRect(x: margin, y: margin, width: length, height: thickness)
+        if !note.isHidden { layoutNote() }
     }
 }
 
@@ -42,6 +80,8 @@ final class ScratchpadCanvas: NSView {
     var onChange: (() -> Void)?
     /// ⌘S → Sichern-Dialog (macht der Inhalt).
     var onSaveRequest: (() -> Void)?
+    /// ⇧⌘⏎ → an Agent schicken (true = mit ⌥: Ziel immer auswählen).
+    var onSendRequest: ((Bool) -> Void)?
     /// Werkzeugleiste neu zeichnen.
     var onStateChange: (() -> Void)?
 
@@ -58,10 +98,11 @@ final class ScratchpadCanvas: NSView {
     private var undoStack: [Edit] = []
     private var redoStack: [Edit] = []
 
-    private enum Edit {
-        case add(ScratchStroke)
-        case erase([(index: Int, stroke: ScratchStroke)])
-        case clear([ScratchStroke])
+    /// Ein Undo-Schritt: entfernte Elemente (Index zur Zeit des Entfernens, in dieser Reihenfolge) und
+    /// danach angehängte. Deckt Strich, Radierzug, Leeren und Agenten-Zeichnen (auch mit Ersetzen) ab.
+    private struct Edit {
+        var removed: [(index: Int, stroke: ScratchStroke)] = []
+        var added: [ScratchStroke] = []
     }
 
     static let penWidths: [CGFloat] = [1.5, 3, 6]
@@ -77,6 +118,28 @@ final class ScratchpadCanvas: NSView {
     override var mouseDownCanMoveWindow: Bool { false }
 
     var strokeCount: Int { strokes.count }
+
+    func count(_ layer: ScratchLayer) -> Int { strokes.filter { Self.matches($0, layer) }.count }
+
+    private static func matches(_ stroke: ScratchStroke, _ layer: ScratchLayer) -> Bool {
+        switch layer {
+        case .all: true
+        case .claude: stroke.isClaude
+        case .mats: !stroke.isClaude
+        }
+    }
+
+    /// Umriss aller Elemente einer Ebene (Weltkoordinaten); nil = keine.
+    func contentBounds(_ layer: ScratchLayer) -> NSRect? {
+        let list = strokes.filter { Self.matches($0, layer) }
+        guard let first = list.first else { return nil }
+        return list.dropFirst().reduce(first.bounds) { $0.union($1.bounds) }
+    }
+
+    /// Was die Kachel in der Normalsicht zeigt (Weltkoordinaten, Mitte = 0,0) — egal, wohin Mats gerade zoomt.
+    var visibleWorldRect: NSRect {
+        NSRect(x: -bounds.width / 2, y: -bounds.height / 2, width: bounds.width, height: bounds.height)
+    }
     var canUndo: Bool { !undoStack.isEmpty }
     var canRedo: Bool { !redoStack.isEmpty }
     var inkColor: NSColor { palette[colorIndex] }
@@ -126,31 +189,47 @@ final class ScratchpadCanvas: NSView {
 
     // MARK: Bearbeiten
 
-    func clear() {
-        guard !strokes.isEmpty else { return }
-        commit(.clear(strokes))
-        strokes.removeAll()
-        needsDisplay = true
+    /// Elemente einer Ebene entfernen (ein Undo-Schritt); gibt die Anzahl zurück.
+    @discardableResult
+    func clear(_ layer: ScratchLayer = .all) -> Int {
+        let removed = remove(layer)
+        guard !removed.isEmpty else { return 0 }
+        commit(Edit(removed: removed))
+        return removed.count
+    }
+
+    /// Agenten-Zeichnung anhängen, optional vorher eine Ebene leeren — zusammen EIN Undo-Schritt, damit ⌘Z
+    /// Mats' Skizze zurückbringt. Gibt die Zahl der entfernten Elemente zurück.
+    @discardableResult
+    func add(_ items: [ScratchStroke], replacing layer: ScratchLayer?) -> Int {
+        let removed = layer.map(remove) ?? []
+        guard !items.isEmpty || !removed.isEmpty else { return 0 }
+        strokes.append(contentsOf: items)
+        commit(Edit(removed: removed, added: items))
+        return removed.count
+    }
+
+    /// Von hinten entfernen: der gemerkte Index ist dann zugleich der ursprüngliche.
+    private func remove(_ layer: ScratchLayer) -> [(index: Int, stroke: ScratchStroke)] {
+        var removed: [(index: Int, stroke: ScratchStroke)] = []
+        for index in strokes.indices.reversed() where Self.matches(strokes[index], layer) {
+            removed.append((index, strokes.remove(at: index)))
+        }
+        return removed
     }
 
     func undo() {
         guard let edit = undoStack.popLast() else { NSSound.beep(); return }
-        switch edit {
-        case .add(let stroke): strokes.removeAll { $0 === stroke }
-        case .erase(let list): for e in list.reversed() { strokes.insert(e.stroke, at: min(e.index, strokes.count)) }
-        case .clear(let old): strokes = old
-        }
+        strokes.removeAll { stroke in edit.added.contains { $0 === stroke } }
+        for e in edit.removed.reversed() { strokes.insert(e.stroke, at: min(e.index, strokes.count)) }
         redoStack.append(edit)
         edited()
     }
 
     func redo() {
         guard let edit = redoStack.popLast() else { NSSound.beep(); return }
-        switch edit {
-        case .add(let stroke): strokes.append(stroke)
-        case .erase(let list): for e in list { strokes.removeAll { $0 === e.stroke } }
-        case .clear: strokes.removeAll()
-        }
+        strokes.removeAll { stroke in edit.removed.contains { $0.stroke === stroke } }
+        strokes.append(contentsOf: edit.added)
         undoStack.append(edit)
         edited()
     }
@@ -194,22 +273,87 @@ final class ScratchpadCanvas: NSView {
         let rect = strokes.isEmpty
             ? toWorld(bounds)
             : strokes.map(\.bounds).reduce(strokes[0].bounds) { $0.union($1) }.insetBy(dx: -16, dy: -16).integral
-        guard rect.width >= 1, rect.height >= 1,
-              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(rect.width * 2), pixelsHigh: Int(rect.height * 2),
+        return render(rect, scale: 2, under: nil, over: nil)
+    }
+
+    /// Bild für einen Agenten: Normalsicht plus alles Gezeichnete, mit Koordinatenraster (Beschriftung am Rand)
+    /// und — falls etwas außerhalb liegt — dem sichtbaren Bereich gestrichelt. Längste Seite ≤ `maxSide` Pixel.
+    func lookImage(maxSide: CGFloat) -> (png: Data, region: NSRect, scale: CGFloat, grid: CGFloat)? {
+        let visible = visibleWorldRect
+        guard visible.width >= 1, visible.height >= 1 else { return nil }
+        var region = visible
+        if let content = contentBounds(.all) { region = region.union(content.insetBy(dx: -16, dy: -16)) }
+        region = region.integral
+        let scale = min(2, maxSide / max(region.width, region.height))
+        let span = max(region.width, region.height)
+        let grid = [25, 50, 100, 200, 250, 500, 1000, 2000, 5000].map { CGFloat($0) }.first { span / $0 <= 16 } ?? 10000
+        let labelFont = NSFont.monospacedDigitSystemFont(ofSize: 11 / scale, weight: .regular)
+        let (dim, faint) = (palette[0].withAlphaComponent(0.55), palette[0].withAlphaComponent(0.13))
+        let under: (NSRect) -> Void = { rect in
+            let line = 1 / scale
+            var x = (rect.minX / grid).rounded(.up) * grid
+            while x <= rect.maxX {
+                (x == 0 ? dim.withAlphaComponent(0.3) : faint).setFill()
+                NSRect(x: x - line / 2, y: rect.minY, width: line, height: rect.height).fill()
+                x += grid
+            }
+            var y = (rect.minY / grid).rounded(.up) * grid
+            while y <= rect.maxY {
+                (y == 0 ? dim.withAlphaComponent(0.3) : faint).setFill()
+                NSRect(x: rect.minX, y: y - line / 2, width: rect.width, height: line).fill()
+                y += grid
+            }
+        }
+        let over: (NSRect) -> Void = { rect in
+            let attributes: [NSAttributedString.Key: Any] = [.font: labelFont, .foregroundColor: dim]
+            let pad = 3 / scale
+            var x = (rect.minX / grid).rounded(.up) * grid
+            while x <= rect.maxX {
+                ("\(Int(x))" as NSString).draw(at: NSPoint(x: x + pad, y: rect.minY + pad), withAttributes: attributes)
+                x += grid
+            }
+            var y = (rect.minY / grid).rounded(.up) * grid
+            while y <= rect.maxY {
+                if y > rect.minY + grid / 2 {
+                    ("\(Int(y))" as NSString).draw(at: NSPoint(x: rect.minX + pad, y: y + pad), withAttributes: attributes)
+                }
+                y += grid
+            }
+            if rect.width > visible.width + 1 || rect.height > visible.height + 1 {
+                let frame = NSBezierPath(rect: visible)
+                frame.lineWidth = 1.5 / scale
+                frame.setLineDash([6 / scale, 4 / scale], count: 2, phase: 0)
+                dim.setStroke()
+                frame.stroke()
+            }
+        }
+        guard let png = render(region, scale: scale, under: under, over: over) else { return nil }
+        return (png, region, scale, grid)
+    }
+
+    /// Zeichnet einen Weltausschnitt in ein Bitmap. Geflippter Kontext wie die View — sonst stünde Text kopf.
+    private func render(_ rect: NSRect, scale: CGFloat, under: ((NSRect) -> Void)?, over: ((NSRect) -> Void)?) -> Data? {
+        let pixelsWide = Int((rect.width * scale).rounded(.up)), pixelsHigh = Int((rect.height * scale).rounded(.up))
+        guard rect.width >= 1, rect.height >= 1, pixelsWide > 0, pixelsHigh > 0,
+              let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: pixelsWide, pixelsHigh: pixelsHigh,
                                          bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
-                                         colorSpaceName: .calibratedRGB, bytesPerRow: 0, bitsPerPixel: 0),
-              let context = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
-        rep.size = rect.size
+                                         colorSpaceName: .calibratedRGB, bytesPerRow: 0, bitsPerPixel: 0) else { return nil }
+        rep.size = NSSize(width: CGFloat(pixelsWide) / scale, height: CGFloat(pixelsHigh) / scale)
+        guard let base = NSGraphicsContext(bitmapImageRep: rep) else { return nil }
+        let context = NSGraphicsContext(cgContext: base.cgContext, flipped: true)
         NSGraphicsContext.saveGraphicsState()
         NSGraphicsContext.current = context
         let flip = NSAffineTransform()
-        flip.translateX(by: 0, yBy: rect.height)
+        flip.translateX(by: 0, yBy: rep.size.height)
         flip.scaleX(by: 1, yBy: -1)
         flip.translateX(by: -rect.minX, yBy: -rect.minY)
         flip.concat()
         paper.setFill()
         rect.fill()
+        under?(rect)
         drawStrokes(in: rect)
+        over?(rect)
+        context.flushGraphics()
         NSGraphicsContext.restoreGraphicsState()
         return rep.representation(using: .png, properties: [:])
     }
@@ -250,7 +394,7 @@ final class ScratchpadCanvas: NSView {
         guard let stroke = current else { return }
         current = nil
         strokes.append(stroke)
-        commit(.add(stroke))
+        commit(Edit(added: [stroke]))
     }
 
     /// Rechtsklick bzw. Zwei-Finger-Klick radiert, egal welches Werkzeug gewählt ist.
@@ -372,7 +516,7 @@ final class ScratchpadCanvas: NSView {
     private func endErase() {
         lastErasePoint = nil
         guard !erased.isEmpty else { return }
-        commit(.erase(erased))
+        commit(Edit(removed: erased))
         erased = []
     }
 
@@ -401,7 +545,8 @@ final class ScratchpadCanvas: NSView {
         }
     }
 
-    /// ⌘Z/⇧⌘Z, ⌘⌫ leeren, ⌘S als PNG sichern, ⌘C als Bild kopieren. Kachel-Kürzel (⌘W …) verteilt vorher die Hülle.
+    /// ⌘Z/⇧⌘Z, ⌘⌫ leeren, ⌘S als PNG sichern, ⌘C als Bild kopieren, ⇧⌘⏎ an Agent schicken. Kachel-Kürzel (⌘W …)
+    /// verteilt vorher die Hülle.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
         guard window?.firstResponder === self, mods == .command || mods == [.command, .shift] else {
@@ -409,6 +554,11 @@ final class ScratchpadCanvas: NSView {
         }
         let key = event.charactersIgnoringModifiers?.lowercased()
         let shift = mods.contains(.shift)
+        if key == "\r" || event.keyCode == 36 || event.keyCode == 76 {   // ⏎ / Ziffernblock-Enter
+            guard shift else { return super.performKeyEquivalent(with: event) }   // ⌘⏎ = Zoom (Hülle)
+            onSendRequest?(false)
+            return true
+        }
         switch (key, shift) {
         case ("z", false): undo()
         case ("z", true): redo()
@@ -446,8 +596,16 @@ final class ScratchpadCanvas: NSView {
 
     private func draw(_ stroke: ScratchStroke) {
         let color = palette[max(0, min(stroke.color, palette.count - 1))]
-        (stroke.marker ? color.withAlphaComponent(Self.markerAlpha) : color).setStroke()
-        stroke.path.stroke()
+        let ink = stroke.marker ? color.withAlphaComponent(Self.markerAlpha) : color
+        if let text = stroke.text {
+            (text as NSString).draw(at: stroke.textRect.origin, withAttributes: [.font: stroke.font, .foregroundColor: ink])
+        } else if stroke.filled {
+            ink.setFill()
+            stroke.path.fill()
+        } else {
+            ink.setStroke()
+            stroke.path.stroke()
+        }
     }
 
     // MARK: Zeiger — Kreis in Werkzeuggröße
@@ -492,15 +650,17 @@ final class ScratchpadCanvas: NSView {
 
 final class ScratchpadToolbar: NSView {
     weak var canvas: ScratchpadCanvas?
+    /// ➤ geklickt (true = mit ⌥).
+    var onSend: ((Bool) -> Void)?
     var vertical = true { didSet { if vertical != oldValue { needsDisplay = true; updateToolTips() } } }
 
     private enum Item {
-        case tool(ScratchTool), color(Int), size, undo, redo, clear, divider
+        case tool(ScratchTool), color(Int), size, undo, redo, clear, send, divider
     }
 
     private static let items: [Item] = [.tool(.pen), .tool(.marker), .tool(.eraser), .divider]
         + ScratchPalette.names.indices.map { .color($0) }
-        + [.divider, .size, .divider, .undo, .redo, .clear]
+        + [.divider, .size, .divider, .undo, .redo, .clear, .divider, .send]
 
     static let cell: CGFloat = 26
     private static let dividerSize: CGFloat = 7
@@ -529,6 +689,11 @@ final class ScratchpadToolbar: NSView {
         dim = theme.dim
         faint = theme.faint
         needsDisplay = true
+    }
+
+    /// Rechteck des Senden-Knopfs (Anker für das Auswahlmenü).
+    var sendRect: NSRect {
+        zip(Self.items, frames).first { if case .send = $0.0 { return true } else { return false } }?.1 ?? bounds
     }
 
     /// Rechteck je Eintrag entlang der Leiste.
@@ -566,6 +731,7 @@ final class ScratchpadToolbar: NSView {
         case .undo: "Rückgängig (⌘Z)"
         case .redo: "Wiederholen (⇧⌘Z)"
         case .clear: "Leeren (⌘⌫) — ⌘S sichert als PNG, ⌘C kopiert als Bild"
+        case .send: "An Claude/Codex schicken (⇧⌘⏎) — landet als Bild in deren Eingabe; ⌥-Klick: Ziel wählen"
         case .divider: nil
         }
     }
@@ -583,6 +749,7 @@ final class ScratchpadToolbar: NSView {
         case .undo: canvas.undo()
         case .redo: canvas.redo()
         case .clear: canvas.clear()
+        case .send: onSend?(event.modifierFlags.contains(.option))
         case .divider: break
         }
     }
@@ -647,6 +814,7 @@ final class ScratchpadToolbar: NSView {
             case .undo: drawSymbol("arrow.uturn.backward", in: rect, color: canvas.canUndo ? dim : faint)
             case .redo: drawSymbol("arrow.uturn.forward", in: rect, color: canvas.canRedo ? dim : faint)
             case .clear: drawSymbol("trash", in: rect, color: canvas.strokeCount > 0 ? dim : faint)
+            case .send: drawSymbol("paperplane", in: rect, color: canvas.strokeCount > 0 ? foreground : faint)
             case .divider:
                 let line = vertical
                     ? NSRect(x: rect.minX + 5, y: rect.midY - 0.5, width: rect.width - 10, height: 1)

@@ -14,7 +14,8 @@ Verwendung:
   latexterm new-pane [--cwd VERZEICHNIS] [--exec KOMMANDO] [--no-focus]
   latexterm new-pane --kind ART [--arg SCHLÜSSEL=WERT]… [--no-focus]
   latexterm pane-kinds
-  latexterm send [--pane ZIEL] [--no-enter] TEXT…
+  latexterm send [--pane ZIEL] [--no-enter] [--paste] TEXT…
+  latexterm call [--pane ZIEL] TEXT…            (TEXT „-“ = von stdin)
   latexterm zoom [--pane ZIEL]
   latexterm focus [--pane ZIEL]
   latexterm close-pane [--pane ZIEL] [--force]
@@ -24,6 +25,9 @@ Verwendung:
 ZIEL ist der 1-basierte Index aus `list-panes` oder eine Pane-UUID (auch Präfix).
 ART ist eine Kachelart aus `pane-kinds` (terminal, home, scratchpad, …); --cwd/--exec nur für terminal.
 send an eine App-Kachel reicht den Text an deren Inhalt (Scratchpad: `clear`, `undo`).
+--paste fügt in ein Terminal als Paste ein (bracketed paste) — ein Bildpfad wird in Claude Code/Codex zum Bild.
+call fragt eine App-Kachel und druckt ihre Antwort (Scratchpad: `look /pfad.png`, `clear claude`,
+`draw [replace=mats|claude|all]` + Zeilenumbruch + SVG — per stdin: `call --pane 2 - < zeichnung.txt`).
 Ohne --pane verwenden send/zoom/focus/close-pane $LATEXTERM_PANE_ID — also die Kachel,
 in deren Shell dieses Kommando läuft.
 
@@ -82,6 +86,7 @@ while !args.isEmpty {
         }
         request.args = (request.args ?? [:]).merging([String(pair[..<eq]): String(pair[pair.index(after: eq)...])]) { $1 }
     case "--no-enter": request.enter = false
+    case "--paste":    request.paste = true
     case "--force":    request.force = true
     case "--no-focus": request.focus = false
     case "--agent":    request.agent = value(for: arg)
@@ -104,6 +109,11 @@ case "list-panes", "zoom", "focus", "new-pane", "close-pane", "pane-kinds":
 case "send":
     guard !positional.isEmpty else { fail("send braucht einen Text\n\n\(usage)", code: 2) }
     request.text = positional.joined(separator: " ")
+case "call":
+    guard !positional.isEmpty else { fail("call braucht einen Text\n\n\(usage)", code: 2) }
+    request.text = positional == ["-"]
+        ? String(decoding: FileHandle.standardInput.readDataToEndOfFile(), as: UTF8.self)
+        : positional.joined(separator: " ")
 case "status":
     guard !positional.isEmpty else { fail("status braucht eine Payload\n\n\(usage)", code: 2) }
     guard (request.agent == nil && request.sessionID == nil && request.turnID == nil) ||
@@ -159,6 +169,8 @@ case "new-pane":
     if let pane = response.pane { print(describe(pane)) }
 case "pane-kinds":
     for kind in response.kinds ?? [] { print(kind) }
+case "call":
+    if let reply = response.reply { print(reply) }
 default:
     break   // send/zoom/focus/close-pane: Erfolg ist still (Unix-Konvention)
 }

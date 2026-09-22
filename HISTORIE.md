@@ -1,5 +1,24 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-22 (spät) — Scratchpad im Dialog: Senden an Agenten, Agent zeichnet mit
+
+**Anlass (Mats, per `/42`):** „Dualrichtung“ — schnell etwas rübergeben, und Claude soll selbst sauber hineinzeichnen können
+(„lösch das und zeichne eine professionelle Version drüber“). Plan: claude-werkstatt `plans/scratchpad-dialog_2026-09-22.md`.
+
+**Gebaut:** ➤/⇧⌘⏎ schreibt ein PNG nach `~/Library/Caches/LatexTerm/scratch-sends/` und fügt den Pfad als bracketed paste
+in die Ziel-Kachel ein (Öffner direkt, sonst NSMenu aller Agenten-Kacheln, fensterübergreifend über den Router), dann Fokus.
+Agent-Seite: `ScratchSVG.swift` übersetzt eine SVG-Teilmenge (Kurven/Bögen werden erst transformiert, dann abgetastet,
+Farben auf die 7 Theme-Farben gerundet, `marker-end` → Pfeilspitze) in `ScratchStroke`s mit `author = claude`; Modell v3
+(Autor, exakt/geglättet, gefüllt, gestrichelt, Text). Undo als ein Typ `Edit(removed, added)` — Ersetzen + Zeichnen = ein
+Schritt. `look` rendert Normalsicht ∪ Zeichnung mit Raster + Randbeschriftung, längste Seite ≤ 1400 px. Steuerkanal
+`call` (Pane/PaneContent `call`, Antwort `reply`), `send.paste`; MCP `scratch_look` (Bild als MCP-Image), `scratch_draw`,
+`scratch_clear`.
+
+**Lehren:** Bildpfad einfügen statt Ctrl+V — lässt die Zwischenablage in Ruhe und umgeht die Kitty-Tastaturkodierung; live
+geprüft: eine frische Claude-Session bekam den Pfad als Bild-Anhang („ANHANG: ja — Regelkreis …“). PNG-Kontext muss
+`flipped: true` sein, sonst stünde Text kopf. SVG ohne Farbe = Linie in Cyan statt schwarz gefüllt (Agenten meinen Linien).
+Renderprobe außerhalb der App mit Theme-Attrappe: Regelkreis mit Text, Pfeilen, Strichelung, Fläche sah aus wie gewollt.
+
 ## 2026-09-22 — Scratchpad: Mittelpunkt-Anker, Verschieben, Zoomen
 
 **Anlass (Mats):** Ein Scratchpad taucht in allen Kachelgrößen auf; nach ⌘⏎ klebte die Skizze oben links, und die Malfläche

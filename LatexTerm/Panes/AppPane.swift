@@ -54,8 +54,9 @@ final class AppPane: Pane, PaneContentDelegate {
     var closeGuard: CloseGuard { content.closeGuard }
 
     func handle(_ command: PaneCommand) -> Bool { content.handle(command) }
-    /// `enter` gilt nur für Kacheln mit Eingabezeile — ein Inhalt bekommt den Text, wie er ist.
-    func receive(_ text: String, enter: Bool) -> Bool { content.receive(text) }
+    /// `enter`/`paste` gelten nur für Kacheln mit Eingabezeile — ein Inhalt bekommt den Text, wie er ist.
+    func receive(_ text: String, enter: Bool, paste: Bool) -> Bool { content.receive(text) }
+    func call(_ text: String) throws -> String { try content.call(text) }
 
     func willClose() {
         content.willClose()
@@ -78,5 +79,13 @@ final class AppPane: Pane, PaneContentDelegate {
 
     func contentRequestsAttention(title: String, body: String?) {
         host?.paneRequestsAttention(self, title: title, body: body)
+    }
+
+    var contentOpener: String? { openedBy }
+
+    func contentAgentPanes() -> [PaneInfo] { host?.agentPanes() ?? [] }
+
+    func contentPaste(_ text: String, intoPaneID: String) -> Bool {
+        host?.paneRequestsPaste(text, intoPaneID: intoPaneID) ?? false
     }
 }

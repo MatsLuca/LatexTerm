@@ -1364,10 +1364,23 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
 
     /// Steuerkanal `send`: Text in die PTY (Kernel puffert, die Shell liest ihn nach dem Prompt).
     /// Home hat noch keine Shell, die ihn lesen könnte.
-    func receive(_ text: String, enter: Bool) -> Bool {
+    func receive(_ text: String, enter: Bool, paste: Bool) -> Bool {
         guard isStarted else { return false }
-        view.send(txt: text + (enter ? "\r" : ""))
+        // Einfügen wie ⌘V: nur in bracketed paste erkennt eine TUI (Claude Code, Codex) den Block als Paste —
+        // und macht aus einem Bildpfad ein Bild-Attachment. Ohne den Modus (nackte Shell) ist es normales Tippen.
+        if paste, view.terminal.bracketedPasteMode {
+            view.send(data: EscapeSequences.bracketedPasteStart[0...])
+            view.send(txt: text)
+            view.send(data: EscapeSequences.bracketedPasteEnd[0...])
+        } else {
+            view.send(txt: text)
+        }
+        if enter { view.send(txt: "\r") }
         return true
+    }
+
+    func call(_ text: String) throws -> String {
+        throw PaneArgsError("\(kind) beantwortet keine Abfragen (call) — Text per send")
     }
 
     /// Home bleibt Home; ein Terminal merkt sich Verzeichnis, Agenten-Session und Farbname — was

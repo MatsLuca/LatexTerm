@@ -811,6 +811,21 @@ extension TerminalSplitView: PaneHost {
         return fresh
     }
 
+    func agentPanes() -> [PaneInfo] {
+        ControlServer.shared.router.panes.filter { $0.runningAgent != nil }
+    }
+
+    /// Über den Router, damit es auch in Kacheln anderer Fenster geht: einfügen (ohne Enter), dann Fokus.
+    func paneRequestsPaste(_ text: String, intoPaneID: String) -> Bool {
+        var send = ControlRequest(cmd: "send", pane: intoPaneID)
+        send.text = text
+        send.enter = false
+        send.paste = true
+        guard ControlServer.shared.router.route(send).ok else { return false }
+        _ = ControlServer.shared.router.route(ControlRequest(cmd: "focus", pane: intoPaneID))
+        return true
+    }
+
     func paneRequestsFocus(paneID: String) {
         _ = ControlServer.shared.router.route(ControlRequest(cmd: "focus", pane: paneID))
     }
@@ -893,6 +908,18 @@ extension TerminalSplitView: ControlCommandHandler {
             }
             return ControlResponse(ok: true)
 
+        case "call":
+            guard let pane = resolvePane(request.pane ?? request.paneID) else {
+                return .failure("Kachel nicht gefunden: „\(request.pane ?? request.paneID ?? "kein Ziel angegeben")“ — `latexterm list-panes` zeigt Index und ID")
+            }
+            guard let text = request.text, !text.isEmpty else { return .failure("call braucht einen Text") }
+            do {
+                let reply = try pane.call(text)
+                return ControlResponse(ok: true, pane: info(for: pane), reply: reply)
+            } catch {
+                return .failure(String(describing: error))
+            }
+
         case "send", "zoom", "focus", "activate":
             guard let pane = resolvePane(request.pane ?? request.paneID) else {
                 return .failure("Kachel nicht gefunden: „\(request.pane ?? request.paneID ?? "kein Ziel angegeben")“ — `latexterm list-panes` zeigt Index und ID")
@@ -902,7 +929,7 @@ extension TerminalSplitView: ControlCommandHandler {
                 guard let text = request.text, !text.isEmpty else {
                     return .failure("send braucht einen Text")
                 }
-                guard pane.receive(text, enter: request.enter ?? true) else {
+                guard pane.receive(text, enter: request.enter ?? true, paste: request.paste ?? false) else {
                     return .failure(pane.kind == "home" ? "Home-Kachel hat noch keine Shell, die Text annimmt"
                                     : "Kachel (\(pane.kind)) versteht „\(text.prefix(40))“ nicht")
                 }
