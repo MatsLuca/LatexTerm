@@ -9,6 +9,10 @@ hineinklicken — und dieser Klick malte schon einen Punkt (in der Skizze fanden
 nicht in der `ScratchpadView`) — wie `acceptsFirstMouse = false` bei Fenstern, nur auf Kachel-Ebene. Gilt auch für Rechtsklick-
 Radieren; Werkzeugleiste bleibt sofort bedienbar. Verworfen: kurze Punkte nach Fokuswechsel wegheuristik — unscharf.
 
+**Lehre (erste Fassung scheiterte live):** In `mouseDown` zu fragen „habe ich den Fokus?“ ist immer ja — `NSWindow` macht die
+angeklickte View schon vor `mouseDown` zum First Responder. Jetzt merkt `becomeFirstResponder` sich den Zeitstempel des
+Klicks, der den Fokus gebracht hat, und `mouseDown` mit genau diesem Zeitstempel wird geschluckt.
+
 ## 2026-09-22 (spät) — Scratchpad im Dialog: Senden an Agenten, Agent zeichnet mit
 
 **Anlass (Mats, per `/42`):** „Dualrichtung“ — schnell etwas rübergeben, und Claude soll selbst sauber hineinzeichnen können

@@ -369,22 +369,29 @@ final class ScratchpadCanvas: NSView {
     /// Erstklick-Regel: Klick in eine Kachel, die nicht den Fokus hat, holt nur den Fokus und malt nicht —
     /// sonst hinterlässt jedes „reinklicken, um ⌘⏎ zu drücken" einen Punkt. Gilt bis zum Loslassen.
     private var focusClick = false
+    /// Zeitstempel des Klicks, der uns den Fokus gebracht hat. AppKit macht die angeklickte View schon
+    /// VOR `mouseDown` zum First Responder — in `mouseDown` ist der Fokus also immer schon da.
+    private var focusedByClickAt: TimeInterval?
 
-    /// Hat diese Scratchpad-Kachel (Fläche oder Werkzeugleiste) gerade den Fokus?
-    private var hasPaneFocus: Bool {
-        guard let responder = window?.firstResponder as? NSView else { return false }
-        return responder.isDescendant(of: superview ?? self)
+    override func becomeFirstResponder() -> Bool {
+        let ok = super.becomeFirstResponder()
+        if ok, let event = NSApp.currentEvent, [.leftMouseDown, .rightMouseDown].contains(event.type),
+           event.window === window, hitTest(superview?.convert(event.locationInWindow, from: nil) ?? .zero) === self {
+            focusedByClickAt = event.timestamp
+        }
+        return ok
     }
 
     /// Nimmt den Fokus; true = der Klick war nur zum Fokussieren und wird geschluckt.
-    private func takeFocusClick() -> Bool {
-        focusClick = !hasPaneFocus
+    private func takeFocusClick(_ event: NSEvent) -> Bool {
         window?.makeFirstResponder(self)
+        focusClick = focusedByClickAt == event.timestamp
+        focusedByClickAt = nil
         return focusClick
     }
 
     override func mouseDown(with event: NSEvent) {
-        if takeFocusClick() { return }
+        if takeFocusClick(event) { return }
         let p = point(event)
         if tool == .eraser { beginErase(at: p); return }
         let width = tool == .marker ? Self.markerWidths[sizeIndex] : Self.penWidths[sizeIndex]
@@ -418,7 +425,7 @@ final class ScratchpadCanvas: NSView {
 
     /// Rechtsklick bzw. Zwei-Finger-Klick radiert, egal welches Werkzeug gewählt ist.
     override func rightMouseDown(with event: NSEvent) {
-        if takeFocusClick() { return }
+        if takeFocusClick(event) { return }
         beginErase(at: point(event))
     }
     override func rightMouseDragged(with event: NSEvent) { if !focusClick { continueErase(to: point(event)) } }
