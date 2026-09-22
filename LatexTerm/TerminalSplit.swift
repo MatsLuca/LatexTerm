@@ -2,53 +2,6 @@ import AppKit
 import os
 import SwiftTerm
 
-/// Äußere Hülle einer Terminal-Kachel: trägt abgerundete Ecken, Fokus-Rahmen und
-/// Dimmung und hält den Terminal-Inhalt per Innenabstand von der Kante weg —
-/// SwiftTerm zeichnet ab x=0, ohne Inset klebte der Text Pixel an Pixel am Rahmen.
-/// Das Inset lebt bewusst HIER statt im Fork: Zeichnen, Maus-Koordinaten und die
-/// Overlay-Grid→Pixel-Mathematik nehmen alle den Terminal-Ursprung 0 an.
-final class PaneContainerView: NSView {
-    /// Innenabstand aus den Darstellungs-Einstellungen (`ThemeStore.padding`, Runde 28).
-    static var contentInset: CGFloat { ThemeStore.shared.padding }
-    override var isFlipped: Bool { true }
-
-
-    /// Ziel einer laufenden (animierten) Umsortierung. Solange gesetzt, ignorieren
-    /// die per Animations-Tick eintrudelnden Zwischengrößen die Subviews.
-    private var pinnedTargetSize: NSSize?
-
-    /// Terminal SOFORT auf die Ziel-Geometrie der Umsortierung setzen; die Hülle
-    /// animiert hinterher und gibt den Inhalt progressiv frei (masksToBounds).
-    /// Ohne das Pinning setzte `animator().frame` den Frame pro Animations-Tick
-    /// (~13× in 0,22s) → ebenso viele PTY-Resizes: SwiftTerm reflowt bei JEDER
-    /// Spaltenänderung den kompletten Scrollback (verlustbehaftet über
-    /// Zwischenbreiten!), und laufende TUIs zeichnen bei jeder Zwischenbreite neu —
-    /// deren Fragmente vermüllen den Scrollback dauerhaft.
-    func pinContent(forTargetSize target: NSSize) {
-        let inner = NSRect(origin: .zero, size: target)
-            .insetBy(dx: Self.contentInset, dy: Self.contentInset)
-        guard inner.width > 0, inner.height > 0 else { pinnedTargetSize = nil; return }
-        pinnedTargetSize = target
-        for sub in subviews { sub.frame = inner }
-    }
-
-    override func setFrameSize(_ newSize: NSSize) {
-        super.setFrameSize(newSize)
-        // Die Pille folgt jeder Zwischengröße (gleitet in der Animation mit).
-        if let target = pinnedTargetSize {
-            // Zwischengröße der Animation → Inhalt steht schon auf dem Ziel.
-            // Ziel erreicht → Pin lösen (jede Umsortierung pinnt ohnehin neu).
-            if newSize == target { pinnedTargetSize = nil }
-            return
-        }
-        // Direkter Frame-Set außerhalb einer Umsortierung (Robustheits-Fallback):
-        // synchron mitziehen, damit der Inhalt der Hülle nie einen Tick hinterherläuft.
-        let inner = bounds.insetBy(dx: Self.contentInset, dy: Self.contentInset)
-        guard inner.width > 0, inner.height > 0 else { return }
-        for sub in subviews { sub.frame = inner }
-    }
-}
-
 /// Eine einzelne Terminal-Kachel: eigener Shell-Prozess, eigener OverlayController
 /// (= eigene LaTeX-Overlays). Mehrere Panes leben nebeneinander in `TerminalSplitView`.
 /// Übernimmt die Rolle, die früher der `TerminalContainer.Coordinator` für das einzelne
@@ -70,19 +23,6 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private let controller: OverlayController
     private var themeObserver: NSObjectProtocol?
     private var cockpitObserver: NSObjectProtocol?
-    /// Aktueller Fokus-Zustand (vom `onFocusChanged`-Callback gepflegt).
-    private var hasFocus = false
-    /// Fokus-Rahmen nur zeigen, wenn es mehrere Kacheln gibt — bei einer einzelnen
-    /// umrandet er nur das ganze Fenster und erklärt nichts. Setzt die Split-View.
-    var showsFocusBorder = true {
-        didSet { if showsFocusBorder != oldValue { applyFocusStyle(animated: false) } }
-    }
-    /// Diese Kachel füllt das ganze Fenster — gezoomt (#26) ODER die einzige
-    /// Kachel: voller Akzent-Rahmen statt Fokus-Abstufung, der Rahmen ist dann
-    /// die Session-Farbkennung des Fensters. Setzt die Split-View.
-    var fillsWindow = false {
-        didSet { if fillsWindow != oldValue { applyFocusStyle(animated: false) } }
-    }
 
     /// Private OSC-Sequenz für In-Band-Steuerung dieser Pane (#24, Fundament für #25/#27):
     /// `printf '\e]5522;accent=#RRGGBB\a'` in der Pane-Shell setzt die Akzentfarbe.
@@ -93,19 +33,20 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Per-Pane-Akzent-Override (OSC `accent=…`): überstimmt die globale Akzentfarbe
     /// für Caret/Fokus-Rahmen DIESER Kachel bis `accent=reset` oder Pane-Ende.
     private var accentOverride: NSColor? {
-        didSet { applyAccent(); applyFocusStyle(animated: false) }
+        didSet { applyAccent() }
     }
     /// Passiv erkannte TUI-Rahmenfarbe dieser Kachel (#24): Claude Code & Co.
     /// zeichnen ihre Box-Rahmen (`╭────╮`) in der Session-Akzentfarbe. Nur aktiv
     /// im adaptiven Modus; schwächer als ein expliziter OSC-Override.
     private var borderAccent: NSColor? {
-        didSet { applyAccent(); applyFocusStyle(animated: false) }
+        didSet { applyAccent() }
     }
-    /// Wirksame Akzentfarbe dieser Kachel: OSC-Override > erkannter Rahmen > global.
-    var effectiveAccent: NSColor { accentOverride ?? borderAccent ?? ThemeStore.shared.accentColor }
+    /// Wirksame Akzentfarbe dieser Kachel: OSC-Override > erkannter Rahmen > global
+    /// (die Hülle rechnet sie aus `ownAccent`, eine Quelle für Rahmen, Chip und Caret).
+    var effectiveAccent: NSColor { container.effectiveAccent }
     /// Pane-EIGENE Farbe (Override oder erkannt) — nil, wenn die Kachel nur der
-    /// globalen Farbe folgt. Steuert Hüll-Tint und Session-Persistierung.
-    var paneAccent: NSColor? { accentOverride ?? borderAccent }
+    /// globalen Farbe folgt. Steuert den Hüll-Tint.
+    private var paneAccent: NSColor? { accentOverride ?? borderAccent }
     /// Optik dieser Kachel hat sich geändert (Akzent/Fokus) → Titlebar-HUD & Co.
     var onStyleChanged: (() -> Void)?
 
@@ -330,8 +271,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         }
         home.onFocusChanged = { [weak self] focused in
             guard let self else { return }
-            self.hasFocus = focused
-            self.applyFocusStyle(animated: true)
+            self.container.hasFocus = focused
+            self.onStyleChanged?()
             if focused { self.view.window?.title = "LatexTerm — Projekte" }
         }
         container.addSubview(home)
@@ -540,14 +481,11 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         term.getTerminal().setCursorStyle(store.cursorBlink ? .blinkBlock : .steadyBlock)
     }
 
-    /// Theme-Wechsel zur Laufzeit: Terminal, Hülle und Home-Kachel nachziehen.
+    /// Theme-Wechsel zur Laufzeit: Terminal und Home-Kachel nachziehen (die Hülle hört selbst).
     private func applyTheme() {
         let theme = ThemeStore.shared.theme
         Self.applyTheme(theme, to: view)
-        // Padding-Änderung: Inhalt neu einpassen (setFrameSize rechnet den Inset frisch).
-        container.setFrameSize(container.frame.size)
-        applyAccent()   // Hüll-Tint auf dem neuen Grund, Caret (Akzent oder Theme-Cursor)
-        applyFocusStyle(animated: false)   // Rahmen an/aus
+        applyAccent()   // Caret (Akzent oder Theme-Cursor)
         updateRainbowTimer()
         homeView?.applyTheme(theme)
         view.needsDisplay = true
@@ -565,17 +503,9 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         term.caretColor = store.accentColor
         term.extraLineSpacing = store.lineSpacing
 
-        // Kachel-Styling (Ecken/Rahmen/Dimmung) liegt auf der Container-Hülle;
-        // ihr Hintergrund füllt das Content-Inset in der Terminal-Farbe auf.
+        // Kachel-Styling (Ecken/Rahmen/Dimmung/Tint) liegt auf der Hülle; ihr Grund füllt
+        // das Content-Inset in der Terminal-Farbe auf. Unfokussiert = abgedunkelt.
         let box = PaneContainerView()
-        box.wantsLayer = true
-        box.layer?.cornerRadius = 8
-        box.layer?.masksToBounds = true
-        box.layer?.backgroundColor = term.nativeBackgroundColor.cgColor
-        box.layer?.borderWidth = 0
-        box.layer?.borderColor = store.accentColor.withAlphaComponent(0.65).cgColor
-        // Kachel ist standardmäßig inaktiv (abgedunkelt), bis sie fokussiert wird
-        box.alphaValue = store.focusDimming ? 0.65 : 1.0
         box.addSubview(term)
 
         self.view = term
@@ -586,8 +516,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         // Fokus-Visualisierung
         term.onFocusChanged = { [weak self] focused in
             guard let self else { return }
-            self.hasFocus = focused
-            self.applyFocusStyle(animated: true)
+            self.container.hasFocus = focused
+            self.onStyleChanged?()
             // Fokuswechsel übernimmt den zuletzt von DIESER Shell gemeldeten Titel (#21).
             if focused { self.applyStoredTitle() }
         }
@@ -713,8 +643,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                 self.updateRainbowTimer()
                 self.view.needsDisplay = true
             case .panes:
-                self.applyAccent()
-                self.applyFocusStyle(animated: true)
+                break   // Rahmen/Dimmung/Tint: die Hülle hört selbst
             }
         }
     }
@@ -927,46 +856,11 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         }
     }
 
-    /// Caret, Rahmenfarbe und Hüll-Tint auf die wirksame Akzentfarbe setzen.
-    /// Der Tint (Terminal-BG leicht Richtung Akzent) greift nur bei Pane-EIGENER
-    /// Farbe — ein globaler Tint auf allen Kacheln gleich würde nichts erklären.
-    /// Bewusst nur die Hülle (das 4px-Inset-Band): der Terminal-BG selbst muss
-    /// unangetastet bleiben, die Formel-Masken malen exakt in seiner Farbe.
+    /// Eigene Farbe an die Hülle (Rahmen + Tint rechnet sie), Caret und Chip nachziehen.
     private func applyAccent() {
+        container.ownAccent = paneAccent
         view.caretColor = ThemeStore.shared.cursorThemeColor ? ThemeStore.shared.theme.cursor : effectiveAccent
-        container.layer?.borderColor = effectiveAccent.withAlphaComponent(0.65).cgColor
-        let bg = view.nativeBackgroundColor
-        let hull = ThemeStore.shared.paneBorders
-            ? (paneAccent.flatMap { bg.blended(withFraction: 0.12, of: $0) } ?? bg) : bg
-        container.layer?.backgroundColor = hull.cgColor
         updateStatusBadge()   // Pille trägt die Akzentfarbe mit (#25 v2)
-        onStyleChanged?()
-    }
-
-    /// Dimmung immer. Rahmen bei ≥2 Kacheln (`showsFocusBorder`) auf JEDER Kachel
-    /// in ihrer Akzentfarbe (Session-Identität auf einen Blick) — die fokussierte
-    /// kräftiger und dicker, unfokussierte dünn und zurückgenommen.
-    private func applyFocusStyle(animated: Bool) {
-        let alpha: CGFloat = (hasFocus || !ThemeStore.shared.focusDimming) ? 1.0 : 0.65
-        // Fenster-füllend (gezoomt oder einzige Kachel): voller Akzent — der
-        // Rahmen IST dann die Session-Kennung; sonst Fokus-Abstufung im Grid.
-        var borderWidth: CGFloat = fillsWindow ? 2.0 : (showsFocusBorder ? (hasFocus ? 1.5 : 1.0) : 0)
-        if !ThemeStore.shared.paneBorders { borderWidth = 0 }   // Darstellung → „Kachel-Akzentrahmen“ aus
-        let borderColor = effectiveAccent.withAlphaComponent(
-            fillsWindow ? 1.0 : (hasFocus ? 0.65 : 0.35)).cgColor
-        if animated {
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.18
-                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                container.animator().alphaValue = alpha
-                container.layer?.borderColor = borderColor
-                container.layer?.borderWidth = borderWidth
-            }
-        } else {
-            container.alphaValue = alpha
-            container.layer?.borderColor = borderColor
-            container.layer?.borderWidth = borderWidth
-        }
         onStyleChanged?()
     }
 
@@ -1895,9 +1789,10 @@ final class TerminalSplitView: NSView {
     private func updateFocusBorders() {
         let multi = panes.count > 1 && zoomedPane == nil
         for pane in panes {
-            pane.showsFocusBorder = multi
-            pane.fillsWindow = (panes.count == 1) || (pane === zoomedPane)
+            pane.container.showsFocusBorder = multi
+            pane.container.fillsWindow = (panes.count == 1) || (pane === zoomedPane)
         }
+        updateTitlebarHUD()
     }
 
     // MARK: - Zoom (#26)
