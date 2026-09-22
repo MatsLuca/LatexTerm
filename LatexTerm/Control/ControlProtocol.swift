@@ -78,7 +78,7 @@ struct PaneInfo: Codable {
     var args: [String: String]? = nil
     /// Terminal: Vordergrundprozess (claude, vim, npm …); nil = Shell-Prompt oder keine Shell.
     var foreground: String? = nil
-    /// Kachel, von der aus diese per Steuerkanal/MCP geöffnet wurde (UUID); überlebt ⌥⌘R.
+    /// "user" = von Hand geöffnet; sonst UUID der Kachel, aus der ein Agent sie geöffnet hat.
     var openedBy: String? = nil
 }
 

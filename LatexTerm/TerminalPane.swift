@@ -12,7 +12,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     /// referenzieren die Ziel-Pane darüber (der Klick kommt Sekunden später,
     /// wenn Indizes längst verschoben sein können).
     let id: UUID
-    var openedBy: UUID?
+    var openedBy: String?
 
     /// Passiv erkannter Zustand der Claude-Code-Session in dieser Pane (#30).
     /// `none` = kein CC-typisches UI im Blick (nackte Shell, fremde TUI).

@@ -29,9 +29,10 @@ protocol Pane: AnyObject {
     var closeGuard: CloseGuard { get }
     /// Rückkanal zur Split-View; die Kachel hält ihn schwach.
     var host: PaneHost? { get set }
-    /// Kachel, von der aus diese geöffnet wurde (Steuerkanal/MCP) — bleibt über ⌥⌘R erhalten, damit ein
-    /// Agent „seine“ Kacheln auch nach dem Neustart wiedererkennt; nil = von Hand oder unbekannt.
-    var openedBy: UUID? { get set }
+    /// Wer die Kachel geöffnet hat — `PaneOpener.user` (Menü, Tastatur, Home) oder die UUID der Kachel,
+    /// aus der ein Agent sie per Steuerkanal/MCP geöffnet hat; nil = unbekannt (alter Snapshot).
+    /// Bleibt über ⌥⌘R erhalten, damit ein Agent „seine“ und Mats' Kacheln wiedererkennt.
+    var openedBy: String? { get set }
 
     /// Menü-Aktion, die die Kachel selbst ausführt (⌘F-Suche); false = nicht zuständig.
     func handle(_ command: PaneCommand) -> Bool
@@ -50,6 +51,12 @@ protocol Pane: AnyObject {
 // Zeichen vertippt, bekäme still den Default (⌘F täte nichts, `send` schluckte Text). Es gibt
 // nur wenige Konformer (`TerminalPane`, künftig der Wirt für App-Kacheln); Defaults für
 // Inhalte gehören auf deren eigenes Protokoll.
+
+/// Werte für `Pane.openedBy` neben einer Kachel-UUID.
+enum PaneOpener {
+    /// Von Hand geöffnet (Menü, ⌘T/⌘N/⌘1–9, Home, Quickstart).
+    static let user = "user"
+}
 
 /// Was die Titelleiste über eine Kachel zeigt (Chip = Punkt in Kachelfarbe + Text, 15.09.2026).
 /// Drei Textlängen — die HUD wählt je nach Fokus und Kachelzahl; alle nil = nur der Punkt.

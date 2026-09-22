@@ -599,6 +599,7 @@ final class MCPServer {
         if pane.focused { marks.append("fokussiert") }
         if pane.zoomed { marks.append("gezoomt") }
         if isMine(pane) { marks.append("von dir geöffnet") }
+        else if pane.openedBy == "user" { marks.append("vom Nutzer geöffnet") }
         if !marks.isEmpty { parts.append(marks.joined(separator: ", ")) }
         if let title = pane.title, !title.isEmpty, (pane.kind ?? "terminal") != "terminal" {
             parts.append("„\(title.prefix(60))“")

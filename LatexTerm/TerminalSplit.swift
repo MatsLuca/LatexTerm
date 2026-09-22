@@ -179,7 +179,7 @@ final class TerminalSplitView: NSView {
     private func windowSnapshot() -> SessionSnapshot.Window {
         SessionSnapshot.Window(entries: panes.map { pane in
             (snapshot: pane.snapshot().map {
-                var s = $0; s.id = pane.id.uuidString; s.openedBy = pane.openedBy?.uuidString; return s
+                var s = $0; s.id = pane.id.uuidString; s.openedBy = pane.openedBy; return s
             }, focused: isFocused(pane), zoomed: pane === zoomedPane)
         })
     }
@@ -219,7 +219,7 @@ final class TerminalSplitView: NSView {
                                                           cwd: cwd, accentName: accentName))
             pane = home
         }
-        pane.openedBy = saved.openedBy.flatMap(UUID.init(uuidString:))
+        pane.openedBy = saved.openedBy
         return pane
     }
 
@@ -395,6 +395,8 @@ final class TerminalSplitView: NSView {
     /// Kachel soll sichtbar im Grid entstehen, nicht unsichtbar unter der gezoomten (⌘T/⌘1–9-Policy).
     private func mount(_ pane: any Pane) {
         pane.host = self
+        // Standard: von Hand geöffnet. Steuerkanal (Agent) und Restore setzen es danach selbst.
+        pane.openedBy = PaneOpener.user
         setZoomedPane(nil)
         panes.append(pane)
         updateTitlebarHUD()
@@ -834,7 +836,7 @@ extension TerminalSplitView: ControlCommandHandler {
 
         case "new-pane":
             // Wer öffnet: die Kachel des Aufrufers (CLI/MCP schicken ihre LATEXTERM_PANE_ID mit).
-            let opener = request.paneID.flatMap(UUID.init(uuidString:))
+            let opener = request.paneID.flatMap(UUID.init(uuidString:))?.uuidString
             let kind = request.kind ?? "terminal"
             let args = request.args ?? [:]
             if kind != "terminal", request.cwd != nil || request.exec != nil {
@@ -942,7 +944,7 @@ extension TerminalSplitView: ControlCommandHandler {
                         title: String(pane.title.prefix(120)),
                         args: terminal == nil ? pane.snapshot()?.args : nil,
                         foreground: terminal?.foregroundProcessName,
-                        openedBy: pane.openedBy?.uuidString)
+                        openedBy: pane.openedBy)
     }
 
     /// Löst den Ziel-Selektor des CLI auf eine Kachel auf. Semantik: reine Ziffern

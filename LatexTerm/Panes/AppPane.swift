@@ -6,7 +6,7 @@ import AppKit
 /// ein Inhalt schreibt nur, was er wirklich hat.
 final class AppPane: Pane, PaneContentDelegate {
     let id: UUID
-    var openedBy: UUID?
+    var openedBy: String?
     let content: any PaneContent
     let container = PaneContainerView()
     weak var host: PaneHost?
