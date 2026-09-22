@@ -62,8 +62,6 @@ final class LatexTerminalView: LocalProcessTerminalView {
     var onEnsurePaneCount: ((Int) -> Void)?
     /// Cmd+⏎: diese Kachel über das ganze Fenster zoomen bzw. zurück ins Grid (#26).
     var onZoomRequested: (() -> Void)?
-    /// Fokus-Änderung an den Kachel-Controller melden.
-    var onFocusChanged: ((Bool) -> Void)?
     /// BEL (\a) vom Kindprozess — Claude Codes Standard-Notification-Kanal
     /// (`preferredNotifChannel: terminal_bell`), präziser Sofort-Auslöser für #30.
     var onBell: (() -> Void)?
@@ -268,18 +266,6 @@ final class LatexTerminalView: LocalProcessTerminalView {
         guard desired.fontName != font.fontName || size != font.pointSize else { return }
         font = desired
         onNeedsFullRescan?()
-    }
-
-    override func becomeFirstResponder() -> Bool {
-        let ok = super.becomeFirstResponder()
-        if ok { onFocusChanged?(true) }
-        return ok
-    }
-
-    override func resignFirstResponder() -> Bool {
-        let ok = super.resignFirstResponder()
-        if ok { onFocusChanged?(false) }
-        return ok
     }
 
     // MARK: - Accessibility (Dictation-Support, z.B. SuperWhisper)

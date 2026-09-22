@@ -324,8 +324,6 @@ final class HomePaneView: NSView {
     var onClose: (() -> Void)?
     /// ⌘⏎ — Zoom wie bei Terminal-Kacheln (#26).
     var onZoom: (() -> Void)?
-    /// First-Responder-Wechsel (Baum oder Aktionen) → Kachel-Dimmung.
-    var onFocusChanged: ((Bool) -> Void)?
     /// (CWD, Claude-Status) der anderen gestarteten Kacheln → ● im Baum.
     var otherPanes: (() -> [HomePaneInfo])?
     /// Sprung zu einer laufenden Kachel (CWD) — Fokus + ggf. Zoom wandert dorthin.
@@ -1219,7 +1217,6 @@ final class HomePaneView: NSView {
         ])
     }
 
-    private var focusInside = false
     /// Wird vom KVO auf `window.firstResponder` und von den Tabellen selbst gerufen — idempotent.
     private func focusDidChange() {
         let fr = window?.firstResponder as? NSView
@@ -1237,7 +1234,6 @@ final class HomePaneView: NSView {
         // Während des Starts ist die Kachel fokussiert (Vorhang = First Responder), aber das
         // Home-Menü hat nichts zu tun — als „aktiv" gilt sie erst wieder danach.
         HomeFocus.shared.set(self, focused: inside && !isLaunching)
-        if inside != focusInside { focusInside = inside; onFocusChanged?(inside) }
     }
 
     // MARK: Kontingente

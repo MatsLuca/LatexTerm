@@ -269,12 +269,6 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             guard let self else { return }
             self.onZoomRequested?(self)
         }
-        home.onFocusChanged = { [weak self] focused in
-            guard let self else { return }
-            self.container.hasFocus = focused
-            self.onStyleChanged?()
-            if focused { self.view.window?.title = "LatexTerm — Projekte" }
-        }
         container.addSubview(home)
         homeView = home
     }
@@ -512,15 +506,6 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         self.container = box
         self.controller = OverlayController(terminal: term)
         super.init()
-
-        // Fokus-Visualisierung
-        term.onFocusChanged = { [weak self] focused in
-            guard let self else { return }
-            self.container.hasFocus = focused
-            self.onStyleChanged?()
-            // Fokuswechsel übernimmt den zuletzt von DIESER Shell gemeldeten Titel (#21).
-            if focused { self.applyStoredTitle() }
-        }
 
         term.processDelegate = self
         term.onRangeChanged = { [weak self, weak controller] startY, endY in
@@ -866,12 +851,6 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     private var contrastPending = false
 
-    /// Ist diese Kachel gerade fokussiert (First Responder im oder unterm Terminal-View)?
-    private var isFocused: Bool {
-        let fr = container.window?.firstResponder
-        return (fr === view) || ((fr as? NSView)?.isDescendant(of: container) ?? false)
-    }
-
     /// 0,3-s-Sammelticker für alle billigen Grid-Scans (Rahmenfarbe #24,
     /// Session-Status #30); die teure Pixel-Analyse behält darin ihren
     /// 1,8-s-Mindestabstand über `lastPixelAnalysis`.
@@ -903,7 +882,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             // Stufe 2 (global): Pixel-Kontrastanalyse — nur die fokussierte
             // Kachel darf die globale Akzentfarbe anpassen!
             let now = CACurrentMediaTime()
-            if self.isFocused, now - self.lastPixelAnalysis > 1.8 {
+            if self.container.hasFocus, now - self.lastPixelAnalysis > 1.8 {
                 self.lastPixelAnalysis = now
                 self.analyzeContrast()
             }
@@ -1420,19 +1399,19 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     func sizeChanged(source: LocalProcessTerminalView, newCols: Int, newRows: Int) {
         controller.scheduleRescan()
     }
-    /// Zuletzt von der Shell dieser Kachel gemeldeter Titel (für Fokuswechsel-Übernahme).
+    /// Zuletzt von der Shell dieser Kachel gemeldeter Titel.
     private var lastTitle = ""
 
-    /// Nur die FOKUSSIERTE Kachel darf den Fenstertitel setzen (#21) — sonst gewinnt
-    /// bei mehreren Panes der letzte Schreiber, unabhängig davon, wo man arbeitet.
-    /// Unfokussierte Panes merken sich den Titel; der Fokuswechsel holt ihn nach.
-    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
-        lastTitle = title
-        if isFocused { applyStoredTitle() }
+    /// Fenstertitel, solange diese Kachel fokussiert ist. Den Fenstertitel setzt nur die
+    /// Split-View (#21: sonst gewänne bei mehreren Kacheln der letzte Schreiber).
+    var title: String {
+        if isStarted, !lastTitle.isEmpty { return lastTitle }
+        return isHome ? "LatexTerm — Projekte" : "LatexTerm"
     }
 
-    fileprivate func applyStoredTitle() {
-        view.window?.title = lastTitle.isEmpty ? "LatexTerm" : lastTitle
+    func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
+        lastTitle = title
+        onStyleChanged?()
     }
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
     func processTerminated(source: TerminalView, exitCode: Int32?) {
@@ -1618,6 +1597,7 @@ final class TerminalSplitView: NSView {
 
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
+        firstResponderObservation = nil
         guard let window = window else { return }
 
         // Kaltstart per URL/Dock-Plugin: die Anforderung kam, bevor es ein Fenster gab.
@@ -1649,6 +1629,12 @@ final class TerminalSplitView: NSView {
         // Steuerkanal (#28): dieses Fenster als Ziel für `latexterm`-Kommandos.
         ControlServer.shared.register(self)
 
+        // Die eine Fokus-Wahrheit: der First Responder des Fensters. Keine Inhaltsansicht
+        // meldet Fokus selbst — ein WKWebView könnte das gar nicht (innerer Responder).
+        firstResponderObservation = window.observe(\.firstResponder, options: [.initial, .new]) { [weak self] _, _ in
+            self?.syncFocus()
+        }
+
         // Dock-Streifen-Bug: bei automatisch ausgeblendetem Dock meldet AppKit
         // zeitweise ein `visibleFrame`, das unten noch die Dock-Höhe reserviert;
         // Kantenziehen und Rectangle-„Maximize“ enden dann ~80 px über dem Rand.
@@ -1668,6 +1654,29 @@ final class TerminalSplitView: NSView {
 
     private var dockGapObserver: NSObjectProtocol?
     private var dockGapMoveObserver: NSObjectProtocol?
+    private var firstResponderObservation: NSKeyValueObservation?
+
+    /// First Responder hat gewechselt: jede Hülle erfährt, ob sie ihn enthält (die Hülle
+    /// animiert nur bei echter Änderung — ein Wechsel innerhalb einer Kachel, etwa in die
+    /// ⌘F-Suchleiste, flackert nicht), dann Fenstertitel und Titelleiste nachziehen.
+    private func syncFocus() {
+        for pane in panes { pane.container.hasFocus = isFocused(pane) }
+        updateWindowTitle()
+        updateTitlebarHUD()
+    }
+
+    /// Fenstertitel = Titel der fokussierten Kachel; ohne Fokus in einer Kachel bleibt er stehen.
+    private func updateWindowTitle() {
+        guard let window, let pane = panes.first(where: { isFocused($0) }) else { return }
+        let title = pane.title
+        if window.title != title { window.title = title }
+    }
+
+    /// Kachel meldet neue Optik oder neuen Titel.
+    private func paneStyleChanged() {
+        updateWindowTitle()
+        updateTitlebarHUD()
+    }
 
     /// Fenster füllt Breite und Oberkante des sichtbaren Bereichs, endet aber
     /// genau auf dessen Unterkante, obwohl das Dock automatisch ausgeblendet ist
@@ -1724,7 +1733,7 @@ final class TerminalSplitView: NSView {
             fresh.launch(in: dir, command: cmd, label: label, followUps: followUps, accent: accent, accentName: accentName, integration: integration)
         }
         pane.resolveLaunchAccentName = { [weak self, weak pane] w, alts, pal in self?.distinctAccentName(w, alternatives: alts, palette: pal, excluding: pane) ?? w }
-        pane.onStyleChanged = { [weak self] in self?.updateTitlebarHUD() }
+        pane.onStyleChanged = { [weak self] in self?.paneStyleChanged() }
         pane.onSessionAwaitingInput = { [weak self] p in self?.notifySessionAwaiting(p) }
         pane.onAttentionSignal = { [weak self] p, title, body in
             self?.notifyAttention(p, title: title, body: body)
