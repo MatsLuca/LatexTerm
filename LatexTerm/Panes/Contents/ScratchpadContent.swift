@@ -201,42 +201,19 @@ final class ScratchpadContent: PaneContent {
             root.showNote("Noch nichts gezeichnet")
             return
         }
-        let agents = delegate?.contentAgentPanes() ?? []
-        guard !agents.isEmpty else {
+        switch AgentHandoff.target(delegate, choose: choose) {
+        case .none(let reason):
             NSSound.beep()
-            root.showNote("Keine Claude- oder Codex-Kachel offen")
-            return
-        }
-        if !choose, let opener = delegate?.contentOpener,
-           let owner = agents.first(where: { $0.id.caseInsensitiveCompare(opener) == .orderedSame }) {
-            deliver(to: owner)
-            return
-        }
-        showPicker(agents)
-    }
-
-    private func showPicker(_ agents: [PaneInfo]) {
-        let menu = NSMenu()
-        menu.autoenablesItems = false
-        let header = NSMenuItem(title: "Skizze an …", action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
-        let opener = delegate?.contentOpener
-        for (position, pane) in agents.enumerated() {
-            let agent = pane.runningAgent == "codex" ? "Codex" : "Claude"
-            let folder = pane.cwd.map { ($0 as NSString).lastPathComponent } ?? "?"
-            let state = ["working": "arbeitet", "awaitingInput": "wartet auf dich", "ready": "bereit"][pane.state]
-            var title = "Kachel \(pane.index) · \(agent) · \(folder)"
-            if let state { title += " — \(state)" }
-            if let opener, pane.id.caseInsensitiveCompare(opener) == .orderedSame { title += " (hat es geöffnet)" }
-            let item = ClosureMenuItem(title: title, keyEquivalent: position < 9 ? "\(position + 1)" : "") { [weak self] in
+            root.showNote(reason)
+        case .direct(let pane):
+            deliver(to: pane)
+        case .choose(let agents):
+            let menu = AgentHandoff.menu(agents, header: "Skizze an …", opener: delegate?.contentOpener) { [weak self] pane in
                 self?.deliver(to: pane)
             }
-            item.keyEquivalentModifierMask = []
-            menu.addItem(item)
+            let anchor = root.sendAnchor
+            menu.popUp(positioning: nil, at: NSPoint(x: anchor.rect.maxX + 4, y: anchor.rect.minY), in: anchor.view)
         }
-        let anchor = root.sendAnchor
-        menu.popUp(positioning: nil, at: NSPoint(x: anchor.rect.maxX + 4, y: anchor.rect.minY), in: anchor.view)
     }
 
     /// PNG in den Cache (Pfad ohne Leerzeichen, nicht im Documents-Spiegel), Pfad als Einfügen in die Ziel-Kachel —
@@ -244,7 +221,7 @@ final class ScratchpadContent: PaneContent {
     private func deliver(to pane: PaneInfo) {
         guard let png = root.canvas.pngData() else { NSSound.beep(); return }
         let file: URL
-        do { file = try Self.writeSend(png) } catch {
+        do { file = try AgentHandoff.writePNG(png, prefix: "Skizze") } catch {
             NSSound.beep()
             root.showNote("Bild nicht speicherbar")
             return
@@ -255,35 +232,6 @@ final class ScratchpadContent: PaneContent {
             return
         }
         root.showNote("Skizze liegt in Kachel \(pane.index)")
-    }
-
-    private static var sendFolder: URL {
-        FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("LatexTerm/scratch-sends", isDirectory: true)
-    }
-
-    private static func writeSend(_ png: Data) throws -> URL {
-        let folder = sendFolder
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let keys: [URLResourceKey] = [.contentModificationDateKey]
-        let cutoff = Date().addingTimeInterval(-7 * 24 * 3600)
-        for url in (try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: keys)) ?? [] {
-            if let date = try? url.resourceValues(forKeys: Set(keys)).contentModificationDate, date < cutoff {
-                try? FileManager.default.removeItem(at: url)
-            }
-        }
-        let stamp = DateFormatter()
-        stamp.locale = Locale(identifier: "en_US_POSIX")
-        stamp.dateFormat = "yyyyMMdd-HHmmss"
-        let base = "Skizze-\(stamp.string(from: Date()))"
-        var url = folder.appendingPathComponent("\(base).png")
-        var n = 2
-        while FileManager.default.fileExists(atPath: url.path) {
-            url = folder.appendingPathComponent("\(base)-\(n).png")
-            n += 1
-        }
-        try png.write(to: url, options: .atomic)
-        return url
     }
 
     /// Kachel zu = Zeichnung weg (wie ein Terminal seinen Inhalt verliert). Nicht beim Beenden der App:
@@ -349,20 +297,6 @@ final class ScratchpadContent: PaneContent {
     }
 }
 
-/// Menüeintrag mit Closure statt Target/Action.
-private final class ClosureMenuItem: NSMenuItem {
-    private let handler: () -> Void
-
-    init(title: String, keyEquivalent: String, handler: @escaping () -> Void) {
-        self.handler = handler
-        super.init(title: title, action: #selector(run), keyEquivalent: keyEquivalent)
-        target = self
-    }
-
-    required init(coder: NSCoder) { fatalError("init(coder:) not used") }
-
-    @objc private func run() { handler() }
-}
 
 // MARK: - Modell
 
