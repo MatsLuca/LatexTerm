@@ -669,13 +669,23 @@ final class PreviewContent: NSObject, PaneContent {
            let page = selection.pages.first {
             let lines = selection.selectionsByLine().filter { $0.pages.first == page }.map { $0.bounds(for: page) }
             let rect = lines.reduce(selection.bounds(for: page)) { $0.union($1) }
-            pending = PreviewMark(kind: .text, page: doc.index(for: page), rect: rect, lines: lines, text: text)
+            pending = PreviewMark(kind: .text, page: doc.index(for: page), rect: rect, lines: lines,
+                                  text: Self.wholeWords(selection, lines: lines, on: page) ?? text)
             refreshMarks()
             updateMarkUI()
         } else if pending?.kind == .text {
             pending = nil
             updateMarkUI()
         }
+    }
+
+    /// Text der Auswahl auf ganze Wörter erweitert („ücke ist“ → „Lücke ist“) — halb getroffene Wörter beim Ziehen sind normal.
+    private static func wholeWords(_ selection: PDFSelection, lines: [NSRect], on page: PDFPage) -> String? {
+        guard let first = lines.first, let last = lines.last,
+              let copy = selection.copy() as? PDFSelection else { return nil }
+        if let start = page.selectionForWord(at: NSPoint(x: first.minX + 1, y: first.midY)) { copy.add(start) }
+        if let end = page.selectionForWord(at: NSPoint(x: last.maxX - 1, y: last.midY)) { copy.add(end) }
+        return copy.string?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func pdfRegion(page: PDFPage, rect: NSRect) {
@@ -745,7 +755,7 @@ final class PreviewContent: NSObject, PaneContent {
                 guard let page = doc.page(at: mark.page) else { continue }
                 annotate(mark, on: page, color: accent, number: index + 1, dashed: false)
             }
-            if let pending, pending.kind == .region, let page = doc.page(at: pending.page) {
+            if let pending, let page = doc.page(at: pending.page) {
                 annotate(pending, on: page, color: accent, number: nil, dashed: true)
             }
         case .document:
@@ -779,10 +789,10 @@ final class PreviewContent: NSObject, PaneContent {
             // Im linken Seitenrand auf Höhe der ersten Zeile — nie über dem Text (verdeckte sonst den Wortanfang, 23.09.).
             let box = page.bounds(for: .cropBox)
             let top = (mark.lines.first ?? mark.rect).maxY
-            let badge = PDFAnnotation(bounds: NSRect(x: box.minX + 14, y: top - 11, width: 14, height: 11),
+            let badge = PDFAnnotation(bounds: NSRect(x: box.minX + 14, y: top - 13, width: 15, height: 14),
                                       forType: .freeText, withProperties: nil)
             badge.contents = "\(number)"
-            badge.font = .boldSystemFont(ofSize: 8)
+            badge.font = .boldSystemFont(ofSize: 9)
             badge.fontColor = .black
             badge.color = color
             badge.alignment = .center
