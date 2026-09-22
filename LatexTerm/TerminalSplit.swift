@@ -74,8 +74,9 @@ final class TerminalSplitView: NSView {
         newAppPaneObserver = NotificationCenter.default.addObserver(
             forName: .latexTermNewAppPane, object: nil, queue: .main
         ) { [weak self] note in
-            guard let self, self.window?.isKeyWindow == true, let kind = note.userInfo?["kind"] as? String else { return }
-            do { try self.addAppPane(kind: kind) } catch {
+            guard let self, self.window?.isKeyWindow == true, let kind = note.userInfo?["kind"] as? String,
+                  let args = PaneKindRegistry.menuArgs(for: kind) else { return }
+            do { try self.addAppPane(kind: kind, args: args) } catch {
                 Logger(subsystem: "com.mats.LatexTerm", category: "panes").error("Neue Kachel \(kind, privacy: .public): \(String(describing: error), privacy: .public)")
             }
         }

@@ -67,19 +67,23 @@ final class PaneContainerView: NSView {
 
     /// Der einzige Verteiler der Kachel-Kürzel. `performKeyEquivalent` läuft durch ALLE Kacheln
     /// (älteste zuerst) — nur die Hülle mit dem First Responder antwortet, und nur ihr Inhalt
-    /// sieht das Kürzel überhaupt. Der Inhalt kommt zuerst dran (die ⌘K-Palette belegt ⌘⏎ als
-    /// Zweitaktion) und reicht Kachel-Kürzel sonst durch; kein Inhalt implementiert sie selbst.
+    /// sieht Tasten überhaupt. ⌘T/⌘W/⌘1–9 gehören immer der Kachel und kommen VOR dem Inhalt dran
+    /// (ein WKWebView schluckte sie sonst und reichte sie nur noch ans Menü); ⌘⏎ erst NACH dem
+    /// Inhalt, weil die ⌘K-Palette es als Zweitaktion belegt. Kein Inhalt implementiert
+    /// Kachel-Kürzel selbst.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard let pane, let host = pane.host,
               (window?.firstResponder as? NSView)?.isDescendant(of: self) == true else { return false }
-        if super.performKeyEquivalent(with: event) { return true }
-        guard let shortcut = Self.shortcut(for: event) else { return false }
+        let shortcut = Self.shortcut(for: event)
         switch shortcut {
-        case .split: host.paneRequestsSplit(pane)
-        case .close: host.paneRequestsClose(pane)
-        case .zoom: host.paneRequestsZoom(pane)
-        case .paneCount(let count): host.paneRequestsPaneCount(count)
+        case .split: host.paneRequestsSplit(pane); return true
+        case .close: host.paneRequestsClose(pane); return true
+        case .paneCount(let count): host.paneRequestsPaneCount(count); return true
+        case .zoom, nil: break
         }
+        if super.performKeyEquivalent(with: event) { return true }
+        guard shortcut == .zoom else { return false }
+        host.paneRequestsZoom(pane)
         return true
     }
 

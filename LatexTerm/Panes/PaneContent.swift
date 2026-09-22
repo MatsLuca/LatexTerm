@@ -16,8 +16,10 @@ protocol PaneContent: AnyObject {
     static var kind: String { get }
     /// Name im Menü „Ablage → Neu ▸“.
     static var displayName: String { get }
-    /// Aus Steuerkanal (`--arg k=v`), Menü (leer) oder Snapshot. Unsinn → `PaneArgsError` mit Grund.
+    /// Aus Steuerkanal (`--arg k=v`), Menü (`menuArgs`) oder Snapshot. Unsinn → `PaneArgsError` mit Grund.
     init(args: [String: String]) throws
+    /// Args für einen Start aus dem Menü — z. B. per Dateidialog; nil = abgebrochen (Default: keine).
+    static func menuArgs() -> [String: String]?
 
     var view: NSView { get }
     /// Wer die Tastatur bekommt (Default: `view`).
@@ -48,6 +50,7 @@ protocol PaneContent: AnyObject {
 }
 
 extension PaneContent {
+    static func menuArgs() -> [String: String]? { [:] }
     var keyView: NSView { view }
     var chip: StatusChip? { nil }
     var accent: NSColor? { nil }
@@ -89,7 +92,7 @@ struct PaneArgsError: Error, CustomStringConvertible {
 /// und Session-Restore. "terminal" und "home" sind fest verdrahtet (`TerminalPane`), alles
 /// andere kommt aus `contents`.
 enum PaneKindRegistry {
-    static let contents: [any PaneContent.Type] = [ScratchpadContent.self]
+    static let contents: [any PaneContent.Type] = [ScratchpadContent.self, WebContent.self]
 
     /// Alle Arten, die `new-pane --kind` kennt.
     static var kinds: [String] { ["terminal", "home"] + contents.map { $0.kind } }
@@ -97,6 +100,11 @@ enum PaneKindRegistry {
     /// Menüeinträge für App-Kacheln (Terminal und Home haben eigene Menüpunkte mit Kürzel).
     static var menuEntries: [(kind: String, displayName: String)] {
         contents.map { ($0.kind, $0.displayName) }
+    }
+
+    /// Args für einen Menü-Start dieser Art (Dateidialog …); nil = abgebrochen oder unbekannt.
+    static func menuArgs(for kind: String) -> [String: String]? {
+        contents.first(where: { $0.kind == kind })?.menuArgs()
     }
 
     /// App-Kachel dieser Art anlegen; Fehler mit Grund (unbekannte Art, falsche Args).
