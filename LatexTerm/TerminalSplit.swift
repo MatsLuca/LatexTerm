@@ -47,8 +47,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Pane-EIGENE Farbe (Override oder erkannt) — nil, wenn die Kachel nur der
     /// globalen Farbe folgt. Steuert den Hüll-Tint.
     private var paneAccent: NSColor? { accentOverride ?? borderAccent }
-    /// Optik dieser Kachel hat sich geändert (Akzent/Fokus) → Titlebar-HUD & Co.
-    var onStyleChanged: (() -> Void)?
+    /// Rückkanal zur Split-View (Schließen, Zoom, Starts, Notifications, Titelleiste).
+    weak var host: PaneHost?
 
     /// Bestätigter Session-Zustand (#30) — Schreibzugriff nur über
     /// `registerSessionScan` (Hysterese). UI (HUD-Puls) liest hier.
@@ -59,7 +59,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             if sessionState == .none { statusDetail = nil; turnStartedAt = nil; turnSteps = 0 }
             if sessionState == .working { turnSummary = nil }
             updateStatusBadge()
-            onStyleChanged?()
+            host?.paneStyleChanged(self)
         }
     }
     /// Live-Status-Detail aus dem Hook-Kanal (#25 v2), z. B. der Tool-Name aus
@@ -95,8 +95,6 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         didSet { updateStatusBadge() }
     }
     private var summaryTimer: Timer?
-    /// Sieht gerade jemand diese Kachel an (App aktiv + fokussiert)? Setzt die Split-View.
-    var isObservedProvider: (() -> Bool)?
 
     /// Was die Titelleiste über diese Kachel zeigt (Chip = Punkt in Kachelfarbe + Text, 15.09.2026).
     /// Drei Textlängen — die HUD wählt je nach Fokus und Kachelzahl; alle nil = nur der Punkt.
@@ -112,7 +110,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         var tooltip: String?
     }
     private(set) var statusChip = StatusChip(tone: .clear) {
-        didSet { if statusChip != oldValue { onStyleChanged?() } }
+        didSet { if statusChip != oldValue { host?.paneStyleChanged(self) } }
     }
 
     /// Chip-Inhalt aus Zustand, Detail und Turn-Verlauf ableiten.
@@ -195,7 +193,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             return
         }
         let now = Date()
-        if summary.seenAt == nil, isObservedProvider?() ?? true {
+        if summary.seenAt == nil, host?.paneIsObserved(self) ?? true {
             summary.seenAt = now
             turnSummary = summary
         }
@@ -210,29 +208,19 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private var folderName: String {
         currentDirectory.map { ($0 as NSString).lastPathComponent }.flatMap { $0.isEmpty ? nil : $0 } ?? "Terminal"
     }
-    /// Feuert bei BESTÄTIGTEM Übergang working→awaitingInput — der Moment,
-    /// in dem eine unbeobachtete Session Aufmerksamkeit braucht (#27 v1).
-    var onSessionAwaitingInput: ((TerminalPane) -> Void)?
-    /// Natives Aufmerksamkeits-Signal des Kindprozesses (BEL bzw. OSC 777) —
-    /// Claude Codes eigener Notification-Kanal, Sofort-Auslöser ohne Hysterese.
-    /// title/body sind nur beim OSC-777-Pfad gefüllt.
-    var onAttentionSignal: ((TerminalPane, _ title: String?, _ body: String?) -> Void)?
+    /// Aufmerksamkeit anfordern: bestätigter Übergang working→awaitingInput (#27 v1), natives
+    /// Signal des Kindprozesses (BEL/OSC 777 — Claude Codes eigener Kanal, ohne Hysterese) oder
+    /// Hook-Ereignis. Fehlende Teile füllt die Kachel selbst: eine Glocke in einer CC-Session
+    /// heißt „Claude braucht Input", in einer nackten Shell nicht. Die Split-View meldet nur,
+    /// wenn niemand hinsieht.
+    private func requestAttention(title: String?, body: String?) {
+        let fallback = sessionState != .none ? "\(agentName) braucht Input" : "Terminal-Glocke"
+        let detail = body ?? currentDirectory.map { ($0 as NSString).abbreviatingWithTildeInPath }
+        host?.paneRequestsAttention(self, title: title ?? fallback, body: detail)
+    }
 
-    /// Shell-Prozess beendet → diese Pane soll entfernt werden.
-    var onClosed: ((TerminalPane) -> Void)?
-    /// Cmd+T in dieser Pane → neue Pane anlegen.
-    var onSplitRequested: ((TerminalPane) -> Void)?
-    /// Cmd+W in dieser Pane → schließen.
-    var onCloseRequested: ((TerminalPane) -> Void)?
-    /// Cmd+1…9 in dieser Pane → auf so viele Kacheln auffüllen.
-    var onEnsurePaneCount: ((Int) -> Void)?
-    /// Cmd+⏎ in dieser Pane → Zoom-Toggle (#26).
-    var onZoomRequested: ((TerminalPane) -> Void)?
-    /// Start-Anfrage, die diese (schon laufende) Kachel nicht mehr tragen kann → Split öffnet eine neue.
-    var onLaunchElsewhere: ((String, String?, String?, [String], NSColor?, String?, String?) -> Void)?
     private var usesClaudeIntegration = true
     private(set) var launcherLabel: String?
-    var onLaunchGroup: (([LaunchRequest]) -> Void)?
 
     // MARK: Home-Kachel (Projekt-Launcher)
 
@@ -244,30 +232,43 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Was den Tastaturfokus dieser Kachel trägt: Terminal oder Home-Ansicht.
     var focusTarget: NSView { homeView?.keyView ?? view }
 
-    /// Kachel als Home-Kachel zeigen (statt Shell). `otherPanes` liefert die Kopfzeile
-    /// mit dem Status der übrigen Kacheln.
-    func showHome(otherPanes: @escaping () -> [HomePaneInfo], focusPane: @escaping (String) -> Void) {
+    /// Kachel als Home-Kachel zeigen (statt Shell). Die Kopfzeile mit dem Status der übrigen
+    /// Kacheln und den Sprung dorthin liefert der Host.
+    func showHome() {
         guard !isStarted, homeView == nil else { return }
         let home = HomePaneView(frame: container.bounds)
         home.autoresizingMask = [.width, .height]
-        home.otherPanes = otherPanes
-        home.onFocusPane = focusPane
-        home.onLaunchGroup = { [weak self] requests in self?.onLaunchGroup?(requests) }
+        home.otherPanes = { [weak self] in
+            guard let self, let host = self.host else { return [] }
+            return host.homePaneSummary(excluding: self)
+        }
+        home.onFocusPane = { [weak self] paneID in self?.host?.paneRequestsFocus(paneID: paneID) }
+        // Team-Start (1–2 Sessions): jede in einer eigenen frischen Kachel, diese bleibt Home.
+        home.onLaunchGroup = { [weak self] requests in
+            guard let host = self?.host, (1...2).contains(requests.count) else { return }
+            for req in requests {
+                host.paneRequestsFreshTerminal(focus: false).launch(
+                    in: req.path, command: req.command, label: req.label,
+                    followUps: [req.colorFollowUp, req.followUp].compactMap { $0 },
+                    accent: req.accent, accentName: req.accentName, integration: req.integration)
+            }
+        }
         home.onLaunch = { [weak self] req in
             self?.launch(in: req.path, command: req.command, label: req.label,
                          followUps: [req.colorFollowUp, req.followUp].compactMap { $0 },
                          accent: req.accent, accentName: req.accentName, integration: req.integration)
         }
         home.resolveAccentName = { [weak self] wanted, alternatives, palette in
-            self?.resolveLaunchAccentName?(wanted, alternatives, palette) ?? wanted
+            guard let self, let host = self.host else { return wanted }
+            return host.distinctAccentName(wanted, alternatives: alternatives, palette: palette, excluding: self)
         }
         home.onClose = { [weak self] in
             guard let self else { return }
-            self.onCloseRequested?(self)
+            self.host?.paneRequestsClose(self)
         }
         home.onZoom = { [weak self] in
             guard let self else { return }
-            self.onZoomRequested?(self)
+            self.host?.paneRequestsZoom(self)
         }
         container.addSubview(home)
         homeView = home
@@ -282,7 +283,9 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         // statt still zu verpuffen.
         guard !isStarted else {
             Logger(subsystem: "com.mats.LatexTerm", category: "launch").notice("launch auf gestarteter Kachel → neue Kachel: \(command ?? "-", privacy: .public)")
-            onLaunchElsewhere?(directory, command, label, followUps, accent, accentName, integration)
+            host?.paneRequestsFreshTerminal(focus: true).launch(
+                in: directory, command: command, label: label, followUps: followUps,
+                accent: accent, accentName: accentName, integration: integration)
             return
         }
         // Projektfarbe (Runde 25): vor dem Start setzen, damit Ring, Rahmen und HUD-Punkt von der
@@ -417,8 +420,6 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private var launchReady = false
     /// Claude-Code-Farbname dieser Kachel (Runde 25) — Kollisionsschutz der Split-View liest ihn.
     private(set) var accentName: String?
-    /// Split-View: (gewünschter Name, Alternativen, Palette) → vergebener Name (frei unter den offenen Kacheln).
-    var resolveLaunchAccentName: ((String, [String], [String]) -> String)?
 
     // MARK: Erwartete Startdauer (für den Ring im Vorhang)
 
@@ -545,16 +546,16 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         term.onScrolled = { [weak controller] in controller?.scheduleReposition() }
         term.onSplitRequested = { [weak self] in
             guard let self else { return }
-            self.onSplitRequested?(self)
+            self.host?.paneRequestsSplit(self)
         }
         term.onCloseRequested = { [weak self] in
             guard let self else { return }
-            self.onCloseRequested?(self)
+            self.host?.paneRequestsClose(self)
         }
-        term.onEnsurePaneCount = { [weak self] n in self?.onEnsurePaneCount?(n) }
+        term.onEnsurePaneCount = { [weak self] n in self?.host?.paneRequestsPaneCount(n) }
         term.onZoomRequested = { [weak self] in
             guard let self else { return }
-            self.onZoomRequested?(self)
+            self.host?.paneRequestsZoom(self)
         }
 
         // In-Band-Steuerkanal (#24). Der Parser läuft auf dem Feed-Pfad —
@@ -572,7 +573,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 #if DEBUG
             Self.statusLog("BELL")
 #endif
-            self.onAttentionSignal?(self, nil, nil)
+            self.requestAttention(title: nil, body: nil)
         }
         // Eigene Registrierung überschreibt SwiftTerms eingebauten 777-Handler
         // (der nur an den ungenutzten TerminalDelegate weiterreicht).
@@ -583,7 +584,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                 let parts = text.components(separatedBy: ";")
                 guard parts.count >= 2, parts[0] == "notify" else { return }
                 let body = parts.count > 2 ? parts[2...].joined(separator: ";") : nil
-                self.onAttentionSignal?(self, parts[1], body)
+                self.requestAttention(title: parts[1], body: body)
             }
         }
 
@@ -667,8 +668,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// über den Socket (OSC 5522 nur für Altsender) — präzise Agenten-Events.
     /// Setzt den Zustand OHNE Hysterese (der Hook weiß es sicher); die passive
     /// Erkennung läuft weiter und bestätigt ihn beim nächsten Scan von selbst.
-    /// Notifications laufen über den bestehenden `onAttentionSignal`-Pfad
-    /// (unbeobachtet-Check + 5-s-Cooldown sitzen dort). `done` setzt bewusst
+    /// Notifications laufen über `requestAttention` (unbeobachtet-Check im Host,
+    /// 5-s-Cooldown im SessionNotifier). `done` setzt bewusst
     /// `.none`: der anschließend sichtbaren Eingabe-Box darf die passive
     /// Erkennung NICHT „working→awaitingInput" unterstellen (ihr Notification-
     /// Trigger verlangt old == .working, .none → .awaitingInput bleibt stumm).
@@ -758,7 +759,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             lastHookStatusAt = Date()
             sessionState = .awaitingInput
             statusDetail = hook.detail
-            onAttentionSignal?(self, "\(agentName) braucht dich · \(folderName)", hook.detail ?? turnPrompt)
+            requestAttention(title: "\(agentName) braucht dich · \(folderName)", body: hook.detail ?? turnPrompt)
         case "done":
             lastHookStatusAt = Date()
             let seconds = hook.seconds.map(Double.init)
@@ -780,7 +781,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         default:
             break                          // unbekannter/kaputter Status erneuert NICHT
         }
-        onStyleChanged?()
+        host?.paneStyleChanged(self)
         return true
     }
 
@@ -810,7 +811,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         // A former Codex pane remains free of Claude heuristics until a Claude hook identifies it.
         if wasCodex { usesClaudeIntegration = false }
         updateStatusBadge()
-        onStyleChanged?()
+        host?.paneStyleChanged(self)
     }
 
     /// Turn-Ende: Nachklang-Pille je nach Grund, Banner nur wenn es sich lohnt — Abbruch (Ctrl+C)
@@ -828,7 +829,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             showTurnSummary(long: "⚠ \(label) · \(clock)\(stepsPart)", short: "⚠ \(label)", glyph: "⚠",
                             tone: theme.red)
             let body = [prompt.map { "„\($0)“" }, answer].compactMap { $0 }.joined(separator: "\n")
-            onAttentionSignal?(self, "\(agentName): \(label) · \(folderName)", body.isEmpty ? nil : body)
+            requestAttention(title: "\(agentName): \(label) · \(folderName)", body: body.isEmpty ? nil : body)
         default:
             showTurnSummary(long: "✓ fertig · \(clock)\(stepsPart)", short: "✓ \(clock)", glyph: "✓",
                             tone: theme.green)
@@ -837,7 +838,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             if let prompt { lines.append("„\(prompt)“") }
             lines.append(clock + stepsPart)
             if let answer { lines.append(answer) }
-            onAttentionSignal?(self, "\(agentName) fertig · \(folderName)", lines.joined(separator: "\n"))
+            requestAttention(title: "\(agentName) fertig · \(folderName)", body: lines.joined(separator: "\n"))
         }
     }
 
@@ -846,7 +847,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         container.ownAccent = paneAccent
         view.caretColor = ThemeStore.shared.cursorThemeColor ? ThemeStore.shared.theme.cursor : effectiveAccent
         updateStatusBadge()   // Pille trägt die Akzentfarbe mit (#25 v2)
-        onStyleChanged?()
+        host?.paneStyleChanged(self)
     }
 
     private var contrastPending = false
@@ -1185,7 +1186,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 #if DEBUG
             Self.statusLog("COMMIT \(old) → \(sessionState)")
 #endif
-            if old == .working && sessionState == .awaitingInput { onSessionAwaitingInput?(self) }
+            if old == .working && sessionState == .awaitingInput { requestAttention(title: "\(agentName) braucht Input", body: nil) }
         } else {
             // Scans sind output-getrieben — nach Claudes letztem Redraw kommt
             // keiner mehr von allein. Zum Bestätigen selbst nachlegen.
@@ -1337,7 +1338,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     /// Beendet die Shell (SIGTERM). Das Prozess-Ende läuft über `processTerminated`
-    /// → `onClosed` und entfernt die Kachel auf demselben Pfad wie ein `exit`.
+    /// → `paneDidClose` und entfernt die Kachel auf demselben Pfad wie ein `exit`.
     func terminate() {
         launchTimer?.invalidate(); launchTimer = nil   // ⌘W mitten im Start: kein Reveal ins Leere
         followUpWork.forEach { $0.cancel() }; followUpWork = []   // … und keine Folgebefehle ins Nichts
@@ -1411,11 +1412,11 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
 
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         lastTitle = title
-        onStyleChanged?()
+        host?.paneStyleChanged(self)
     }
     func hostCurrentDirectoryUpdate(source: TerminalView, directory: String?) {}
     func processTerminated(source: TerminalView, exitCode: Int32?) {
-        onClosed?(self)
+        host?.paneDidClose(self)
     }
 
     private static func userShell() -> String {
@@ -1514,9 +1515,9 @@ final class TerminalSplitView: NSView {
                   let cmd = note.userInfo?["command"] as? PaneCommand,
                   let pane = self.panes.first(where: { self.isFocused($0) }) ?? self.panes.first else { return }
             switch cmd {
-            case .split: pane.onSplitRequested?(pane)
-            case .close: pane.onCloseRequested?(pane)
-            case .zoom: pane.onZoomRequested?(pane)
+            case .split: self.paneRequestsSplit(pane)
+            case .close: self.paneRequestsClose(pane)
+            case .zoom: self.paneRequestsZoom(pane)
             case .find: pane.view.showFindInterface()
             }
         }
@@ -1571,8 +1572,8 @@ final class TerminalSplitView: NSView {
     /// Kollisionsschutz für Projektfarben (Runde 25): trägt eine andere offene Kachel den Namen
     /// schon, kommt die erste freie Alternative der Familie dran, danach der Rest der Palette
     /// (ohne red — das bleibt der Hand vorbehalten). Nur für diese Kachel, nichts wird gespeichert.
-    private func distinctAccentName(_ wanted: String, alternatives: [String], palette: [String],
-                                    excluding me: TerminalPane?) -> String {
+    func distinctAccentName(_ wanted: String, alternatives: [String], palette: [String],
+                            excluding me: TerminalPane) -> String {
         let taken = Set(panes.compactMap { $0 !== me ? $0.accentName : nil })
         let order = [wanted] + alternatives + palette.filter { $0 != "red" }
         return order.first { !taken.contains($0) } ?? wanted
@@ -1586,7 +1587,7 @@ final class TerminalSplitView: NSView {
     }
 
     /// Für Home: alle anderen Kacheln aus allen Fenstern, mit expliziter Session-Identität.
-    private func paneSummary(excluding me: TerminalPane) -> [HomePaneInfo] {
+    func homePaneSummary(excluding me: TerminalPane) -> [HomePaneInfo] {
         ControlServer.shared.router.panes.compactMap { p in
             guard p.id != me.id.uuidString, let cwd = p.cwd else { return nil }
             let name = p.agent.map { $0 == "codex" ? "Codex" : "Claude" }
@@ -1672,12 +1673,6 @@ final class TerminalSplitView: NSView {
         if window.title != title { window.title = title }
     }
 
-    /// Kachel meldet neue Optik oder neuen Titel.
-    private func paneStyleChanged() {
-        updateWindowTitle()
-        updateTitlebarHUD()
-    }
-
     /// Fenster füllt Breite und Oberkante des sichtbaren Bereichs, endet aber
     /// genau auf dessen Unterkante, obwohl das Dock automatisch ausgeblendet ist
     /// → Reserve-Streifen ist ein Phantom; Fenster bis zum Bildschirmrand ziehen.
@@ -1709,39 +1704,7 @@ final class TerminalSplitView: NSView {
     @discardableResult
     func addPane(startingIn directory: String? = nil, home: Bool = false) -> TerminalPane {
         let pane = TerminalPane()
-        pane.onClosed = { [weak self] p in self?.removePane(p) }
-        pane.onLaunchGroup = { [weak self] requests in
-            guard let self, (1...2).contains(requests.count) else { return }
-            for req in requests {
-                let fresh = self.addPane(home: true)
-                fresh.launch(in: req.path, command: req.command, label: req.label,
-                             followUps: [req.colorFollowUp, req.followUp].compactMap { $0 },
-                             accent: req.accent, accentName: req.accentName, integration: req.integration)
-            }
-        }
-        // ⌘T: die anfordernde Kachel ist die fokussierte → ihr CWD vererben (#8).
-        pane.onSplitRequested = { [weak self] requester in
-            self?.addPane(startingIn: requester.currentDirectory)
-        }
-        pane.onCloseRequested = { [weak self] p in self?.closePane(p) }
-        pane.onEnsurePaneCount = { [weak self] n in self?.ensurePaneCount(n) }
-        pane.onZoomRequested = { [weak self] p in self?.toggleZoom(p) }
-        pane.onLaunchElsewhere = { [weak self] dir, cmd, label, followUps, accent, accentName, integration in
-            guard let self else { return }
-            let fresh = self.addPane(home: true)
-            self.focusPane(fresh)
-            fresh.launch(in: dir, command: cmd, label: label, followUps: followUps, accent: accent, accentName: accentName, integration: integration)
-        }
-        pane.resolveLaunchAccentName = { [weak self, weak pane] w, alts, pal in self?.distinctAccentName(w, alternatives: alts, palette: pal, excluding: pane) ?? w }
-        pane.onStyleChanged = { [weak self] in self?.paneStyleChanged() }
-        pane.onSessionAwaitingInput = { [weak self] p in self?.notifySessionAwaiting(p) }
-        pane.onAttentionSignal = { [weak self] p, title, body in
-            self?.notifyAttention(p, title: title, body: body)
-        }
-        pane.isObservedProvider = { [weak self, weak pane] in
-            guard let self, let pane else { return true }
-            return self.isObserved(pane)
-        }
+        pane.host = self
         // Grid-Änderung beendet einen aktiven Zoom: die neue Kachel soll sichtbar
         // im Grid entstehen, nicht unsichtbar unter der gezoomten (⌘T/⌘1–9-Policy).
         setZoomedPane(nil)
@@ -1749,12 +1712,7 @@ final class TerminalSplitView: NSView {
         updateTitlebarHUD()
         addSubview(pane.container)
         if home {
-            pane.showHome(otherPanes: { [weak self, weak pane] in
-                guard let self, let pane else { return [] }
-                return self.paneSummary(excluding: pane)
-            }, focusPane: { paneID in
-                _ = ControlServer.shared.router.route(ControlRequest(cmd: "focus", pane: paneID))
-            })
+            pane.showHome()
         } else {
             pane.start(in: directory)
         }
@@ -1771,8 +1729,8 @@ final class TerminalSplitView: NSView {
     }
 
     /// Cmd+W: Shell beenden UND Kachel sofort entfernen. `terminate()` cancelt den
-    /// Exit-Monitor, daher feuert hier kein `processTerminated`/`onClosed` – wir müssen
-    /// die UI selbst aufräumen (im Gegensatz zum `exit`-Pfad, der über `onClosed` läuft).
+    /// Exit-Monitor, daher feuert hier kein `processTerminated`/`paneDidClose` – wir müssen
+    /// die UI selbst aufräumen (im Gegensatz zum `exit`-Pfad, der über `paneDidClose` läuft).
     private func closePane(_ pane: TerminalPane) {
         pane.terminate()
         removePane(pane)
@@ -1981,33 +1939,6 @@ final class TerminalSplitView: NSView {
         !CockpitSettings.shared.notifyOnlyUnobserved || !isObserved(pane)
     }
 
-    /// Bestätigter working→awaitingInput: nur melden, wenn die Session gerade
-    /// niemand ansieht — App im Hintergrund ODER andere Kachel fokussiert.
-    private func notifySessionAwaiting(_ pane: TerminalPane) {
-#if DEBUG
-        TerminalPane.statusLog("NOTIFY? passive appActive=\(NSApp.isActive) focused=\(isFocused(pane))")
-#endif
-        guard isUnobserved(pane) else { return }
-        SessionNotifier.shared.notify(paneID: pane.id, title: "Claude braucht Input",
-                                      body: pane.currentDirectory.map {
-                                          ($0 as NSString).abbreviatingWithTildeInPath
-                                      })
-    }
-
-    /// Natives Signal (BEL/OSC 777): sofort melden, wenn unbeobachtet. Der
-    /// Fallback-Titel nutzt den passiv erkannten Status — eine Glocke in einer
-    /// CC-Session heißt „Claude braucht Input", in einer nackten Shell nicht.
-    private func notifyAttention(_ pane: TerminalPane, title: String?, body: String?) {
-#if DEBUG
-        TerminalPane.statusLog("NOTIFY? native title=\(title ?? "-") appActive=\(NSApp.isActive) focused=\(isFocused(pane))")
-#endif
-        guard isUnobserved(pane) else { return }
-        let agent = pane.agentSession.identity?.name ?? "Claude"
-        let fallback = pane.sessionState != .none ? "\(agent) braucht Input" : "Terminal-Glocke"
-        let detail = body ?? pane.currentDirectory.map { ($0 as NSString).abbreviatingWithTildeInPath }
-        SessionNotifier.shared.notify(paneID: pane.id, title: title ?? fallback, body: detail)
-    }
-
     /// Notification-Klick: App nach vorn, Pane fokussieren und (im Grid) zoomen —
     /// der Nutzer will JETZT mit genau dieser Session sprechen.
     private func activatePane(id: UUID) {
@@ -2155,6 +2086,44 @@ final class TerminalSplitView: NSView {
             for (pane, frame) in zip(panes, frames) { pane.container.frame = frame }
         }
         isFirstLayout = false
+    }
+}
+
+// MARK: - Rückkanal der Kacheln
+
+extension TerminalSplitView: PaneHost {
+    /// ⌘T: die anfordernde Kachel ist die fokussierte → ihr CWD vererben (#8).
+    func paneRequestsSplit(_ pane: TerminalPane) { addPane(startingIn: pane.currentDirectory) }
+    func paneRequestsClose(_ pane: TerminalPane) { closePane(pane) }
+    func paneDidClose(_ pane: TerminalPane) { removePane(pane) }
+    func paneRequestsZoom(_ pane: TerminalPane) { toggleZoom(pane) }
+    func paneRequestsPaneCount(_ count: Int) { ensurePaneCount(count) }
+
+    func paneStyleChanged(_ pane: TerminalPane) {
+        updateWindowTitle()
+        updateTitlebarHUD()
+    }
+
+    /// Nur melden, wenn die Kachel gerade niemand ansieht — App im Hintergrund, Fenster
+    /// hinten oder andere Kachel fokussiert (abschaltbar: „nur wenn unbeobachtet“).
+    func paneRequestsAttention(_ pane: TerminalPane, title: String, body: String?) {
+#if DEBUG
+        TerminalPane.statusLog("NOTIFY? title=\(title) appActive=\(NSApp.isActive) focused=\(isFocused(pane))")
+#endif
+        guard isUnobserved(pane) else { return }
+        SessionNotifier.shared.notify(paneID: pane.id, title: title, body: body)
+    }
+
+    func paneIsObserved(_ pane: TerminalPane) -> Bool { isObserved(pane) }
+
+    func paneRequestsFreshTerminal(focus: Bool) -> TerminalPane {
+        let fresh = addPane(home: true)
+        if focus { focusPane(fresh) }
+        return fresh
+    }
+
+    func paneRequestsFocus(paneID: String) {
+        _ = ControlServer.shared.router.route(ControlRequest(cmd: "focus", pane: paneID))
     }
 }
 
