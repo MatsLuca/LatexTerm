@@ -15,7 +15,7 @@ enum ControlProtocol {
 }
 
 struct ControlRequest: Codable {
-    /// "list-panes" | "new-pane" | "send" | "zoom" | "focus" | "close-pane" | "status"
+    /// "list-panes" | "new-pane" | "send" | "zoom" | "focus" | "close-pane" | "status" | "pane-kinds"
     var cmd: String
     /// Ziel-Kachel: 1-basierter Index ("2") oder UUID(-Präfix). Fehlt er, nimmt
     /// die App bei zoom/focus/send die Kachel aus `paneID` (= LATEXTERM_PANE_ID
@@ -31,6 +31,10 @@ struct ControlRequest: Codable {
     var cwd: String?
     /// new-pane: Kommando, das nach dem Shell-Start ausgeführt wird.
     var exec: String?
+    /// new-pane: Kachelart aus `pane-kinds` ("terminal", "home", "scratchpad", …); nil = terminal.
+    var kind: String?
+    /// new-pane: Argumente der Kachelart (`--arg k=v`, wiederholbar); Strings, geprüft vom Inhalt.
+    var args: [String: String]?
     /// close-pane: auch bei arbeitender Session oder Vordergrundprozess schließen.
     /// Default false: dann nur eine ruhende Shell ohne Vordergrundprozess.
     var force: Bool?
@@ -53,16 +57,20 @@ struct PaneInfo: Codable {
     var agent: String? = nil
     var sessionID: String? = nil
     var windowID: String? = nil
+    /// "terminal" | "home" | App-Kachelart; nil = ältere App ohne Kachelarten (dann terminal/home).
+    var kind: String? = nil
 }
 
 struct ControlResponse: Codable {
     var ok: Bool
-    var capabilities: [String]? = ["agent-sessions", "all-windows"]
+    var capabilities: [String]? = ["agent-sessions", "all-windows", "pane-kinds"]
     var error: String?
     /// list-panes: alle Kacheln.
     var panes: [PaneInfo]?
     /// new-pane / zoom / focus / send: die betroffene Kachel.
     var pane: PaneInfo?
+    /// pane-kinds: alle Kachelarten, die `new-pane --kind` kennt.
+    var kinds: [String]? = nil
 
     static func failure(_ message: String) -> ControlResponse {
         ControlResponse(ok: false, error: message)

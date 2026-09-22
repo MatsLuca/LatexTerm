@@ -2,7 +2,7 @@ import Foundation
 
 // latexterm — Steuerkanal-CLI (#28). Spricht die JSON-Zeilen des ControlProtocol
 // über den Unix-Socket der laufenden App. Bewusst ohne ArgumentParser-Dependency:
-// sieben Verben, eine Handvoll Flags. Wird ins App-Bundle eingebettet
+// acht Verben, eine Handvoll Flags. Wird ins App-Bundle eingebettet
 // (LatexTerm.app/Contents/Helpers/latexterm); Nutzung via Symlink oder PATH.
 
 let usage = """
@@ -11,6 +11,8 @@ latexterm — steuert die laufende LatexTerm.app
 Verwendung:
   latexterm list-panes [--json]
   latexterm new-pane [--cwd VERZEICHNIS] [--exec KOMMANDO]
+  latexterm new-pane --kind ART [--arg SCHLÜSSEL=WERT]…
+  latexterm pane-kinds
   latexterm send [--pane ZIEL] [--no-enter] TEXT…
   latexterm zoom [--pane ZIEL]
   latexterm focus [--pane ZIEL]
@@ -18,6 +20,8 @@ Verwendung:
   latexterm status [--pane ZIEL] [--agent claude|codex --session ID] [--turn ID] PAYLOAD
 
 ZIEL ist der 1-basierte Index aus `list-panes` oder eine Pane-UUID (auch Präfix).
+ART ist eine Kachelart aus `pane-kinds` (terminal, home, scratchpad, …); --cwd/--exec nur für terminal.
+send an eine App-Kachel reicht den Text an deren Inhalt (Scratchpad: `clear`, `undo`).
 Ohne --pane verwenden send/zoom/focus/close-pane $LATEXTERM_PANE_ID — also die Kachel,
 in deren Shell dieses Kommando läuft.
 
@@ -58,6 +62,13 @@ while !args.isEmpty {
     case "--pane":     request.pane = value(for: arg)
     case "--cwd":      request.cwd = value(for: arg)
     case "--exec":     request.exec = value(for: arg)
+    case "--kind":     request.kind = value(for: arg)
+    case "--arg":
+        let pair = value(for: arg)
+        guard let eq = pair.firstIndex(of: "="), eq != pair.startIndex else {
+            fail("--arg erwartet SCHLÜSSEL=WERT, bekam „\(pair)“", code: 2)
+        }
+        request.args = (request.args ?? [:]).merging([String(pair[..<eq]): String(pair[pair.index(after: eq)...])]) { $1 }
     case "--no-enter": request.enter = false
     case "--force":    request.force = true
     case "--agent":    request.agent = value(for: arg)
@@ -75,7 +86,7 @@ while !args.isEmpty {
 }
 
 switch cmd {
-case "list-panes", "zoom", "focus", "new-pane", "close-pane":
+case "list-panes", "zoom", "focus", "new-pane", "close-pane", "pane-kinds":
     guard positional.isEmpty else { fail("\(cmd) nimmt keine freien Argumente\n\n\(usage)", code: 2) }
 case "send":
     guard !positional.isEmpty else { fail("send braucht einen Text\n\n\(usage)", code: 2) }
@@ -162,7 +173,10 @@ func describe(_ pane: PaneInfo) -> String {
     if let id = pane.sessionID { marks.append(String(id.prefix(8))) }
     let suffix = marks.isEmpty ? "" : "  [\(marks.joined(separator: ", "))]"
     let home = FileManager.default.homeDirectoryForCurrentUser.path
-    let cwd = pane.cwd.map { $0.hasPrefix(home) ? "~" + $0.dropFirst(home.count) : $0 } ?? "?"
+    // App-Kacheln haben meist kein Verzeichnis — dann steht ihre Art an dessen Platz.
+    let isApp = pane.kind.map { $0 != "terminal" && $0 != "home" } ?? false
+    let cwd = pane.cwd.map { $0.hasPrefix(home) ? "~" + $0.dropFirst(home.count) : $0 }
+        ?? (isApp ? "(\(pane.kind!))" : "?")
     return "\(pane.index)  \(pane.id.prefix(8))  \(cwd)\(suffix)"
 }
 
@@ -171,6 +185,8 @@ case "list-panes":
     for pane in response.panes ?? [] { print(describe(pane)) }
 case "new-pane":
     if let pane = response.pane { print(describe(pane)) }
+case "pane-kinds":
+    for kind in response.kinds ?? [] { print(kind) }
 default:
     break   // send/zoom/focus/close-pane: Erfolg ist still (Unix-Konvention)
 }

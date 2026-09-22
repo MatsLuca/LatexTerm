@@ -814,14 +814,29 @@ extension TerminalSplitView: ControlCommandHandler {
         case "list-panes":
             return ControlResponse(ok: true, panes: panes.map { info(for: $0) })
 
+        case "pane-kinds":
+            return ControlResponse(ok: true, kinds: PaneKindRegistry.kinds)
+
         case "new-pane":
-            let pane = addPane(startingIn: request.cwd)
-            if let exec = request.exec, !exec.isEmpty {
-                // Sofort in die PTY — der Kernel puffert, die Shell liest das
-                // Kommando, sobald sie bereit ist (kein Delay/Poll nötig).
-                pane.view.send(txt: exec + "\r")
+            let kind = request.kind ?? "terminal"
+            let args = request.args ?? [:]
+            if kind != "terminal", request.cwd != nil || request.exec != nil {
+                return .failure("--cwd und --exec gibt es nur für terminal")
             }
-            return ControlResponse(ok: true, pane: info(for: pane))
+            switch kind {
+            case "terminal", "home":
+                guard args.isEmpty else { return .failure("\(kind) kennt kein --arg") }
+                let pane = addPane(startingIn: request.cwd, home: kind == "home")
+                if let exec = request.exec, !exec.isEmpty {
+                    // Sofort in die PTY — der Kernel puffert, die Shell liest das
+                    // Kommando, sobald sie bereit ist (kein Delay/Poll nötig).
+                    pane.view.send(txt: exec + "\r")
+                }
+                return ControlResponse(ok: true, pane: info(for: pane))
+            default:
+                do { return ControlResponse(ok: true, pane: info(for: try addAppPane(kind: kind, args: args))) }
+                catch { return .failure(String(describing: error)) }
+            }
 
         case "close-pane":
             guard let pane = resolvePane(request.pane ?? request.paneID) else {
@@ -899,7 +914,8 @@ extension TerminalSplitView: ControlCommandHandler {
                         zoomed: pane === zoomedPane,
                         state: state, agent: identity?.agent,
                         sessionID: identity?.sessionID,
-                        windowID: window.map { String($0.windowNumber) })
+                        windowID: window.map { String($0.windowNumber) },
+                        kind: pane.kind)
     }
 
     /// Löst den Ziel-Selektor des CLI auf eine Kachel auf. Semantik: reine Ziffern

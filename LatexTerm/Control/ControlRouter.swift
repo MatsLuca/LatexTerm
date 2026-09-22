@@ -28,6 +28,8 @@ final class ControlRouter {
         let handlers = self.handlers
         guard !handlers.isEmpty else { return .failure("Kein Terminal-Fenster registriert") }
         if request.cmd == "list-panes" { return ControlResponse(ok: true, panes: panes) }
+        // Kachelarten sind app-weit gleich — jedes Fenster kann antworten, ein Ziel braucht es nicht.
+        if request.cmd == "pane-kinds" { return handlers[0].handleControl(request) }
         let selector = request.pane ?? request.paneID
         if request.cmd == "new-pane", selector == nil {
             let target = handlers.first(where: \.isActiveControlWindow) ?? handlers[0]

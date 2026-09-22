@@ -48,6 +48,18 @@ struct RouterTests {
         let old = Data(#"{"ok":true,"panes":[{"id":"a","index":1,"cwd":"/project","focused":false,"zoomed":false,"state":"none"}]}"#.utf8)
         let decoded = try JSONDecoder().decode(ControlResponse.self, from: old)
         assert(decoded.capabilities == nil && decoded.panes?.first?.agent == nil)
-        print("24 multi-window routing / compatibility cases passed")
+        // Kachelarten (Kachel-Protokoll Schritt 7): alte Antworten ohne kind, neue Felder hin und zurück.
+        assert(decoded.panes?.first?.kind == nil && decoded.kinds == nil)
+        var withKind = ControlRequest(cmd: "new-pane")
+        withKind.kind = "scratchpad"; withKind.args = ["url": "/tmp/a.html"]
+        let roundtrip = try JSONDecoder().decode(ControlRequest.self, from: try JSONEncoder().encode(withKind))
+        assert(roundtrip.kind == "scratchpad" && roundtrip.args == ["url": "/tmp/a.html"])
+        let oldRequest = try JSONDecoder().decode(ControlRequest.self, from: Data(#"{"cmd":"new-pane","cwd":"/tmp"}"#.utf8))
+        assert(oldRequest.kind == nil && oldRequest.args == nil)
+        assert(ControlResponse(ok: true).capabilities?.contains("pane-kinds") == true)
+        let stale = first.received.count
+        assert(router.route(ControlRequest(cmd: "pane-kinds", paneID: "GONE-1")).ok)
+        assert(first.received.count == stale + 1 && first.received.last?.cmd == "pane-kinds")
+        print("30 multi-window routing / compatibility / pane-kind cases passed")
     }
 }
