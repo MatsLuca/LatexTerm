@@ -220,6 +220,13 @@ final class OverlayController {
     private func handleMouseDown(_ event: NSEvent) -> NSEvent? {
         guard let terminal, FormulaSettings.shared.formulasEnabled,
               let win = terminal.window, event.window === win else { return event }
+        // Der Monitor sieht Klicks im ganzen Fenster. Nur reagieren, wenn der Klick wirklich in DIESEM
+        // Terminal landet — sonst schluckten Formel-Hitboxen einer verdeckten Kachel (Zoom, ⌘⏎) die Klicks
+        // der Kachel darüber, etwa beim Malen im Scratchpad.
+        // hitTest erwartet Koordinaten der Superview: die oberste Fensteransicht rechnet in Fensterkoordinaten.
+        if let root = win.contentView?.superview ?? win.contentView,
+           let hit = root.hitTest(event.locationInWindow),
+           !hit.isDescendant(of: terminal) { return event }
         let p = terminal.overlay.convert(event.locationInWindow, from: nil)
 
         if preview.pinned, preview.frame.contains(p) { return event }   // Button-Klick
