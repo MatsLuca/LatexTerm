@@ -366,8 +366,25 @@ final class ScratchpadCanvas: NSView {
 
     // MARK: Maus
 
-    override func mouseDown(with event: NSEvent) {
+    /// Erstklick-Regel: Klick in eine Kachel, die nicht den Fokus hat, holt nur den Fokus und malt nicht —
+    /// sonst hinterlässt jedes „reinklicken, um ⌘⏎ zu drücken" einen Punkt. Gilt bis zum Loslassen.
+    private var focusClick = false
+
+    /// Hat diese Scratchpad-Kachel (Fläche oder Werkzeugleiste) gerade den Fokus?
+    private var hasPaneFocus: Bool {
+        guard let responder = window?.firstResponder as? NSView else { return false }
+        return responder.isDescendant(of: superview ?? self)
+    }
+
+    /// Nimmt den Fokus; true = der Klick war nur zum Fokussieren und wird geschluckt.
+    private func takeFocusClick() -> Bool {
+        focusClick = !hasPaneFocus
         window?.makeFirstResponder(self)
+        return focusClick
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        if takeFocusClick() { return }
         let p = point(event)
         if tool == .eraser { beginErase(at: p); return }
         let width = tool == .marker ? Self.markerWidths[sizeIndex] : Self.penWidths[sizeIndex]
@@ -377,6 +394,7 @@ final class ScratchpadCanvas: NSView {
     }
 
     override func mouseDragged(with event: NSEvent) {
+        if focusClick { return }
         let p = point(event)
         if lastErasePoint != nil { continueErase(to: p); return }
         guard let stroke = current else { return }
@@ -390,6 +408,7 @@ final class ScratchpadCanvas: NSView {
     }
 
     override func mouseUp(with event: NSEvent) {
+        if focusClick { focusClick = false; return }
         if lastErasePoint != nil { endErase(); return }
         guard let stroke = current else { return }
         current = nil
@@ -399,11 +418,14 @@ final class ScratchpadCanvas: NSView {
 
     /// Rechtsklick bzw. Zwei-Finger-Klick radiert, egal welches Werkzeug gewählt ist.
     override func rightMouseDown(with event: NSEvent) {
-        window?.makeFirstResponder(self)
+        if takeFocusClick() { return }
         beginErase(at: point(event))
     }
-    override func rightMouseDragged(with event: NSEvent) { continueErase(to: point(event)) }
-    override func rightMouseUp(with event: NSEvent) { endErase() }
+    override func rightMouseDragged(with event: NSEvent) { if !focusClick { continueErase(to: point(event)) } }
+    override func rightMouseUp(with event: NSEvent) {
+        if focusClick { focusClick = false; return }
+        endErase()
+    }
 
     private func point(_ event: NSEvent) -> CGPoint { toWorld(convert(event.locationInWindow, from: nil)) }
 

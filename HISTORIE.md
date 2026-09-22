@@ -1,5 +1,14 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-22 (nachts) — Scratchpad: Erstklick-Regel
+
+**Anlass (Mats, erster Live-Test mit Claude im Scratchpad):** Um das Scratchpad per ⌘⏎ groß zu machen, musste er erst
+hineinklicken — und dieser Klick malte schon einen Punkt (in der Skizze fanden sich prompt 2–3 solche Punkte).
+
+**Gebaut:** `ScratchpadCanvas` schluckt Maus-Down/Drag/Up, wenn die Kachel beim Drücken nicht den Fokus hatte (First Responder
+nicht in der `ScratchpadView`) — wie `acceptsFirstMouse = false` bei Fenstern, nur auf Kachel-Ebene. Gilt auch für Rechtsklick-
+Radieren; Werkzeugleiste bleibt sofort bedienbar. Verworfen: kurze Punkte nach Fokuswechsel wegheuristik — unscharf.
+
 ## 2026-09-22 (spät) — Scratchpad im Dialog: Senden an Agenten, Agent zeichnet mit
 
 **Anlass (Mats, per `/42`):** „Dualrichtung“ — schnell etwas rübergeben, und Claude soll selbst sauber hineinzeichnen können

@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
+- **Klick in ein unfokussiertes Scratchpad malte einen Punkt (22.09.).** Erstklick-Regel: der erste Klick (links oder rechts) in eine Scratchpad-Kachel ohne Fokus holt nur den Fokus — danach malt jeder Klick. Die Werkzeugleiste reagiert weiter sofort.
 - **Scratchpad nahm nach ⌘⏎ keine Klicks mehr an (22.09.).** Die Kachel-Hülle verrechnete jede Zoom-Animation doppelt, die Malfläche schrumpfte auf 0 Breite. Außerdem schluckt eine verdeckte Terminal-Kachel keine Klicks mehr über ihren Formel-Stellen.
 - **⌘T erbt das Verzeichnis der fokussierten Kachel (22.09.).** Bisher bekam die neue Shell das Verzeichnis der ältesten Terminal-Kachel: ⌘T hatte als einziges Kachel-Kürzel keinen Fokusfilter. Alle Kachel-Kürzel (⌘T/⌘W/⌘1–9/⌘⏎) verteilt jetzt genau eine Stelle, die Hülle der fokussierten Kachel. Nebenbei: die ⌘F-Suchleiste dunkelt ihre Kachel nicht mehr ab.
 - **Anzeige-Müll in Claude Code („;255;255;255m“, versetzte Zeilen, stehen gebliebene Reste) (21.09.).** Ursache waren die Status-Melder, die OSC 5522 von außen in die TTY schrieben und dabei Claude Codes Escape-Sequenzen zerrissen. Neu: `latexterm status [--pane ZIEL] PAYLOAD` über den Steuerkanal; der Bridge-Mod nutzt nur noch diesen Weg. CLI versteht `--` als Ende der Optionen.
