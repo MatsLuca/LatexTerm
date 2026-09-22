@@ -6,6 +6,10 @@ import AppKit
 final class ScratchpadContent: PaneContent {
     static let kind = "scratchpad"
     static let displayName = "Neues Scratchpad"
+    static let manual = PaneKindManual(
+        summary: "Malfläche zum Skizzieren mit Maus oder Trackpad (Mats zeichnet, nicht Claude). Flüchtig: nach einem Neustart weg.",
+        actions: [PaneKindAction(name: "clear", summary: "Fläche leeren"),
+                  PaneKindAction(name: "undo", summary: "letzten Strich entfernen")])
 
     weak var delegate: PaneContentDelegate?
     private let canvas = ScratchpadCanvas()

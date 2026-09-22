@@ -359,7 +359,7 @@ final class TerminalSplitView: NSView {
 
     /// Terminal- oder Home-Kachel anhängen.
     @discardableResult
-    func addPane(startingIn directory: String? = nil, home: Bool = false) -> TerminalPane {
+    func addPane(startingIn directory: String? = nil, home: Bool = false, focus: Bool = true) -> TerminalPane {
         let pane = TerminalPane()
         mount(pane)
         if home {
@@ -367,16 +367,16 @@ final class TerminalSplitView: NSView {
         } else {
             pane.start(in: directory)
         }
-        settle(pane)
+        settle(pane, focus: focus)
         return pane
     }
 
     /// App-Kachel (Scratchpad, …) aus der Registry anhängen; Fehler = unbekannte Art oder Args.
     @discardableResult
-    func addAppPane(kind: String, args: [String: String] = [:]) throws -> AppPane {
+    func addAppPane(kind: String, args: [String: String] = [:], focus: Bool = true) throws -> AppPane {
         let pane = try PaneKindRegistry.makeAppPane(kind: kind, args: args)
         mount(pane)
-        settle(pane)
+        settle(pane, focus: focus)
         return pane
     }
 
@@ -391,9 +391,12 @@ final class TerminalSplitView: NSView {
     }
 
     /// Nach dem Einhängen: Rahmen, Raster, Fokus — erst im nächsten Runloop, dann ist die View bereit.
-    private func settle(_ pane: any Pane) {
+    /// `focus: false` (Steuerkanal `new-pane` mit `focus: false`): die Kachel entsteht daneben, die
+    /// Tastatur bleibt, wo Mats gerade tippt — ein Agent, der eine Vorschau öffnet, stiehlt keine Eingabe.
+    private func settle(_ pane: any Pane, focus: Bool = true) {
         updateFocusBorders()
         relayout(animated: true)
+        guard focus else { return }
         DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(pane.focusTarget) }
     }
 
@@ -816,7 +819,7 @@ extension TerminalSplitView: ControlCommandHandler {
             return ControlResponse(ok: true, panes: panes.map { info(for: $0) })
 
         case "pane-kinds":
-            return ControlResponse(ok: true, kinds: PaneKindRegistry.kinds)
+            return ControlResponse(ok: true, kinds: PaneKindRegistry.kinds, kindInfos: PaneKindRegistry.infos)
 
         case "new-pane":
             let kind = request.kind ?? "terminal"
@@ -827,7 +830,7 @@ extension TerminalSplitView: ControlCommandHandler {
             switch kind {
             case "terminal", "home":
                 guard args.isEmpty else { return .failure("\(kind) kennt kein --arg") }
-                let pane = addPane(startingIn: request.cwd, home: kind == "home")
+                let pane = addPane(startingIn: request.cwd, home: kind == "home", focus: request.focus ?? true)
                 if let exec = request.exec, !exec.isEmpty {
                     // Sofort in die PTY — der Kernel puffert, die Shell liest das
                     // Kommando, sobald sie bereit ist (kein Delay/Poll nötig).
@@ -835,7 +838,7 @@ extension TerminalSplitView: ControlCommandHandler {
                 }
                 return ControlResponse(ok: true, pane: info(for: pane))
             default:
-                do { return ControlResponse(ok: true, pane: info(for: try addAppPane(kind: kind, args: args))) }
+                do { return ControlResponse(ok: true, pane: info(for: try addAppPane(kind: kind, args: args, focus: request.focus ?? true))) }
                 catch { return .failure(String(describing: error)) }
             }
 
@@ -917,7 +920,10 @@ extension TerminalSplitView: ControlCommandHandler {
                         state: state, agent: identity?.agent,
                         sessionID: identity?.sessionID,
                         windowID: window.map { String($0.windowNumber) },
-                        kind: pane.kind)
+                        kind: pane.kind,
+                        title: String(pane.title.prefix(120)),
+                        args: terminal == nil ? pane.snapshot()?.args : nil,
+                        foreground: terminal?.foregroundProcessName)
     }
 
     /// Löst den Ziel-Selektor des CLI auf eine Kachel auf. Semantik: reine Ziffern

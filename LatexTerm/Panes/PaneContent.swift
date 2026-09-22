@@ -16,6 +16,10 @@ protocol PaneContent: AnyObject {
     static var kind: String { get }
     /// Eintrag im Menü „Kachel“ (ganze Zeile, z. B. „Neues Scratchpad“).
     static var displayName: String { get }
+    /// Selbstbeschreibung für Agenten (`pane-kinds` → `latexterm mcp` → Werkzeug `open_<art>`).
+    /// Bewusst ohne Default: jede Art sagt, was sie zeigt, welche Args sie will und welche
+    /// `send`-Texte sie versteht — sonst sieht das Modell sie nicht richtig.
+    static var manual: PaneKindManual { get }
     /// Aus Steuerkanal (`--arg k=v`), Menü (`menuArgs`) oder Snapshot. Unsinn → `PaneArgsError` mit Grund.
     init(args: [String: String]) throws
     /// Args für einen Start aus dem Menü — z. B. per Dateidialog; nil = abgebrochen (Default: keine).
@@ -73,6 +77,14 @@ protocol PaneContentDelegate: AnyObject {
     func contentRequestsAttention(title: String, body: String?)
 }
 
+/// Was eine App-Kachelart Agenten über sich sagt; Art und Anzeigename ergänzt die Registry.
+struct PaneKindManual {
+    /// Ein bis zwei Sätze: was die Kachel zeigt und wann sie hilft (liest das Modell).
+    var summary: String
+    var args: [PaneKindArg] = []
+    var actions: [PaneKindAction] = []
+}
+
 /// Grund, warum ein Inhalt mit diesen Args nicht entstehen kann — landet wörtlich beim CLI.
 struct PaneArgsError: Error, CustomStringConvertible {
     let description: String
@@ -96,6 +108,18 @@ enum PaneKindRegistry {
 
     /// Alle Arten, die `new-pane --kind` kennt.
     static var kinds: [String] { ["terminal", "home"] + contents.map { $0.kind } }
+
+    /// Selbstbeschreibung aller Arten für `pane-kinds` (terminal/home fest, Rest aus den Handbüchern).
+    static var infos: [PaneKindInfo] {
+        [PaneKindInfo(kind: "terminal", displayName: "Neues Terminal",
+                      summary: "Login-Shell in einer neuen Kachel, optional in einem Ordner und mit Startbefehl."),
+         PaneKindInfo(kind: "home", displayName: "Neue Home-Kachel",
+                      summary: "Projekt-Launcher: Ordner wählen und dort eine Session starten oder fortsetzen.")]
+        + contents.map { type in
+            PaneKindInfo(kind: type.kind, displayName: type.displayName, summary: type.manual.summary,
+                         args: type.manual.args, actions: type.manual.actions)
+        }
+    }
 
     /// Menüeinträge für App-Kacheln (Terminal und Home haben eigene Menüpunkte mit Kürzel).
     static var menuEntries: [(kind: String, displayName: String)] {

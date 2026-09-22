@@ -12,6 +12,12 @@ import WebKit
 final class WebContent: NSObject, PaneContent, WKNavigationDelegate {
     static let kind = "web"
     static let displayName = "HTML-Datei in neuer Kachel …"
+    static let manual = PaneKindManual(
+        summary: "Zeigt eine lokale Datei neben der Session — HTML (Plots, Berichte, Mini-Apps), PDF, Bilder. "
+            + "Nur Dateien auf dem Mac, kein http. Nach dem Überschreiben der Datei mit `reload` aktualisieren.",
+        args: [PaneKindArg(name: "url", summary: "absoluter Pfad der Datei (auch ~/…); Ordner = deren index.html", required: true)],
+        actions: [PaneKindAction(name: "reload", summary: "Datei neu laden, nachdem sie sich geändert hat"),
+                  PaneKindAction(name: "load <pfad>", summary: "andere lokale Datei in derselben Kachel zeigen")])
 
     weak var delegate: PaneContentDelegate?
     private let webView: WKWebView
