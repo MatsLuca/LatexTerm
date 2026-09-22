@@ -1,5 +1,26 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-23 (nachts) — Vorschau mit Rückkanal, SyncTeX und Komfort
+
+**Anlass (Mats):** „bau alle Punkte sinnvoll perfekt“ — die Vorschau soll nicht nur zeigen, sondern zurück zur Session zeigen.
+
+**Gebaut:** Markieren (Textauswahl oder ⌥-Rahmen, auch im Bild) → Leiste mit Notiz, „Merken“ sammelt nummerierte Stellen
+(PDF-Annotationen), ➤/⇧⌘⏎ fügt sie als Text in die Agenten-Kachel ein: Seite, SyncTeX-Spanne (`synctex edit` oben/unten
+im Rahmen), Text, Notiz, Ausschnitt-PNG (`PreviewRender.crop`, Cache `LatexTerm/sends`). `call look <png> [page=N]` +
+MCP `preview_look` (Seitenbild, Label, sichtbarer Bereich, Seitentext, gemerkte Stellen). `sync datei.tex:zeile`
+(`synctex view` → Kästen aufleuchten). Nach dem Neuladen Seitentext alt/neu vergleichen → Sprung zur ersten geänderten
+Seite, `⌘[`/`back` zurück, `follow off`. Seitenleiste (PDFThumbnailView / Outline, folgt der Seite), ⌘L Gehe-zu (auch
+Seitenlabels), Werkzeugleiste beim Überfahren, Ordner-Modus (`FolderWatcher`, neueste zuerst, neue Datei rückt vor,
+⌥⌘←/→), Office/Text über `QLPreviewView`. `AgentHandoff.swift` = gemeinsamer Übergabeweg für Scratchpad und Vorschau
+(bei genau einer Agenten-Kachel direkt, sonst Menü). Dateien: `PreviewContent`, `PreviewChrome`, `PreviewImage`,
+`PreviewSupport`.
+
+**Live geprüft (Claude, per CLI/MCP):** `sync main.tex:235` → S. 5 der Projektarbeit, `preview_look` liefert Bild + Text,
+Änderung auf S. 3 → Sprung + `back`, Ordner rückt bei neuem Plot vor, CSV per QuickLook. Offen: Markieren/Senden von Hand.
+
+**Lehre:** SwiftDefaultActorIsolation = MainActor — was im Hintergrund läuft (SyncTeX, Text zusammensetzen), explizit
+`nonisolated` markieren.
+
 ## 2026-09-23 — Vorschau-Kachel `preview` (Kacheln Runde 2, Platz 1)
 
 **Anlass (Mats, Befund 22.09. abends):** Ein Blender-PNG in der Web-Kachel klebte oben in Originalbreite, darunter weiße
