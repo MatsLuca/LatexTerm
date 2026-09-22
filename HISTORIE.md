@@ -11,7 +11,7 @@ Radieren; Werkzeugleiste bleibt sofort bedienbar. Verworfen: kurze Punkte nach F
 
 **Lehre (erste Fassung scheiterte live):** In `mouseDown` zu fragen „habe ich den Fokus?“ ist immer ja — `NSWindow` macht die
 angeklickte View schon vor `mouseDown` zum First Responder. Jetzt merkt `becomeFirstResponder` sich den Zeitstempel des
-Klicks, der den Fokus gebracht hat, und `mouseDown` mit genau diesem Zeitstempel wird geschluckt.
+Klicks, der den Fokus gebracht hat, und `mouseDown` mit genau diesem Zeitstempel wird geschluckt. Von Mats live abgenommen.
 
 ## 2026-09-22 (spät) — Scratchpad im Dialog: Senden an Agenten, Agent zeichnet mit
 
