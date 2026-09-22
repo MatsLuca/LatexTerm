@@ -15,6 +15,9 @@ Fokus und Notification-Klick haben damit ein gemeinsames Zielverzeichnis. Home n
 Anbieter + Session-ID für bereits verbundene Sessions; gleiche CWDs reichen nicht.
 Zwischen Start und erstem Hook gibt es noch keine Bindung und keine Startreservierung.
 Status-Einstellungen heißen „Agenten“, Claude-spezifische Optionen bleiben benannt.
+Verbundene Sessions heißen in Suche/Aktionen „Zur Kachel“ und tragen ihren Live-Status.
+Nur die fokussierte Kachel im Key-Fenster gilt als beobachtet; Hintergrundfenster behalten
+zwar ihren AppKit-First-Responder, unterdrücken dadurch aber keine Benachrichtigungen mehr.
 
 Dokumentation berichtigt: Status läuft seit 21.09. über den Socket, globale OSC-Fallback-Hooks
 sind entfernt. Neustarts öffnen Home; die gespeicherte Verzeichnisliste wird derzeit nicht

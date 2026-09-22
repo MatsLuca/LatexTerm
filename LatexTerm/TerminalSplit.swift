@@ -1837,7 +1837,7 @@ final class TerminalSplitView: NSView {
         }
         pane.isObservedProvider = { [weak self, weak pane] in
             guard let self, let pane else { return true }
-            return NSApp.isActive && self.isFocused(pane)
+            return self.isObserved(pane)
         }
         // Grid-Änderung beendet einen aktiven Zoom: die neue Kachel soll sichtbar
         // im Grid entstehen, nicht unsichtbar unter der gezoomten (⌘T/⌘1–9-Policy).
@@ -2067,10 +2067,14 @@ final class TerminalSplitView: NSView {
 
     // MARK: - Session-Status → Notification (#30)
 
-    /// Melden nur, wenn die Session gerade niemand ansieht — App im Hintergrund ODER andere
-    /// Kachel fokussiert; Einstellung „Agenten → nur wenn unbeobachtet“ (aus = immer).
+    private func isObserved(_ pane: TerminalPane) -> Bool {
+        NSApp.isActive && window?.isKeyWindow == true && isFocused(pane)
+    }
+
+    /// Hintergrundfenster behalten ihren First Responder. Erst das Key-Fenster zählt als
+    /// beobachtet; Einstellung „Agenten → nur wenn unbeobachtet“ aus = immer melden.
     private func isUnobserved(_ pane: TerminalPane) -> Bool {
-        !CockpitSettings.shared.notifyOnlyUnobserved || !NSApp.isActive || !isFocused(pane)
+        !CockpitSettings.shared.notifyOnlyUnobserved || !isObserved(pane)
     }
 
     /// Bestätigter working→awaitingInput: nur melden, wenn die Session gerade
@@ -2342,7 +2346,7 @@ extension TerminalSplitView: ControlCommandHandler {
         return PaneInfo(id: pane.id.uuidString,
                         index: (panes.firstIndex(where: { $0 === pane }) ?? 0) + 1,
                         cwd: pane.currentDirectory,
-                        focused: isFocused(pane),
+                        focused: isActiveControlWindow && isFocused(pane),
                         zoomed: pane === zoomedPane,
                         state: state, agent: pane.agentSession.identity?.agent,
                         sessionID: pane.agentSession.identity?.sessionID,
