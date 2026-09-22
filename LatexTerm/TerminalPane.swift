@@ -250,14 +250,6 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
             guard let self, let host = self.host else { return wanted }
             return host.distinctAccentName(wanted, alternatives: alternatives, palette: palette, excluding: self)
         }
-        home.onClose = { [weak self] in
-            guard let self else { return }
-            self.host?.paneRequestsClose(self)
-        }
-        home.onZoom = { [weak self] in
-            guard let self else { return }
-            self.host?.paneRequestsZoom(self)
-        }
         container.addSubview(home)
         homeView = home
     }
@@ -495,6 +487,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         self.container = box
         self.controller = OverlayController(terminal: term)
         super.init()
+        box.pane = self   // Kachel-Kürzel der Hülle landen über diese Kachel beim Host
 
         term.processDelegate = self
         term.onRangeChanged = { [weak self, weak controller] startY, endY in
@@ -532,19 +525,6 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
             return CellStyleOverride(color: color, glow: store.promptGlow)
         }
         term.onScrolled = { [weak controller] in controller?.scheduleReposition() }
-        term.onSplitRequested = { [weak self] in
-            guard let self else { return }
-            self.host?.paneRequestsSplit(self)
-        }
-        term.onCloseRequested = { [weak self] in
-            guard let self else { return }
-            self.host?.paneRequestsClose(self)
-        }
-        term.onEnsurePaneCount = { [weak self] n in self?.host?.paneRequestsPaneCount(n) }
-        term.onZoomRequested = { [weak self] in
-            guard let self else { return }
-            self.host?.paneRequestsZoom(self)
-        }
 
         // In-Band-Steuerkanal (#24). Der Parser läuft auf dem Feed-Pfad —
         // UI-Änderungen sicherheitshalber auf den Main-Runloop verschieben.

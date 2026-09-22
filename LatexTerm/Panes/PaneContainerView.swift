@@ -44,7 +44,44 @@ final class PaneContainerView: NSView {
         didSet { if fillsWindow != oldValue { restyle() } }
     }
 
+    /// Die Kachel, der diese Hülle gehört — Ziel der Kachel-Kürzel (über ihren Host).
+    weak var pane: (any Pane)?
+
     private var themeObserver: NSObjectProtocol?
+
+    // MARK: Kachel-Kürzel
+
+    enum Shortcut: Equatable { case split, close, zoom, paneCount(Int) }
+
+    /// ⌘T, ⌘W, ⌘1…9, ⌘⏎ — genau ⌘, ohne ⇧/⌥/⌃. Beide Zeichenformen prüfen, damit es auf jedem
+    /// Tastaturlayout greift.
+    static func shortcut(for event: NSEvent) -> Shortcut? {
+        guard event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command else { return nil }
+        let keys = [event.charactersIgnoringModifiers ?? "", event.characters ?? ""]
+        if keys.contains("t") { return .split }
+        if keys.contains("w") { return .close }
+        if keys.contains("\r") { return .zoom }
+        if let digit = keys.lazy.compactMap({ Int($0) }).first, (1...9).contains(digit) { return .paneCount(digit) }
+        return nil
+    }
+
+    /// Der einzige Verteiler der Kachel-Kürzel. `performKeyEquivalent` läuft durch ALLE Kacheln
+    /// (älteste zuerst) — nur die Hülle mit dem First Responder antwortet, und nur ihr Inhalt
+    /// sieht das Kürzel überhaupt. Der Inhalt kommt zuerst dran (die ⌘K-Palette belegt ⌘⏎ als
+    /// Zweitaktion) und reicht Kachel-Kürzel sonst durch; kein Inhalt implementiert sie selbst.
+    override func performKeyEquivalent(with event: NSEvent) -> Bool {
+        guard let pane, let host = pane.host,
+              (window?.firstResponder as? NSView)?.isDescendant(of: self) == true else { return false }
+        if super.performKeyEquivalent(with: event) { return true }
+        guard let shortcut = Self.shortcut(for: event) else { return false }
+        switch shortcut {
+        case .split: host.paneRequestsSplit(pane)
+        case .close: host.paneRequestsClose(pane)
+        case .zoom: host.paneRequestsZoom(pane)
+        case .paneCount(let count): host.paneRequestsPaneCount(count)
+        }
+        return true
+    }
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)

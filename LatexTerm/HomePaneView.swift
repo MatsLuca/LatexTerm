@@ -275,7 +275,7 @@ enum LimitsLoader {
 
 struct LoaderError: Error { let message: String }
 
-/// Kachel-Aktionen aus dem Menü „Kachel“. Die Tasten selbst fängt `LatexTerminalView.performKeyEquivalent`
+/// Kachel-Aktionen aus dem Menü „Kachel“. Die Tasten selbst fängt `PaneContainerView.performKeyEquivalent`
 /// vor dem Menü ab — die Menüeinträge sind Schaufenster + Mausweg (wie beim Home-Menü).
 enum PaneCommand {
     case split, close, zoom, find
@@ -321,9 +321,6 @@ final class HomePaneView: NSView {
     /// (Pfad, Befehl-oder-nil, Label fürs Start-Overlay) → Kachel wird Terminal in `Pfad`.
     var onLaunch: ((LaunchRequest) -> Void)?
     var onLaunchGroup: (([LaunchRequest]) -> Void)?
-    var onClose: (() -> Void)?
-    /// ⌘⏎ — Zoom wie bei Terminal-Kacheln (#26).
-    var onZoom: (() -> Void)?
     /// (CWD, Claude-Status) der anderen gestarteten Kacheln → ● im Baum.
     var otherPanes: (() -> [HomePaneInfo])?
     /// Sprung zu einer laufenden Kachel (CWD) — Fokus + ggf. Zoom wandert dorthin.
@@ -2261,8 +2258,8 @@ final class HomePaneView: NSView {
         let focused = fr === self || (fr?.isDescendant(of: self) ?? false)
         guard focused else { return super.performKeyEquivalent(with: event) }
         if let palette, palette.handleKeyEquivalent(event) { return true }
-        if mods == .command, a == "w" { onClose?(); return true }
-        if mods == .command, a == "\r" { onZoom?(); return true }
+        // Kachel-Kürzel (⌘T/⌘W/⌘1–9/⌘⏎) gehören der Hülle — durchreichen, auch unter dem Vorhang.
+        if PaneContainerView.shortcut(for: event) != nil { return false }
         // Alles Weitere (Neu laden, Pins, Umbenennen, Neues Projekt) ruht, solange der Vorhang liegt.
         if isLaunching { return true }
         if mods == .command, a == "k" { openSearch(); return true }

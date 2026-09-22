@@ -54,14 +54,6 @@ final class LatexTerminalView: LocalProcessTerminalView {
     var onNeedsFullRescan: (() -> Void)?
     /// Reiner Scroll: Inhalt unverändert, nur neu positionieren → Sofort-Pfad ohne Debounce.
     var onScrolled: (() -> Void)?
-    /// Cmd+T: neue Terminal-Kachel rechts anlegen.
-    var onSplitRequested: (() -> Void)?
-    /// Cmd+W: diese Kachel schließen (Shell beenden).
-    var onCloseRequested: (() -> Void)?
-    /// Cmd+1…9: auf so viele Kacheln auffüllen (nur erweitern, nie schließen).
-    var onEnsurePaneCount: ((Int) -> Void)?
-    /// Cmd+⏎: diese Kachel über das ganze Fenster zoomen bzw. zurück ins Grid (#26).
-    var onZoomRequested: (() -> Void)?
     /// BEL (\a) vom Kindprozess — Claude Codes Standard-Notification-Kanal
     /// (`preferredNotifChannel: terminal_bell`), präziser Sofort-Auslöser für #30.
     var onBell: (() -> Void)?
@@ -194,6 +186,9 @@ final class LatexTerminalView: LocalProcessTerminalView {
         onScrolled?()
     }
 
+    /// Terminal-eigene Kürzel. Die Kachel-Kürzel (⌘T/⌘W/⌘1–9/⌘⏎) verteilt die Hülle
+    /// (`PaneContainerView`); sie reicht Tasten nur an den Inhalt der fokussierten Kachel
+    /// weiter. Esc bleibt bewusst frei — das gehört vim/TUIs/Claude Code.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
         guard mods.subtracting(.shift) == .command else {
@@ -201,34 +196,10 @@ final class LatexTerminalView: LocalProcessTerminalView {
         }
         let a = event.charactersIgnoringModifiers ?? ""
         let b = event.characters ?? ""
-        if (a == "t" || b == "t"), !mods.contains(.shift) {
-            onSplitRequested?(); return true
-        }
-        if (a == "w" || b == "w"), !mods.contains(.shift) {
-            // performKeyEquivalent wird in View-Reihenfolge durchgereicht (älteste Kachel
-            // zuerst). Nur die tatsächlich fokussierte Kachel darf sich schließen – sonst
-            // an die nächste weiterreichen, bis die fokussierte dran ist.
-            let fr = window?.firstResponder
-            let focused = (fr === self) || ((fr as? NSView)?.isDescendant(of: self) ?? false)
-            if focused { onCloseRequested?(); return true }
-            return super.performKeyEquivalent(with: event)
-        }
-        if let d = Int(a) ?? Int(b), (1...9).contains(d), !mods.contains(.shift) {
-            onEnsurePaneCount?(d); return true
-        }
-        if (a == "\r" || b == "\r"), !mods.contains(.shift) {
-            // ⌘⏎: Pane-Zoom-Toggle (#26). Nur der ⌘⏎-Shortcut beendet den Zoom —
-            // Esc bleibt bewusst frei, das gehört vim/TUIs/Claude Code. Gleiche
-            // Fokus-Weiterreichung wie ⌘W.
-            let fr = window?.firstResponder
-            let focused = (fr === self) || ((fr as? NSView)?.isDescendant(of: self) ?? false)
-            if focused { onZoomRequested?(); return true }
-            return super.performKeyEquivalent(with: event)
-        }
         if (a == "f" || b == "f"), !mods.contains(.shift) {
-            // ⌘F: Suchleiste der FOKUSSIERTEN Kachel (#9). Gleiche Fokus-Weiterreichung
-            // wie ⌘W: unfokussierte Kacheln geben das Event weiter. Die Leiste selbst
-            // (Fork: TerminalFindBarView) übernimmt Enter/Shift-Enter/Esc und Optionen.
+            // ⌘F: Suchleiste (#9) — nur wenn das Terminal selbst den Fokus hat: unter einer
+            // Home-Ansicht liegt es ungestartet in derselben Kachel und bekäme sonst eine
+            // unsichtbare Leiste. Die Leiste (Fork: TerminalFindBarView) übernimmt Enter/Esc.
             let fr = window?.firstResponder
             let focused = (fr === self) || ((fr as? NSView)?.isDescendant(of: self) ?? false)
             if focused { showFindInterface(); return true }

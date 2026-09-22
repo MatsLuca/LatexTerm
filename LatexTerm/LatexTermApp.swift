@@ -193,8 +193,8 @@ struct LatexTermApp: App {
         }
         .commands {
             // Ablage → Neu: ⌘N Home-Kachel (Projekt-Launcher) statt SwiftUIs „Neues Fenster",
-            // ⌘T Terminal-Kachel (nackte Shell, CWD-Erbe). Die Tasten fängt die Kachel selbst
-            // (LatexTerminalView.performKeyEquivalent); das Menü ist Schaufenster + Mausweg.
+            // ⌘T Terminal-Kachel (nackte Shell, CWD-Erbe). Die Tasten fängt die Kachel-Hülle
+            // (PaneContainerView.performKeyEquivalent); das Menü ist Schaufenster + Mausweg.
             CommandGroup(replacing: .newItem) {
                 Button("Neue Home-Kachel") {
                     NotificationCenter.default.post(name: .latexTermNewHomePane, object: nil)
