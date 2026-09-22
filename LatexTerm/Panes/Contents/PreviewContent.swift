@@ -97,6 +97,10 @@ final class PreviewContent: NSObject, PaneContent {
         root.findBar.onClose = { [weak self] in self?.closeFind() }
         root.onZoomKey = { [weak self] step in self?.zoomStep(step) }
         root.onLayout = { [weak self] in self?.refit() }
+        root.onActivate = { [weak self] in
+            guard let self else { return }
+            self.root.window?.makeFirstResponder(self.keyView)
+        }
         root.image.onZoomChange = { [weak self] in self?.imageZoomChanged() }
         open(file)
     }
@@ -516,6 +520,8 @@ final class PreviewRootView: NSView {
     /// ⌘+ = 1, ⌘− = −1, ⌘0 = 0.
     var onZoomKey: ((Int) -> Void)?
     var onLayout: (() -> Void)?
+    /// Klick irgendwo in die Kachel (auch auf den Grund neben Seite/Bild) → Fokus an den Inhalt.
+    var onActivate: (() -> Void)?
 
     override var mouseDownCanMoveWindow: Bool { false }
     override var acceptsFirstResponder: Bool { true }
@@ -534,6 +540,13 @@ final class PreviewRootView: NSView {
         message.font = .systemFont(ofSize: 13)
         message.isSelectable = false
         for view in [pdf, image, message, pill, findBar] as [NSView] { addSubview(view) }
+        // Nur die Seite bzw. das Bild wollten den Fokus; Grund und Scroll-Fläche nicht. Der Erkenner sieht jeden
+        // Klick in der Kachel, hält aber keinen auf (PDF-Auswahl, Ziehen, Doppelklick laufen ungestört).
+        let click = NSClickGestureRecognizer(target: self, action: #selector(clicked))
+        click.delaysPrimaryMouseButtonEvents = false
+        click.delaysSecondaryMouseButtonEvents = false
+        click.delaysOtherMouseButtonEvents = false
+        addGestureRecognizer(click)
         pdf.isHidden = true
         image.isHidden = true
         message.isHidden = true
@@ -541,6 +554,14 @@ final class PreviewRootView: NSView {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    @objc private func clicked() {
+        if (window?.firstResponder as? NSView)?.isDescendant(of: self) != true { onActivate?() }
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        onActivate?()
+    }
 
     func show(_ type: PreviewContent.FileType) {
         self.type = type
