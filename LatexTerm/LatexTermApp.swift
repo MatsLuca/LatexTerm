@@ -15,10 +15,44 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         WidgetRefresher.shared.start()   // Desktop-Widgets füttern (projekte widget), dann alle 5 min
     }
 
+    // MARK: Neu starten / Beenden und Kacheln merken
+    //
+    // Mats baut LatexTerm in LatexTerm: nach jedem Build ⌘Q, wieder öffnen, jede Session im Home
+    // suchen und „Weiter“. Die beiden Menüpunkte beenden wie ⌘Q (samt VM-Schutz), setzen aber die
+    // Marke im Snapshot — beim nächsten Start kommen dieselben Kacheln wieder, Sessions über „Weiter“.
+    // „Neu starten“ öffnet die App danach selbst (`AppRelaunch`). Normales ⌘Q bleibt bei Home.
+
+    private enum KeepPanes { case quit, relaunch }
+    private var keepPanes: KeepPanes?
+
+    func quitKeepingPanes(relaunch: Bool) {
+        guard confirmBusyPanes(relaunch: relaunch) else { return }
+        keepPanes = relaunch ? .relaunch : .quit
+        NSApp.terminate(nil)
+    }
+
+    /// Eine arbeitende Session verliert beim Beenden ihren laufenden Schritt — vorher fragen.
+    private func confirmBusyPanes(relaunch: Bool) -> Bool {
+        let busy = ControlServer.shared.router.panes.filter { $0.state == "working" }.count
+        guard busy > 0 else { return true }
+        let alert = NSAlert()
+        alert.messageText = busy == 1 ? "Eine Kachel arbeitet noch" : "\(busy) Kacheln arbeiten noch"
+        alert.informativeText = "Der laufende Schritt bricht ab. Die Session kommt "
+            + (relaunch ? "nach dem Neustart" : "beim nächsten Öffnen") + " wieder und kann dort weitermachen."
+        alert.addButton(withTitle: relaunch ? "Neu starten" : "Beenden")
+        alert.addButton(withTitle: "Abbrechen")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
     /// Stand aller Fenster sichern (Snapshot v2). Erst hier, nach dem Ja von `VMQuitGuard`: ein
     /// abgebrochenes Beenden hinterlässt so keine Wiederherstell-Marke.
     func applicationWillTerminate(_ notification: Notification) {
-        SessionStore.save(TerminalSplitView.sessionSnapshot(restoreOnce: false))
+        SessionStore.save(TerminalSplitView.sessionSnapshot(restoreOnce: keepPanes != nil))
+        guard keepPanes == .relaunch else { return }
+        do { try AppRelaunch.reopen(Bundle.main.bundleURL) } catch {
+            // Marke steht trotzdem: das nächste Öffnen von Hand stellt wieder her.
+            qlog.error("Neustart-Helfer nicht startbar: \(error.localizedDescription, privacy: .public)")
+        }
     }
 
     // MARK: Beenden mit laufender Windows-VM
@@ -44,6 +78,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSApp.reply(toApplicationShouldTerminate: true)
             case .cancel(let failure):
                 qlog.error("Beenden abgebrochen: \(failure.message, privacy: .public)")
+                self?.keepPanes = nil   // App bleibt offen → keine Marke fürs nächste Beenden
                 NSApp.reply(toApplicationShouldTerminate: false)
                 let alert = NSAlert()
                 alert.messageText = "LatexTerm bleibt geöffnet"
@@ -198,6 +233,14 @@ struct LatexTermApp: App {
             }
         }
         .commands {
+            // App-Menü, über „Beenden“: wie ⌘Q, aber dieselben Kacheln kommen wieder (AppDelegate).
+            // ⌥⌘Q folgt der macOS-Geste „Beenden und Fenster behalten“.
+            CommandGroup(before: .appTermination) {
+                Button("Neu starten") { appDelegate.quitKeepingPanes(relaunch: true) }
+                    .keyboardShortcut("r", modifiers: [.command, .option])
+                Button("Beenden und Kacheln merken") { appDelegate.quitKeepingPanes(relaunch: false) }
+                    .keyboardShortcut("q", modifiers: [.command, .option])
+            }
             // Ablage → Neu: ⌘N Home-Kachel (Projekt-Launcher) statt SwiftUIs „Neues Fenster",
             // ⌘T Terminal-Kachel (nackte Shell, CWD-Erbe). Die Tasten fängt die Kachel-Hülle
             // (PaneContainerView.performKeyEquivalent); das Menü ist Schaufenster + Mausweg.
