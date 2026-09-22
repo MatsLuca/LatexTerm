@@ -776,7 +776,10 @@ final class PreviewContent: NSObject, PaneContent {
             add(note)
         }
         if let number {
-            let badge = PDFAnnotation(bounds: NSRect(x: mark.rect.minX - 13, y: mark.rect.maxY - 11, width: 13, height: 11),
+            // Im linken Seitenrand auf Höhe der ersten Zeile — nie über dem Text (verdeckte sonst den Wortanfang, 23.09.).
+            let box = page.bounds(for: .cropBox)
+            let top = (mark.lines.first ?? mark.rect).maxY
+            let badge = PDFAnnotation(bounds: NSRect(x: box.minX + 14, y: top - 11, width: 14, height: 11),
                                       forType: .freeText, withProperties: nil)
             badge.contents = "\(number)"
             badge.font = .boldSystemFont(ofSize: 8)
@@ -831,8 +834,12 @@ final class PreviewContent: NSObject, PaneContent {
         for mark in batch {
             var png: Data?
             if type == .pdf, let page = doc?.page(at: mark.page) {
-                let margin: CGFloat = mark.kind == .text ? 14 : 6
-                png = PreviewRender.crop(page, rect: mark.rect.insetBy(dx: -margin - (mark.kind == .text ? 30 : 0), dy: -margin))
+                // Textstellen über die ganze Seitenbreite (ganze Zeilen lesbar), Rahmen genau wie gezogen.
+                let box = page.bounds(for: .cropBox)
+                let area = mark.kind == .text
+                    ? NSRect(x: box.minX, y: mark.rect.minY - 14, width: box.width, height: mark.rect.height + 28)
+                    : mark.rect.insetBy(dx: -6, dy: -6)
+                png = PreviewRender.crop(page, rect: area)
             } else if type == .image, let image {
                 png = PreviewRender.crop(image, pointRect: mark.rect, pointSize: pointSize)
             }
