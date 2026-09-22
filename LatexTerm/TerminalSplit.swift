@@ -19,6 +19,7 @@ final class TerminalSplitView: NSView {
     private let vibrancyView = NSVisualEffectView()
     private var isFirstLayout = true
     private var newHomeObserver: NSObjectProtocol?
+    private var newAppPaneObserver: NSObjectProtocol?
 
     private var showHomeObserver: NSObjectProtocol?
     private var paneCommandObserver: NSObjectProtocol?
@@ -67,6 +68,16 @@ final class TerminalSplitView: NSView {
         ) { [weak self] _ in
             guard let self, self.window?.isKeyWindow == true else { return }
             self.addPane(home: true)
+        }
+
+        // Menü „Ablage → Neu ▸ <Art>“ (aus der Registry): App-Kachel im Key-Fenster.
+        newAppPaneObserver = NotificationCenter.default.addObserver(
+            forName: .latexTermNewAppPane, object: nil, queue: .main
+        ) { [weak self] note in
+            guard let self, self.window?.isKeyWindow == true, let kind = note.userInfo?["kind"] as? String else { return }
+            do { try self.addAppPane(kind: kind) } catch {
+                Logger(subsystem: "com.mats.LatexTerm", category: "panes").error("Neue Kachel \(kind, privacy: .public): \(String(describing: error), privacy: .public)")
+            }
         }
 
         // `latexterm://home` (Widget-Klick): nicht stapeln — unberührte Home-Kachel fokussieren, sonst anhängen.
@@ -118,6 +129,7 @@ final class TerminalSplitView: NSView {
 
     deinit {
         if let newHomeObserver { NotificationCenter.default.removeObserver(newHomeObserver) }
+        if let newAppPaneObserver { NotificationCenter.default.removeObserver(newAppPaneObserver) }
         if let showHomeObserver { NotificationCenter.default.removeObserver(showHomeObserver) }
         if let quickstartObserver { NotificationCenter.default.removeObserver(quickstartObserver) }
         if let paneCommandObserver { NotificationCenter.default.removeObserver(paneCommandObserver) }
@@ -184,10 +196,13 @@ final class TerminalSplitView: NSView {
     /// Eine Kachel wie gespeichert: Agenten-Session → Home, das sie per „Weiter“ fortsetzt
     /// (gleicher Befehl, Farbe, Vorhang wie der Klick); sonst Shell im Verzeichnis oder Home.
     @discardableResult
-    private func restorePane(_ step: RestoreStep) -> TerminalPane {
+    private func restorePane(_ step: RestoreStep) -> any Pane {
         switch step {
         case .home:
             return addPane(home: true)
+        case .app(let kind, let args):
+            // Art unbekannt (älterer Build) oder Args ungültig: der Platz bleibt als Home erhalten.
+            return (try? addAppPane(kind: kind, args: args)) ?? addPane(home: true)
         case .shell(let cwd):
             return addPane(startingIn: cwd)
         case .resume(let agent, let sessionID, let cwd, let accentName):
@@ -341,26 +356,44 @@ final class TerminalSplitView: NSView {
         relayout(animated: false)
     }
 
+    /// Terminal- oder Home-Kachel anhängen.
     @discardableResult
     func addPane(startingIn directory: String? = nil, home: Bool = false) -> TerminalPane {
         let pane = TerminalPane()
-        pane.host = self
-        // Grid-Änderung beendet einen aktiven Zoom: die neue Kachel soll sichtbar
-        // im Grid entstehen, nicht unsichtbar unter der gezoomten (⌘T/⌘1–9-Policy).
-        setZoomedPane(nil)
-        panes.append(pane)
-        updateTitlebarHUD()
-        addSubview(pane.container)
+        mount(pane)
         if home {
             pane.showHome()
         } else {
             pane.start(in: directory)
         }
+        settle(pane)
+        return pane
+    }
+
+    /// App-Kachel (Scratchpad, …) aus der Registry anhängen; Fehler = unbekannte Art oder Args.
+    @discardableResult
+    func addAppPane(kind: String, args: [String: String] = [:]) throws -> AppPane {
+        let pane = try PaneKindRegistry.makeAppPane(kind: kind, args: args)
+        mount(pane)
+        settle(pane)
+        return pane
+    }
+
+    /// Einhängen, für jede Kachelart gleich. Grid-Änderung beendet einen aktiven Zoom: die neue
+    /// Kachel soll sichtbar im Grid entstehen, nicht unsichtbar unter der gezoomten (⌘T/⌘1–9-Policy).
+    private func mount(_ pane: any Pane) {
+        pane.host = self
+        setZoomedPane(nil)
+        panes.append(pane)
+        updateTitlebarHUD()
+        addSubview(pane.container)
+    }
+
+    /// Nach dem Einhängen: Rahmen, Raster, Fokus — erst im nächsten Runloop, dann ist die View bereit.
+    private func settle(_ pane: any Pane) {
         updateFocusBorders()
         relayout(animated: true)
-        // Fokus erst im nächsten Runloop – der frisch hinzugefügte View ist dann bereit.
         DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(pane.focusTarget) }
-        return pane
     }
 
     /// Cmd+1…9: auf `n` Kacheln auffüllen – nur erweitern, nie schließen.

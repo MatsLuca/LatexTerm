@@ -251,6 +251,15 @@ struct LatexTermApp: App {
                 .keyboardShortcut("n", modifiers: .command)
                 Button("Neue Terminal-Kachel") { paneCommand(.split) }
                     .keyboardShortcut("t", modifiers: .command)
+                // App-Kacheln aus der Registry — eine neue Art erscheint hier ohne Menü-Code.
+                Menu("Neue Kachel") {
+                    ForEach(PaneKindRegistry.menuEntries, id: \.kind) { entry in
+                        Button(entry.displayName) {
+                            NotificationCenter.default.post(name: .latexTermNewAppPane, object: nil,
+                                                            userInfo: ["kind": entry.kind])
+                        }
+                    }
+                }
             }
             // Home-Kachel: die Befehle stehen im Menü statt in einer Fußzeile in der Kachel
             // (Runde 15). Die Tastenwege selbst fängt HomePaneView.performKeyEquivalent ab —

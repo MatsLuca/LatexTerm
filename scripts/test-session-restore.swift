@@ -50,7 +50,8 @@ struct SessionRestoreTests {
 
         // Was wird wie wiederhergestellt.
         check(RestoreStep(PaneSnapshot(kind: "home")) == .home, "home stays home")
-        check(RestoreStep(PaneSnapshot(kind: "zeichenbrett", args: ["cwd": "/tmp"])) == .home, "unknown kind keeps slot as home")
+        check(RestoreStep(PaneSnapshot(kind: "zeichenbrett", args: ["cwd": "/tmp"])) == .app(kind: "zeichenbrett", args: ["cwd": "/tmp"]),
+              "other kind goes to the registry (unknown → Home in the split view)")
         check(RestoreStep(claude) == .resume(agent: "claude", sessionID: "0b1c-22_ab", cwd: "/Users/x/Projekt", accentName: "cyan"),
               "claude session resumes")
         check(RestoreStep(PaneSnapshot(kind: "terminal", args: ["agent": "codex", "session": "019a-b"]))

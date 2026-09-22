@@ -93,8 +93,11 @@ struct SessionSnapshot: Codable, Equatable {
 /// ungeprüft (Datei auf der Platte): Session-IDs und Farbnamen landen später in einem getippten
 /// Befehl und müssen deshalb dieselben Regeln erfüllen wie im Steuerkanal.
 enum RestoreStep: Equatable {
-    /// Home-Kachel (auch für Arten, die diese Version nicht kennt: der Platz bleibt erhalten).
+    /// Home-Kachel.
     case home
+    /// App-Kachel aus der Registry (Scratchpad, …). Kennt der Build die Art nicht oder passen
+    /// die Args nicht, legt die Split-View stattdessen Home an — der Platz bleibt erhalten.
+    case app(kind: String, args: [String: String])
     /// Nackte Shell im Verzeichnis — auch für Kacheln ohne Session-Identität oder mit fremdem
     /// Vordergrundprozess (vim, ssh): deren Zustand lässt sich nicht fortsetzen.
     case shell(cwd: String?)
@@ -102,7 +105,8 @@ enum RestoreStep: Equatable {
     case resume(agent: String, sessionID: String, cwd: String?, accentName: String?)
 
     init(_ pane: PaneSnapshot) {
-        guard pane.kind == "terminal" else { self = .home; return }
+        if pane.kind == "home" { self = .home; return }
+        guard pane.kind == "terminal" else { self = .app(kind: pane.kind, args: pane.args); return }
         let cwd = pane.args["cwd"].flatMap { $0.hasPrefix("/") ? $0 : nil }
         guard let agent = pane.args["agent"], ["claude", "codex"].contains(agent),
               let session = pane.args["session"], AgentSession.validID(session) else {
