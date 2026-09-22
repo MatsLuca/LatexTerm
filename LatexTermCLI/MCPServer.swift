@@ -134,7 +134,7 @@ final class MCPServer {
         }
         lines.append("""
         Kacheln sind dein Bildschirm neben dem Chat. Nutze sie von dir aus, wenn es dem Nutzer hilft — er \
-        muss das Wort „Kachel“ nicht sagen: Ergebnisse zeigen (HTML, PDF, Bild → open_web), lange Prozesse \
+        muss das Wort „Kachel“ nicht sagen: Ergebnisse zeigen (PDF, Bild, Plot → open_preview; HTML → open_web; beide laden bei Dateiänderung von selbst neu), lange Prozesse \
         wie Server, Builds oder Logs in eine eigene Terminal-Kachel (open_terminal), Arbeit auf parallele \
         Agenten verteilen (start_agent, ask_session, wait_session). Neue Kacheln entstehen ohne Fokuswechsel. \
         Selbst geöffnete Kacheln schließt du, wenn sie nicht mehr gebraucht werden; fremde nur auf Auftrag. \
@@ -785,7 +785,8 @@ final class MCPServer {
     }
 
     private func sameArgs(_ shown: [String: String]?, _ wanted: [String: String]) -> Bool {
-        guard let shown, shown.count == wanted.count else { return false }
+        // Nur die gewünschten Schlüssel zählen: eine Vorschau merkt sich zusätzlich Seite/Zoom.
+        guard let shown else { return false }
         return wanted.allSatisfy { key, value in
             guard let other = shown[key] else { return false }
             if other == value { return true }

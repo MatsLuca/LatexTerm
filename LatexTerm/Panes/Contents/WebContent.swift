@@ -14,8 +14,8 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate {
     static let kind = "web"
     static let displayName = "HTML-Datei in neuer Kachel …"
     static let manual = PaneKindManual(
-        summary: "Zeigt eine lokale Datei neben der Session — HTML (Plots, Berichte, Mini-Apps), PDF, Bilder. "
-            + "Nur Dateien auf dem Mac, kein http. Nach dem Überschreiben der Datei mit `reload` aktualisieren.",
+        summary: "Zeigt eine lokale HTML-Datei neben der Session (interaktive Plots, Berichte, Mini-Apps). Nur Dateien auf dem Mac, "
+            + "kein http. Lädt von selbst neu, sobald die Datei sich ändert (Scrollposition bleibt). PDF und Bilder → open_preview.",
         args: [PaneKindArg(name: "url", summary: "absoluter Pfad der Datei (auch ~/…); Ordner = deren index.html", required: true)],
         actions: [PaneKindAction(name: "reload", summary: "Datei neu laden, nachdem sie sich geändert hat"),
                   PaneKindAction(name: "load <pfad>", summary: "andere lokale Datei in derselben Kachel zeigen")])
@@ -25,6 +25,10 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate {
     private(set) var file: URL
     private var titleObservation: NSKeyValueObservation?
     private let folderServer = LocalFolderServer()
+    /// Datei geändert → neu laden (Kacheln Runde 2, Lücke 1).
+    private var watcher: FileWatcher?
+    /// Scrollposition über ein Neuladen hinweg.
+    private var restoreScroll: (x: Double, y: Double)?
 
     required init(args: [String: String]) throws {
         try PaneArgsError.rejectUnknown(args, allowed: ["url"], kind: Self.kind)
@@ -87,6 +91,12 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate {
     /// gesperrt. PDF, Bilder direkt: wie gehabt über file://.
     private func load(_ url: URL) {
         file = url
+        if watcher?.url != url {
+            watcher?.stop()
+            watcher = FileWatcher(url: url) { [weak self] event in
+                if event == .changed { self?.reloadKeepingScroll() }
+            }
+        }
         if ["html", "htm"].contains(url.pathExtension.lowercased()) {
             folderServer.root = url.deletingLastPathComponent()
             webView.load(URLRequest(url: LocalFolderServer.url(for: url)))
@@ -116,13 +126,26 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate {
     func receive(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         // Neu von der Platte über denselben Weg wie beim ersten Laden (Ordner-Server bzw. file://).
-        if trimmed == "reload" { load(file); return true }
+        if trimmed == "reload" { reloadKeepingScroll(); return true }
         guard trimmed.hasPrefix("load "), let url = try? Self.resolve(String(trimmed.dropFirst(5))) else { return false }
         load(url)
         return true
     }
 
+    /// Neu von der Platte, Scrollposition bleibt (bei HTML; PDF/Bild über file:// fangen oben an).
+    private func reloadKeepingScroll() {
+        webView.evaluateJavaScript("[window.scrollX, window.scrollY]") { [weak self] result, _ in
+            guard let self else { return }
+            if let xy = result as? [NSNumber], xy.count == 2, xy[0].doubleValue != 0 || xy[1].doubleValue != 0 {
+                self.restoreScroll = (xy[0].doubleValue, xy[1].doubleValue)
+            }
+            self.load(self.file)
+        }
+    }
+
     func willClose() {
+        watcher?.stop()
+        watcher = nil
         titleObservation = nil
         webView.stopLoading()
         webView.navigationDelegate = nil
@@ -132,6 +155,12 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate {
     func snapshotArgs() -> [String: String]? { ["url": file.path] }
 
     // MARK: WKNavigationDelegate
+
+    func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
+        guard let scroll = restoreScroll else { return }
+        restoreScroll = nil
+        webView.evaluateJavaScript("window.scrollTo(\(scroll.x), \(scroll.y))")
+    }
 
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {

@@ -1,5 +1,20 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-23 — Vorschau-Kachel `preview` (Kacheln Runde 2, Platz 1)
+
+**Anlass (Mats, Befund 22.09. abends):** Ein Blender-PNG in der Web-Kachel klebte oben in Originalbreite, darunter weiße
+Fläche („sieht scheiße aus“). Plan: claude-werkstatt `plans/kacheln-runde-2_2026-09-22.md`.
+
+**Gebaut:** neue Kachelart `preview` (`Panes/Contents/PreviewContent.swift`), nativ statt WebKit. PDF über PDFKit
+(fortlaufend, Seitenbreite als Grundzoom, ⌘F-Suchleiste mit ⏎/⇧⏎/⌘G, ⌘±/⌘0, `dark` = Invertieren + Farbton 180° mit
+vorab umgekehrtem Grund). Bild in eigener Scroll-Ansicht: eingepasst und zentriert, nie über 1:1 (Bildpixel =
+Bildschirmpixel), Doppelklick 1:1 an der Klickstelle bzw. zurück, Ziehen verschiebt, Pinch zoomt, ab 2× pixelgenau,
+Schachbrett unter Transparenz. Gemeinsamer `Panes/FileWatcher.swift` (stat-Polling 0,25 s, meldet erst nach einem ruhigen
+Takt; übersteht atomares Ersetzen/Löschen) — Vorschau lädt Daten ganz (nicht gemappt), hält Seite/Punkt/Zoom, versucht
+halb geschriebene PDFs bis zu 8× nach. Web-Kachel nutzt denselben Beobachter und hält die Scrollposition. Datei darf beim
+Öffnen fehlen („Warte auf …“, gedacht für den ersten LaTeX-Lauf). Chip: `S. 3/12 · Seitenbreite` bzw. `1600×1000 · 50 %`.
+Snapshot mit `page`/`zoom`/`dark`; MCP `sameArgs` vergleicht deshalb nur die gewünschten Schlüssel. `call state` → JSON.
+
 ## 2026-09-22 (nachts) — Scratchpad: Erstklick-Regel
 
 **Anlass (Mats, erster Live-Test mit Claude im Scratchpad):** Um das Scratchpad per ⌘⏎ groß zu machen, musste er erst
