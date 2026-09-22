@@ -2,7 +2,8 @@ import Foundation
 
 // latexterm — Steuerkanal-CLI (#28). Spricht die JSON-Zeilen des ControlProtocol
 // über den Unix-Socket der laufenden App. Bewusst ohne ArgumentParser-Dependency:
-// acht Verben, eine Handvoll Flags. Wird ins App-Bundle eingebettet
+// neun Verben, eine Handvoll Flags. `latexterm mcp` (22.09.2026) macht dasselbe
+// Binary zum MCP-Server über stdio (MCPServer.swift). Wird ins App-Bundle eingebettet
 // (LatexTerm.app/Contents/Helpers/latexterm); Nutzung via Symlink oder PATH.
 
 let usage = """
@@ -10,14 +11,15 @@ latexterm — steuert die laufende LatexTerm.app
 
 Verwendung:
   latexterm list-panes [--json]
-  latexterm new-pane [--cwd VERZEICHNIS] [--exec KOMMANDO]
-  latexterm new-pane --kind ART [--arg SCHLÜSSEL=WERT]…
+  latexterm new-pane [--cwd VERZEICHNIS] [--exec KOMMANDO] [--no-focus]
+  latexterm new-pane --kind ART [--arg SCHLÜSSEL=WERT]… [--no-focus]
   latexterm pane-kinds
   latexterm send [--pane ZIEL] [--no-enter] TEXT…
   latexterm zoom [--pane ZIEL]
   latexterm focus [--pane ZIEL]
   latexterm close-pane [--pane ZIEL] [--force]
   latexterm status [--pane ZIEL] [--agent claude|codex --session ID] [--turn ID] PAYLOAD
+  latexterm mcp
 
 ZIEL ist der 1-basierte Index aus `list-panes` oder eine Pane-UUID (auch Präfix).
 ART ist eine Kachelart aus `pane-kinds` (terminal, home, scratchpad, …); --cwd/--exec nur für terminal.
@@ -31,6 +33,11 @@ Bei arbeitender Session oder laufendem Vordergrundprozess: Exit 1 mit Grund.
 
 status meldet Agenten-Zustand und optional die echte Session-ID (`working;Bash;t=12;n=3`).
 Zustände: ready / working / input / done / closed. Ohne Anbieterfelder bleibt das Legacy-Claude-Protokoll.
+
+--no-focus: die neue Kachel entsteht daneben, die Tastatur bleibt in der fokussierten Kachel.
+
+mcp startet einen MCP-Server über stdio (für Claude Code / Codex): Werkzeuge auf Absichts-Ebene
+(panes, open_terminal, start_agent, ask_session, …) und je App-Kachelart ein open_<art>.
 
 Exit-Codes: 0 ok · 1 Fehler aus der App · 2 Aufruffehler · 3 App nicht erreichbar
 """
@@ -46,6 +53,11 @@ var args = Array(CommandLine.arguments.dropFirst())
 guard let cmd = args.first else { fail(usage, code: 2) }
 if cmd == "--help" || cmd == "-h" || cmd == "help" { print(usage); exit(0) }
 args.removeFirst()
+if cmd == "mcp" {
+    guard args.isEmpty else { fail("mcp nimmt keine Argumente\n\n\(usage)", code: 2) }
+    MCPStdio.run(server: MCPServer(environment: ProcessInfo.processInfo.environment))
+    exit(0)
+}
 
 var request = ControlRequest(cmd: cmd)
 request.paneID = ProcessInfo.processInfo.environment["LATEXTERM_PANE_ID"]
@@ -71,6 +83,7 @@ while !args.isEmpty {
         request.args = (request.args ?? [:]).merging([String(pair[..<eq]): String(pair[pair.index(after: eq)...])]) { $1 }
     case "--no-enter": request.enter = false
     case "--force":    request.force = true
+    case "--no-focus": request.focus = false
     case "--agent":    request.agent = value(for: arg)
     case "--session":  request.sessionID = value(for: arg)
     case "--turn":     request.turnID = value(for: arg)
@@ -105,50 +118,8 @@ default:
 // MARK: - Socket-Roundtrip
 
 func roundtrip(_ request: ControlRequest) -> ControlResponse {
-    let path = ControlProtocol.socketPath
-    let fd = socket(AF_UNIX, SOCK_STREAM, 0)
-    guard fd >= 0 else { fail("Socket-Fehler: \(String(cString: strerror(errno)))", code: 3) }
-    defer { close(fd) }
-
-    var addr = sockaddr_un()
-    addr.sun_family = sa_family_t(AF_UNIX)
-    let fits = path.withCString { cstr -> Bool in
-        let maxLen = MemoryLayout.size(ofValue: addr.sun_path) - 1
-        guard strlen(cstr) <= maxLen else { return false }
-        withUnsafeMutableBytes(of: &addr.sun_path) { raw in
-            raw.baseAddress!.assumingMemoryBound(to: CChar.self)
-                .update(from: cstr, count: strlen(cstr) + 1)
-        }
-        return true
-    }
-    guard fits else { fail("Socket-Pfad zu lang: \(path)", code: 3) }
-
-    let size = socklen_t(MemoryLayout<sockaddr_un>.size)
-    let connected = withUnsafePointer(to: &addr) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-            connect(fd, $0, size) == 0
-        }
-    }
-    guard connected else {
-        fail("LatexTerm nicht erreichbar (\(path)) — läuft die App?", code: 3)
-    }
-
-    var out = try! JSONEncoder().encode(request)
-    out.append(UInt8(ascii: "\n"))
-    _ = out.withUnsafeBytes { write(fd, $0.baseAddress, $0.count) }
-
-    var data = Data()
-    var buf = [UInt8](repeating: 0, count: 4096)
-    while data.count < 1_048_576 {
-        let n = read(fd, &buf, buf.count)
-        guard n > 0 else { break }
-        data.append(buf, count: n)
-        if buf[..<n].contains(UInt8(ascii: "\n")) { break }
-    }
-    guard let response = try? JSONDecoder().decode(ControlResponse.self, from: data) else {
-        fail("Antwort der App nicht lesbar", code: 3)
-    }
-    return response
+    do { return try ControlClient.roundtrip(request) }
+    catch { fail(String(describing: error), code: 3) }
 }
 
 let response = roundtrip(request)

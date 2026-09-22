@@ -17,14 +17,29 @@ PROJECT = "LatexTerm.xcodeproj"
 # die App überschreibt dann die SwiftFileList des CLI. Nur die Binary heißt latexterm.
 TARGET  = "LatexTermCLI"
 BINARY  = "latexterm"
-SOURCES = ["LatexTermCLI/main.swift", "LatexTerm/Control/ControlProtocol.swift"]
+SOURCES = ["LatexTermCLI/main.swift", "LatexTermCLI/ControlClient.swift", "LatexTermCLI/MCPServer.swift",
+           "LatexTerm/Control/ControlProtocol.swift"]
 
 proj = Xcodeproj::Project.open(PROJECT)
 app  = proj.targets.find { |t| t.name == "LatexTerm" }
 raise "App-Target nicht gefunden" unless app
 
-if proj.targets.any? { |t| t.name == TARGET }
-  puts "CLI-Target '#{TARGET}' existiert bereits — nichts zu tun."
+if (existing = proj.targets.find { |t| t.name == TARGET })
+  # Target gibt es schon: nur fehlende Quellen nachtragen (22.09.2026: MCP-Server).
+  group = proj.main_group.find_subpath("LatexTermCLI", true)
+  have = existing.source_build_phase.files_references.map(&:path)
+  missing = SOURCES - have
+  missing.each do |path|
+    ref = proj.new(Xcodeproj::Project::Object::PBXFileReference)
+    ref.path = path
+    ref.source_tree = "SOURCE_ROOT"
+    ref.last_known_file_type = "sourcecode.swift"
+    ref.name = File.basename(path)
+    group.children << ref
+    existing.source_build_phase.add_file_reference(ref)
+  end
+  proj.save unless missing.empty?
+  puts missing.empty? ? "CLI-Target '#{TARGET}' vollständig — nichts zu tun." : "Nachgetragen: #{missing.join(', ')}"
   exit 0
 end
 

@@ -10,6 +10,7 @@
 		12D43261C12FC692BD8CB1EC /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 724FBA73B885EDFEB9248F0A /* Cocoa.framework */; };
 		25BCE7D96B7A11609419AA17 /* main.swift in Sources */ = {isa = PBXBuildFile; fileRef = F42346E76C58A746C6FC3056 /* main.swift */; };
 		33AC21836A9DF88E1E5670DA /* SwiftUI.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 9D00F600834AE597E94B55E4 /* SwiftUI.framework */; };
+		5950A2A9928726E72F836408 /* ControlClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = 1F65701A38414161A8C4306D /* ControlClient.swift */; };
 		6001FE5F8DC793BB44E32755 /* PromptBoxLocator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 996DD2B006B817A127C93492 /* PromptBoxLocator.swift */; };
 		609921D30C96B630BE9D1FBE /* LatexTermWidgets.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF440ECF4318E5296A046784 /* LatexTermWidgets.swift */; };
 		830299A6F94AC2A7F6F1A748 /* LaTeXDetector.swift in Sources */ = {isa = PBXBuildFile; fileRef = 58303F442A1DB66FF9712BEF /* LaTeXDetector.swift */; };
@@ -24,6 +25,7 @@
 		D700000000000000000000B1 /* DockTilePlugIn.swift in Sources */ = {isa = PBXBuildFile; fileRef = D700000000000000000000F1 /* DockTilePlugIn.swift */; };
 		D700000000000000000000B2 /* LatexTermDockTile.docktileplugin in Embed Dock Tile PlugIn */ = {isa = PBXBuildFile; fileRef = D700000000000000000000F2 /* LatexTermDockTile.docktileplugin */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		D75D4BE25F948E58E7452A4A /* LaTeXReadable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87B17461A01627511CE814CD /* LaTeXReadable.swift */; };
+		DE7C16577FD1D0CEC0F41A44 /* MCPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB73F1331D78CD67DA565FA8 /* MCPServer.swift */; };
 		E353DA6194B0929725C7266C /* LaTeXDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 977EED528F0310FA6EFC07B0 /* LaTeXDetectorTests.swift */; };
 		EADA198C4EE2DABAD1D93F42 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 04835B2D13D44F2B9B6B788A /* Cocoa.framework */; };
 /* End PBXBuildFile section */
@@ -91,6 +93,7 @@
 /* Begin PBXFileReference section */
 		04835B2D13D44F2B9B6B788A /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		111ECD37CE79AF702ABF98CA /* PromptBoxLocatorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PromptBoxLocatorTests.swift; path = LatexTermTests/PromptBoxLocatorTests.swift; sourceTree = SOURCE_ROOT; };
+		1F65701A38414161A8C4306D /* ControlClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ControlClient.swift; path = LatexTermCLI/ControlClient.swift; sourceTree = SOURCE_ROOT; };
 		2309BFE1D4C333D220190768 /* LaTeXReadableTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LaTeXReadableTests.swift; path = LatexTermTests/LaTeXReadableTests.swift; sourceTree = SOURCE_ROOT; };
 		3C6EE11AF5CEA3FC69B0099C /* latexterm */ = {isa = PBXFileReference; includeInIndex = 0; path = latexterm; sourceTree = BUILT_PRODUCTS_DIR; };
 		58303F442A1DB66FF9712BEF /* LaTeXDetector.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LaTeXDetector.swift; path = LatexTerm/Latex/LaTeXDetector.swift; sourceTree = SOURCE_ROOT; };
@@ -111,6 +114,7 @@
 		D700000000000000000000F2 /* LatexTermDockTile.docktileplugin */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = LatexTermDockTile.docktileplugin; sourceTree = BUILT_PRODUCTS_DIR; };
 		F0F1EEB8D20FF35E5C21C201 /* LatexTermWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = LatexTermWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
 		F42346E76C58A746C6FC3056 /* main.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = main.swift; path = LatexTermCLI/main.swift; sourceTree = SOURCE_ROOT; };
+		FB73F1331D78CD67DA565FA8 /* MCPServer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = MCPServer.swift; path = LatexTermCLI/MCPServer.swift; sourceTree = SOURCE_ROOT; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedBuildFileExceptionSet section */
@@ -233,6 +237,8 @@
 			children = (
 				F42346E76C58A746C6FC3056 /* main.swift */,
 				5F5490CD0233B73745FB519F /* ControlProtocol.swift */,
+				1F65701A38414161A8C4306D /* ControlClient.swift */,
+				FB73F1331D78CD67DA565FA8 /* MCPServer.swift */,
 			);
 			name = LatexTermCLI;
 			sourceTree = SOURCE_ROOT;
@@ -434,6 +440,8 @@
 			files = (
 				25BCE7D96B7A11609419AA17 /* main.swift in Sources */,
 				845E18B3F3DD4D250DEA68BE /* ControlProtocol.swift in Sources */,
+				5950A2A9928726E72F836408 /* ControlClient.swift in Sources */,
+				DE7C16577FD1D0CEC0F41A44 /* MCPServer.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
