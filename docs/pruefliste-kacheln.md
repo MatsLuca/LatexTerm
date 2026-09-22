@@ -13,9 +13,9 @@ prüfen lässt. Entstanden mit dem Bauplan „Kachel-Protokoll“ (22.09.2026, P
 |---|---|---|---|
 | 1 | ⌘T in der Shell-Kachel (nicht die älteste) | neue Shell erbt **deren** Verzeichnis, nicht das der ersten Kachel (bis Schritt 5 erbte ⌘T das der ältesten Terminal-Kachel: kein Fokusfilter) | A |
 | 2 | ⌘T in der Home-Kachel | neue Shell im Home-Verzeichnis, Home bleibt | A |
-| 3 | ⌘W in Terminal, in Home, bei offener ⌘F-Suchleiste, bei offener ⌘K-Palette | genau die fokussierte Kachel geht zu (Palette: erst Palette, dann Kachel) | A |
+| 3 | ⌘W in Terminal, in Home, bei offener ⌘F-Suchleiste, bei offener ⌘K-Palette | genau die fokussierte Kachel geht zu (auch bei offener Palette: die ganze Kachel, wie seit jeher) | A |
 | 4 | ⌘3 bei zwei Kacheln / ⌘1 bei drei | auf drei auffüllen / nichts schließen | A |
-| 5 | ⌘⏎ in Terminal und in Home | Zoom an/aus, Zoom-Pille in der Titelleiste | A |
+| 5 | ⌘⏎ in Terminal und in Home; ⌘⏎ in der offenen ⌘K-Palette | Zoom an/aus, Zoom-Pille in der Titelleiste; in der Palette die Zweitaktion statt Zoom | A |
 | 6 | ⌘F in Terminal, ⌘F in Home | Suchleiste nur im Terminal; Home ignoriert | A |
 | 7 | Menü Kachel → Zoom/Schließen/Suchen mit der Maus | wirkt auf die fokussierte Kachel | A |
 | 8 | ⌘± / ⌘0 in einer Kachel | alle Terminals ändern die Schrift | A |
