@@ -81,6 +81,8 @@ final class ScratchpadCanvas: NSView {
     var canRedo: Bool { !redoStack.isEmpty }
     var inkColor: NSColor { palette[colorIndex] }
     private var eraserRadius: CGFloat { Self.eraserRadii[sizeIndex] }
+    /// Radierer in Zeichnungs-Koordinaten: am Bildschirm immer gleich groß, egal wie weit gezoomt.
+    private var worldEraserRadius: CGFloat { eraserRadius / zoom }
 
     func apply(_ theme: TerminalTheme) {
         paper = theme.background.withAlphaComponent(1)
@@ -170,6 +172,12 @@ final class ScratchpadCanvas: NSView {
 
     func restore(_ doc: ScratchDocument) {
         strokes = doc.strokes
+        // v1 lag in Kachel-Koordinaten (oben links = 0,0): Zeichnung auf die Mitte legen.
+        if doc.version < 2, let first = strokes.first {
+            let box = strokes.map(\.bounds).reduce(first.bounds) { $0.union($1) }
+            let shift = CGPoint(x: -box.midX, y: -box.midY)
+            strokes.forEach { $0.offset(by: shift) }
+        }
         tool = doc.tool
         colorIndex = max(0, min(doc.color, ScratchPalette.names.count - 1))
         sizeIndex = max(0, min(doc.size, Self.penWidths.count - 1))
@@ -184,7 +192,7 @@ final class ScratchpadCanvas: NSView {
     /// Leer → die sichtbare Fläche.
     func pngData() -> Data? {
         let rect = strokes.isEmpty
-            ? bounds
+            ? toWorld(bounds)
             : strokes.map(\.bounds).reduce(strokes[0].bounds) { $0.union($1) }.insetBy(dx: -16, dy: -16).integral
         guard rect.width >= 1, rect.height >= 1,
               let rep = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: Int(rect.width * 2), pixelsHigh: Int(rect.height * 2),
@@ -221,7 +229,7 @@ final class ScratchpadCanvas: NSView {
         let width = tool == .marker ? Self.markerWidths[sizeIndex] : Self.penWidths[sizeIndex]
         let stroke = ScratchStroke(start: p, color: colorIndex, width: width, marker: tool == .marker)
         current = stroke
-        setNeedsDisplay(stroke.bounds)
+        invalidate(stroke.bounds)
     }
 
     override func mouseDragged(with event: NSEvent) {
@@ -234,7 +242,7 @@ final class ScratchpadCanvas: NSView {
         } else if let last = stroke.points.last, hypot(p.x - last.x, p.y - last.y) >= 0.8 {
             stroke.append(p)
         }
-        setNeedsDisplay(before.union(stroke.bounds))
+        invalidate(before.union(stroke.bounds))
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -253,7 +261,94 @@ final class ScratchpadCanvas: NSView {
     override func rightMouseDragged(with event: NSEvent) { continueErase(to: point(event)) }
     override func rightMouseUp(with event: NSEvent) { endErase() }
 
-    private func point(_ event: NSEvent) -> CGPoint { convert(event.locationInWindow, from: nil) }
+    private func point(_ event: NSEvent) -> CGPoint { toWorld(convert(event.locationInWindow, from: nil)) }
+
+    // MARK: Ansicht — Mittelpunkt-Anker, Verschieben, Zoomen
+
+    /// Die Zeichnung hängt an der Mitte der Kachel (Weltpunkt 0,0 = Kachelmitte in der Normalsicht): wird die
+    /// Kachel größer oder kleiner, wächst bzw. schrumpft der Rand gleichmäßig rundherum. `pan`/`zoom` sind
+    /// die Abweichung von der Normalsicht (Trackpad: zwei Finger verschieben, Aufziehen zoomt). Jeder
+    /// Größenwechsel (⌘⏎, Raster) und das Verlassen der Kachel federn zurück in die Normalsicht.
+    private(set) var pan: CGPoint = .zero
+    private(set) var zoom: CGFloat = 1
+    static let zoomRange: ClosedRange<CGFloat> = 0.2...8
+    private var springTimer: Timer?
+
+    private var center: CGPoint { CGPoint(x: bounds.midX, y: bounds.midY) }
+    func toWorld(_ p: CGPoint) -> CGPoint {
+        CGPoint(x: (p.x - center.x - pan.x) / zoom, y: (p.y - center.y - pan.y) / zoom)
+    }
+    func toScreen(_ p: CGPoint) -> CGPoint {
+        CGPoint(x: center.x + pan.x + p.x * zoom, y: center.y + pan.y + p.y * zoom)
+    }
+    func toWorld(_ r: NSRect) -> NSRect {
+        let a = toWorld(r.origin), b = toWorld(CGPoint(x: r.maxX, y: r.maxY))
+        return NSRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y)
+    }
+    private func toScreen(_ r: NSRect) -> NSRect {
+        let a = toScreen(r.origin), b = toScreen(CGPoint(x: r.maxX, y: r.maxY))
+        return NSRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y)
+    }
+    /// Neu zeichnen, was ein Weltbereich am Bildschirm belegt.
+    private func invalidate(_ world: NSRect) { setNeedsDisplay(toScreen(world).insetBy(dx: -2, dy: -2)) }
+
+    private var isNormalView: Bool { pan == .zero && zoom == 1 }
+
+    private func setView(pan: CGPoint, zoom: CGFloat) {
+        self.pan = pan
+        self.zoom = zoom
+        needsDisplay = true
+        cursorChanged()
+    }
+
+    /// Zurück in die Normalsicht (Mitte, 100 %) — sanft, wenn gewünscht.
+    func resetView(animated: Bool) {
+        springTimer?.invalidate(); springTimer = nil
+        guard !isNormalView else { return }
+        guard animated, window != nil else { setView(pan: .zero, zoom: 1); return }
+        let (startPan, startZoom, started) = (pan, zoom, CACurrentMediaTime())
+        let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
+            guard let self else { timer.invalidate(); return }
+            let t = min(1, (CACurrentMediaTime() - started) / 0.25)
+            let e = 1 - pow(1 - t, 3)   // ease-out
+            self.setView(pan: CGPoint(x: startPan.x * (1 - e), y: startPan.y * (1 - e)),
+                         zoom: startZoom + (1 - startZoom) * e)
+            if t >= 1 { timer.invalidate(); self.springTimer = nil; self.setView(pan: .zero, zoom: 1) }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        springTimer = timer
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        let changed = newSize != frame.size
+        super.setFrameSize(newSize)
+        if changed { resetView(animated: true) }
+    }
+
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok { resetView(animated: true) }
+        return ok
+    }
+
+    /// Zwei Finger (oder Mausrad) verschieben die Fläche.
+    override func scrollWheel(with event: NSEvent) {
+        springTimer?.invalidate(); springTimer = nil
+        let factor: CGFloat = event.hasPreciseScrollingDeltas ? 1 : 10
+        setView(pan: CGPoint(x: pan.x + event.scrollingDeltaX * factor, y: pan.y + event.scrollingDeltaY * factor), zoom: zoom)
+    }
+
+    /// Aufziehen/Zusammenziehen zoomt um den Punkt unter dem Zeiger.
+    override func magnify(with event: NSEvent) {
+        springTimer?.invalidate(); springTimer = nil
+        let screen = convert(event.locationInWindow, from: nil)
+        let anchor = toWorld(screen)
+        let next = min(Self.zoomRange.upperBound, max(Self.zoomRange.lowerBound, zoom * (1 + event.magnification)))
+        setView(pan: CGPoint(x: screen.x - center.x - anchor.x * next, y: screen.y - center.y - anchor.y * next), zoom: next)
+    }
+
+    /// Doppeltipp mit zwei Fingern: zurück zur Mitte.
+    override func smartMagnify(with event: NSEvent) { resetView(animated: true) }
 
     // MARK: Radieren (ganze Striche — ein Zug über viele Striche ist EIN Undo-Schritt)
 
@@ -266,7 +361,7 @@ final class ScratchpadCanvas: NSView {
     /// Zwischen zwei Mauspunkten nachtasten, sonst rutscht ein schneller Zug durch dünne Striche.
     private func continueErase(to p: CGPoint) {
         guard let last = lastErasePoint else { return }
-        let steps = max(1, Int(hypot(p.x - last.x, p.y - last.y) / max(2, eraserRadius / 2)))
+        let steps = max(1, Int(hypot(p.x - last.x, p.y - last.y) / max(2 / zoom, worldEraserRadius / 2)))
         for i in 1...steps {
             let t = CGFloat(i) / CGFloat(steps)
             erase(at: CGPoint(x: last.x + (p.x - last.x) * t, y: last.y + (p.y - last.y) * t))
@@ -282,10 +377,10 @@ final class ScratchpadCanvas: NSView {
     }
 
     private func erase(at p: CGPoint) {
-        while let index = strokes.lastIndex(where: { $0.touches(p, radius: eraserRadius) }) {
+        while let index = strokes.lastIndex(where: { $0.touches(p, radius: worldEraserRadius) }) {
             let stroke = strokes.remove(at: index)
             erased.append((index, stroke))
-            setNeedsDisplay(stroke.bounds)
+            invalidate(stroke.bounds)
         }
     }
 
@@ -319,6 +414,7 @@ final class ScratchpadCanvas: NSView {
         case ("z", true): redo()
         case ("s", false): onSaveRequest?()
         case ("c", false): copyImage()
+        case ("0", false): resetView(animated: true)
         default:
             guard event.keyCode == 51, !shift else { return super.performKeyEquivalent(with: event) }   // ⌫
             clear()
@@ -331,7 +427,13 @@ final class ScratchpadCanvas: NSView {
     override func draw(_ dirtyRect: NSRect) {
         paper.setFill()
         dirtyRect.fill()
-        drawStrokes(in: dirtyRect)
+        NSGraphicsContext.saveGraphicsState()
+        let view = NSAffineTransform()
+        view.translateX(by: center.x + pan.x, yBy: center.y + pan.y)
+        view.scale(by: zoom)
+        view.concat()
+        drawStrokes(in: toWorld(dirtyRect))
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     /// Marker unter die Tinte, damit Markiertes lesbar bleibt; der laufende Strich obenauf.
@@ -364,9 +466,9 @@ final class ScratchpadCanvas: NSView {
     private func makeCursor() -> NSCursor {
         let diameter: CGFloat
         switch tool {
-        case .pen: diameter = max(Self.penWidths[sizeIndex], 4)
-        case .marker: diameter = Self.markerWidths[sizeIndex]
-        case .eraser: diameter = eraserRadius * 2
+        case .pen: diameter = max(Self.penWidths[sizeIndex] * zoom, 4)
+        case .marker: diameter = min(Self.markerWidths[sizeIndex] * zoom, 120)
+        case .eraser: diameter = eraserRadius * 2   // Radierer: fest am Bildschirm
         }
         let side = ceil(diameter) + 4
         let (tool, ink, rim, paper) = (self.tool, inkColor, palette[0], self.paper)

@@ -160,7 +160,8 @@ enum ScratchPalette {
     }
 }
 
-/// Ein Strich: Punkte in Kachel-Koordinaten (oben links = 0,0), Pfad geglättet und zwischengespeichert.
+/// Ein Strich: Punkte in Zeichnungs-Koordinaten (0,0 = Kachelmitte in der Normalsicht; bis v1: oben links),
+/// Pfad geglättet und zwischengespeichert.
 final class ScratchStroke: Codable {
     var points: [CGPoint]
     let color: Int
@@ -175,6 +176,11 @@ final class ScratchStroke: Codable {
         self.color = color
         self.width = width
         self.marker = marker
+    }
+
+    func offset(by d: CGPoint) {
+        points = points.map { CGPoint(x: $0.x + d.x, y: $0.y + d.y) }
+        cachedPath = nil
     }
 
     func append(_ p: CGPoint) {
@@ -230,7 +236,8 @@ final class ScratchStroke: Codable {
 
 /// Inhalt der Sicherungsdatei: Striche plus die zuletzt gewählten Werkzeuge.
 struct ScratchDocument: Codable {
-    var version = 1
+    /// 2 = Punkte relativ zur Kachelmitte (22.09.); 1 = oben links, wird beim Laden verschoben.
+    var version = 2
     var strokes: [ScratchStroke]
     var tool: ScratchTool
     var color: Int

@@ -1,5 +1,17 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-22 — Scratchpad: Mittelpunkt-Anker, Verschieben, Zoomen
+
+**Anlass (Mats):** Ein Scratchpad taucht in allen Kachelgrößen auf; nach ⌘⏎ klebte die Skizze oben links, und die Malfläche
+nahm nach dem Zoomen keine Klicks mehr (Ursache: Autoresizing der Hülle verrechnete jede Zoom-Animation doppelt, die Fläche
+schrumpfte auf 0 Breite — Hülle setzt Inhaltsrahmen jetzt allein, `autoresizesSubviews = false`).
+
+**Gebaut:** Zeichnung in Koordinaten relativ zur Kachelmitte (Dokument v2; v1-Zeichnungen werden beim Laden auf die Mitte
+gelegt). Zwei Finger verschieben, Aufziehen zoomt um den Zeiger (20–800 %), Doppeltipp mit zwei Fingern oder ⌘0 = zurück.
+Mats' Regel: jeder Größenwechsel (⌘⏎, Raster) und das Verlassen der Kachel federn in 0,25 s zurück in die Normalsicht
+(Mitte, 100 %). Kein automatisches Skalieren beim Zoomen der Kachel — Striche bleiben gleich groß, die größere Kachel zeigt
+nur mehr Rand. Radierer bleibt am Bildschirm gleich groß, Stift-Zeiger wächst mit dem Zoom.
+
 ## 2026-09-22 — Scratchpad ausgebaut
 
 **Anlass (Mats):** Die Malfläche war nur ein Beispiel fürs Kachel-Protokoll — jetzt ein „basic cooles Scratchpad“ mit Farben,
