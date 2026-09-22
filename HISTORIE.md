@@ -18,7 +18,7 @@ Skript nie antwortet. `web_look full`: `createPDF` → bis zu 4 Streifen. (3) `h
 
 **Live geprüft:** `web_act` füllt Formular (type/select/check/Enter/wait_for/eval, alle ✓, neue Konsolenzeile), Link-Klick
 mit Seitenwechsel meldet sofort; `full` = 2 Streifen bis Seitenende; localhost vor dem Server geöffnet → wartet → lädt
-selbst; `latexterm.send` auf localhost nicht vorhanden. Von Mats: Board-Klick kam als Prompt an; Textstelle mit `div.box`,
+selbst; `latexterm.send` auf localhost nicht vorhanden. Von Mats: Board-Klick kam als Prompt an; Element per ⌥-Klick (`#f > button`, Zeile 6, Notiz); Textstelle mit `div.box`,
 `index.html:10` und passendem Ausschnitt.
 
 **Lehre:** WebKit zählt Skripte der App (`callAsyncJavaScript`) als Nutzergeste — ein `web_act`-Klick auf einen Board-Knopf
