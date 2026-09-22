@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Tab-Leiste als festes Feature (22.09.).** Die native macOS-Tab-Leiste ist ab dem ersten Fenster sichtbar; jeder Tab ist ein Fenster mit eigenen Kacheln. Neuer Tab per „+“ oder ⇧⌘T (Menü „Kachel“), beginnt mit Home; ⌘T bleibt die Terminal-Kachel. ⌥⌘R/⌥⌘Q bringen Leisten, Tab-Reihenfolge und den sichtbaren Tab zurück (die Fenster werden ausdrücklich angehängt — SwiftUI tabbt neue Fenster nicht von selbst). Einen Tab zu schließen beendet seine Kacheln wie ⌘W. `list-panes` liefert `tab`, das MCP-Lagebild nennt den Tab; neue Kacheln eines Agenten landen in seinem Tab.
+
 ### Fixed
 - **Klick in ein unfokussiertes Scratchpad malte einen Punkt (22.09.).** Erstklick-Regel: der erste Klick (links oder rechts) in eine Scratchpad-Kachel ohne Fokus holt nur den Fokus — danach malt jeder Klick. Die Werkzeugleiste reagiert weiter sofort.
 - **Scratchpad nahm nach ⌘⏎ keine Klicks mehr an (22.09.).** Die Kachel-Hülle verrechnete jede Zoom-Animation doppelt, die Malfläche schrumpfte auf 0 Breite. Außerdem schluckt eine verdeckte Terminal-Kachel keine Klicks mehr über ihren Formel-Stellen.

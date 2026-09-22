@@ -122,10 +122,10 @@ final class MCPServer {
         guard let paneID else {
             return "Diese Session läuft nicht in einer LatexTerm-Kachel — der Server bietet keine Werkzeuge an."
         }
-        var lines = ["Du läufst in LatexTerm, einem Terminal mit Kacheln (Panes) nebeneinander in einem Fenster."]
+        var lines = ["Du läufst in LatexTerm, einem Terminal mit Kacheln (Panes) nebeneinander in einem Fenster; mehrere Fenster stehen als Tabs in einer Leiste. Neue Kacheln entstehen in deinem Tab."]
         if let panes = try? listPanes() {
             let own = panes.first { $0.id.caseInsensitiveCompare(paneID) == .orderedSame }
-            if let own { lines.append("Deine Kachel ist Nr. \(own.index) (\(tilde(own.cwd) ?? "ohne Ordner")).") }
+            if let own { lines.append("Deine Kachel ist Nr. \(own.index) (\(tilde(own.cwd) ?? "ohne Ordner"))\(own.tab.map { ", Tab \($0)" } ?? "").") }
             let others = panes.filter { $0.id != own?.id }.prefix(8)
             if !others.isEmpty {
                 lines.append("Beim Start außerdem offen:")
@@ -725,6 +725,7 @@ final class MCPServer {
         let shown = pane.args.flatMap { $0.count == 1 ? $0.values.first : nil } ?? pane.cwd
         if let shown { parts.append(tilde(shown) ?? shown) }
         var marks: [String] = []
+        if let tab = pane.tab { marks.append("Tab \(tab)") }
         if let agent = pane.agent { marks.append(agent) }
         if pane.state != "none" { marks.append(pane.state) }
         if let program = pane.foreground, pane.agent == nil { marks.append("läuft: \(program)") }

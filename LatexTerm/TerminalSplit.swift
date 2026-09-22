@@ -24,6 +24,9 @@ final class TerminalSplitView: NSView {
     private var showHomeObserver: NSObjectProtocol?
     private var paneCommandObserver: NSObjectProtocol?
     private var quickstartObserver: NSObjectProtocol?
+    private var windowCloseObserver: NSObjectProtocol?
+    /// Tab/Fenster wurde geschlossen — gehört nicht mehr in den Snapshot.
+    private var windowClosed = false
 
     /// Lücke (Steg) zwischen den Kacheln in Punkten.
     private static let gap: CGFloat = 8
@@ -54,10 +57,15 @@ final class TerminalSplitView: NSView {
         // Erste Kachel = Projekt-Launcher (Mats' Entscheidung 24.08.). Der Session-Snapshot (#11)
         // wird bei jedem Beenden geschrieben, als Startlayout aber nur einmal nach „Neu starten“ /
         // „Beenden und Kacheln merken“ benutzt (Marke im Snapshot, `SessionStore.takeRestore`).
-        if let plan = Self.restoreQueue.claim() {
-            restore(plan)
-            // Fenster, die macOS nach dem Beenden nicht wieder öffnet, kommen als Kacheln hierher.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.restoreLeftovers() }
+        if let claimed = Self.restoreQueue.claimTab() {
+            restore(claimed.window)
+            restoredTab = (group: claimed.window.tabGroup ?? 0, ownWindow: claimed.ownWindow,
+                           selected: claimed.window.selected == true)
+            // Nur das erste Fenster öffnet die übrigen Tabs; Nachzügler finden die Schlange leer.
+            if !Self.restoreStarted {
+                Self.restoreStarted = true
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.restoreLeftovers() }
+            }
         } else {
             addPane(home: true)
         }
@@ -134,6 +142,7 @@ final class TerminalSplitView: NSView {
         if let showHomeObserver { NotificationCenter.default.removeObserver(showHomeObserver) }
         if let quickstartObserver { NotificationCenter.default.removeObserver(quickstartObserver) }
         if let paneCommandObserver { NotificationCenter.default.removeObserver(paneCommandObserver) }
+        if let windowCloseObserver { NotificationCenter.default.removeObserver(windowCloseObserver) }
     }
 
     /// Quickstart ausführen: eine noch unberührte Home-Kachel (Kaltstart: die einzige) wird
@@ -172,7 +181,18 @@ final class TerminalSplitView: NSView {
     /// Stand aller offenen Fenster; CWDs und Session-Identitäten werden live ausgelesen.
     static func sessionSnapshot(restoreOnce: Bool) -> SessionSnapshot {
         live.removeAll { $0.view == nil }
-        let windows = live.compactMap(\.view).filter { $0.window != nil }.map { $0.windowSnapshot() }
+        let views = live.compactMap(\.view).filter { $0.window != nil && !$0.windowClosed }
+        // Tab-Leisten zusammenhängend und in Anzeige-Reihenfolge (Tabs lassen sich verschieben).
+        let order = SessionSnapshot.tabOrder(count: views.count) { i in
+            views[i].window?.tabGroup?.windows.compactMap { w in views.firstIndex { $0.window === w } }
+        }
+        let windows = order.map { entry -> SessionSnapshot.Window in
+            let view = views[entry.index]
+            var snapshot = view.windowSnapshot()
+            snapshot.tabGroup = entry.group
+            snapshot.selected = view.window.map { $0.tabGroup?.selectedWindow === $0 }
+            return snapshot
+        }
         return SessionSnapshot(windows: windows.filter { !$0.panes.isEmpty }, restoreOnce: restoreOnce)
     }
 
@@ -186,6 +206,12 @@ final class TerminalSplitView: NSView {
 
     /// Beim ersten Zugriff einmal von der Platte geholt, dann fensterweise verteilt.
     private static var restoreQueue = RestoreQueue(SessionStore.takeRestore() ?? [])
+    /// Nur das erste wiederhergestellte Fenster öffnet die übrigen Tabs.
+    private static var restoreStarted = false
+    /// Wiederhergestellter Tab: beginnt er eine eigene Leiste, war er der sichtbare Tab?
+    private var restoredTab: (group: Int, ownWindow: Bool, selected: Bool)?
+    /// Beim Wiederherstellen: erstes Fenster je Leiste — die übrigen Tabs hängen sich daran.
+    private static var restoreAnchors: [Int: Weak] = [:]
     /// Fokus und Zoom des wiederhergestellten Fensters — gesetzt wird erst mit Fenster.
     private var pendingRestoreLayout: (focused: (any Pane)?, zoomed: (any Pane)?)?
 
@@ -223,7 +249,31 @@ final class TerminalSplitView: NSView {
         return pane
     }
 
+    /// Übrige Fenster des Snapshots als Tabs öffnen (jedes neue Fenster holt sich im `init` seinen
+    /// Plan). Was danach niemand geholt hat, kommt als Kacheln hierher — keine Session geht verloren.
     private func restoreLeftovers() {
+        let remaining = Self.restoreQueue.count
+        guard remaining > 0, let open = WindowTabs.open else { mergeLeftovers(); Self.selectRestoredTabs(); return }
+        for _ in 0..<remaining { open() }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
+            self?.mergeLeftovers()
+            Self.selectRestoredTabs()
+        }
+    }
+
+    /// Je Leiste den Tab nach vorn, der beim Beenden sichtbar war; Key wird der der ersten Leiste.
+    private static func selectRestoredTabs() {
+        let selected = live.compactMap(\.view).filter { $0.restoredTab?.selected == true }
+        for view in selected.reversed() {
+            guard let window = view.window else { continue }
+            window.tabGroup?.selectedWindow = window
+            window.makeKeyAndOrderFront(nil)
+        }
+        for view in live.compactMap(\.view) { view.restoredTab = nil }
+        restoreAnchors = [:]
+    }
+
+    private func mergeLeftovers() {
         let leftovers = Self.restoreQueue.drain()
         guard !leftovers.isEmpty else { return }
         let focused = panes.first(where: { isFocused($0) }), zoomed = zoomedPane
@@ -270,6 +320,31 @@ final class TerminalSplitView: NSView {
         if let q = QuickstartStore.shared.pending {
             QuickstartStore.shared.pending = nil
             DispatchQueue.main.async { [weak self] in self?.runQuickstart(q) }
+        }
+
+        // Tab-Leiste: sichtbar ab dem ersten Fenster. Ein wiederhergestellter Tab, der beim Beenden
+        // in einer anderen Leiste stand, löst sich wieder heraus.
+        if let tab = restoredTab {
+            let anchor = Self.restoreAnchors[tab.group]?.view?.window
+            if anchor == nil { Self.restoreAnchors[tab.group] = Weak(self) }
+            WindowTabs.prepare(window, anchor: anchor)
+            if anchor == nil, tab.ownWindow {
+                DispatchQueue.main.async { [weak window] in
+                    guard let window, (window.tabGroup?.windows.count ?? 1) > 1 else { return }
+                    window.moveTabToNewWindow(nil)
+                }
+            }
+        } else {
+            WindowTabs.prepare(window, anchor: WindowTabs.frontmost(excluding: window))
+        }
+        // Tab (bzw. Fenster) zu: Kacheln aufräumen wie ⌘W — sonst lebten ihre Prozesse weiter.
+        if let windowCloseObserver { NotificationCenter.default.removeObserver(windowCloseObserver) }
+        windowCloseObserver = NotificationCenter.default.addObserver(
+            forName: NSWindow.willCloseNotification, object: window, queue: .main
+        ) { [weak self] _ in
+            guard let self else { return }
+            self.windowClosed = true
+            self.panes.forEach { $0.willClose() }
         }
 
         // Window-Styling für rahmenlosen Premium-Desktop-Blend
@@ -838,7 +913,7 @@ extension TerminalSplitView: PaneHost {
 /// `ControlServer` ruft `handleControl` synchron auf dem Main-Thread.
 extension TerminalSplitView: ControlCommandHandler {
     var isActiveControlWindow: Bool { window?.isKeyWindow == true }
-    var controlPanes: [PaneInfo] { window == nil ? [] : panes.map { info(for: $0) } }
+    var controlPanes: [PaneInfo] { window == nil || windowClosed ? [] : panes.map { info(for: $0) } }
 
 
     func handleControl(_ request: ControlRequest) -> ControlResponse {
@@ -967,6 +1042,7 @@ extension TerminalSplitView: ControlCommandHandler {
                         state: state, agent: identity?.agent,
                         sessionID: identity?.sessionID,
                         windowID: window.map { String($0.windowNumber) },
+                        tab: WindowTabs.position(of: window),
                         kind: pane.kind,
                         title: String(pane.title.prefix(120)),
                         args: terminal == nil ? pane.snapshot()?.args : nil,

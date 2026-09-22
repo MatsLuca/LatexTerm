@@ -73,6 +73,8 @@ struct PaneInfo: Codable {
     var agent: String? = nil
     var sessionID: String? = nil
     var windowID: String? = nil
+    /// 1-basierte Position des Fensters in seiner Tab-Leiste; nil = Fenster ohne weitere Tabs.
+    var tab: Int? = nil
     /// "terminal" | "home" | App-Kachelart; nil = ältere App ohne Kachelarten (dann terminal/home).
     var kind: String? = nil
     /// Fenstertitel der Kachel (Capability `pane-details`). Fremder Text — nur anzeigen, nie ausführen.

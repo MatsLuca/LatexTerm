@@ -246,13 +246,14 @@ xcodebuild test -project LatexTerm.xcodeproj -scheme LatexTerm \
 |---|---|
 | `⌘N` | new **home pane** (project launcher) |
 | `⌘T` / `⌘W` | new shell pane (inherits CWD) / close pane |
+| `⇧⌘T` | new **tab** (starts with Home; the tab bar is always shown, `+` works too) |
 | `⌘1…9` | grow the grid to N panes |
 | `⌘⏎` | zoom the focused pane (toggle) |
 | `⌘F` | find in the focused pane |
 | `⌘+` `⌘-` `⌘0` | font size (all panes, persisted) |
 | `⌘L` | toggle formula overlays |
 | `⌘,` | settings window (six tabs — theme, font, line spacing, accent, formula scale, notifications …) |
-| `⌥⌘R` / `⌥⌘Q` | **restart** / quit and **keep panes**: next launch brings back the same panes once — agent sessions via the launcher's resume, shells in their folder (plain `⌘Q` starts with Home) |
+| `⌥⌘R` / `⌥⌘Q` | **restart** / quit and **keep panes**: next launch brings back the same panes once — agent sessions via the launcher's resume, shells in their folder, tabs in their bar and order (plain `⌘Q` starts with Home) |
 
 **Tip — testing formulas:** zsh `echo` mangles backslashes; use `printf '%s\n' '$E=mc^2$'` or a quoted here-doc.
 

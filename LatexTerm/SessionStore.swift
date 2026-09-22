@@ -40,11 +40,19 @@ struct SessionSnapshot: Codable, Equatable {
         /// Index in `panes`; nil = keine Kachel fokussiert bzw. nichts gezoomt.
         var focused: Int?
         var zoomed: Int?
+        /// Tab-Leiste (22.09.): Fenster mit derselben Nummer waren Tabs einer Leiste, in Snapshot-
+        /// Reihenfolge = Tab-Reihenfolge. nil = alter Snapshot (alles landet dann in einer Leiste).
+        var tabGroup: Int?
+        /// Der sichtbare Tab seiner Leiste.
+        var selected: Bool?
 
-        init(panes: [PaneSnapshot], focused: Int? = nil, zoomed: Int? = nil) {
+        init(panes: [PaneSnapshot], focused: Int? = nil, zoomed: Int? = nil,
+             tabGroup: Int? = nil, selected: Bool? = nil) {
             self.panes = panes
             self.focused = focused
             self.zoomed = zoomed
+            self.tabGroup = tabGroup
+            self.selected = selected
         }
 
         /// Aus den Kacheln eines Fensters: Kacheln ohne Snapshot fallen weg, Fokus- und
@@ -94,6 +102,24 @@ struct SessionSnapshot: Codable, Equatable {
             throw DecodingError.dataCorruptedError(forKey: .version, in: c,
                                                    debugDescription: "Snapshot-Version \(version) unbekannt")
         }
+    }
+}
+
+extension SessionSnapshot {
+    /// Fenster in Leisten-Reihenfolge (22.09.): jede Tab-Leiste zusammenhängend und so sortiert wie
+    /// angezeigt, Leisten in der Reihenfolge ihres ersten Fensters. `tabs(i)` = Indizes der Fenster in
+    /// der Leiste von Fenster i (nil oder ohne i = steht allein). Jedes Fenster kommt genau einmal vor.
+    static func tabOrder(count: Int, tabs: (Int) -> [Int]?) -> [(index: Int, group: Int)] {
+        var result: [(index: Int, group: Int)] = []
+        var seen = Set<Int>()
+        var group = 0
+        for i in 0..<count where !seen.contains(i) {
+            var members = (tabs(i) ?? []).filter { (0..<count).contains($0) && !seen.contains($0) }
+            if !members.contains(i) { members = [i] }
+            for m in members where seen.insert(m).inserted { result.append((m, group)) }
+            group += 1
+        }
+        return result
     }
 }
 
@@ -160,14 +186,26 @@ enum SessionStore {
     }
 }
 
-/// Wiederherzustellende Fenster beim Start. Jedes neue Fenster holt sich das nächste; was nach
-/// dem Start niemand geholt hat (macOS öffnet nach ⌘Q meist nur ein Fenster), hängt das erste
-/// Fenster als Kacheln an — keine Session geht verloren, nur die Fenstergrenze.
+/// Wiederherzustellende Fenster beim Start. Jedes neue Fenster holt sich das nächste; das erste
+/// öffnet für den Rest neue Tabs (`WindowTabs.open`, macOS öffnet nach ⌘Q meist nur ein Fenster).
+/// Was danach noch niemand geholt hat, hängt das erste Fenster als Kacheln an — keine Session geht
+/// verloren, schlimmstenfalls die Tab-Grenze.
 struct RestoreQueue {
     private var windows: [SessionSnapshot.Window]
+    private var claimedAny = false
+    private var lastGroup: Int?
     init(_ windows: [SessionSnapshot.Window]) { self.windows = windows }
 
     var isEmpty: Bool { windows.isEmpty }
+    var count: Int { windows.count }
+
+    /// Wie `claim`, dazu: beginnt mit diesem Plan eine andere Tab-Leiste als beim zuvor geholten?
+    /// Dann wird er ein eigenes Fenster statt ein Tab daneben.
+    mutating func claimTab() -> (window: SessionSnapshot.Window, ownWindow: Bool)? {
+        guard let plan = claim() else { return nil }
+        defer { claimedAny = true; lastGroup = plan.tabGroup }
+        return (plan, claimedAny && plan.tabGroup != lastGroup)
+    }
 
     mutating func claim() -> SessionSnapshot.Window? {
         windows.isEmpty ? nil : windows.removeFirst()

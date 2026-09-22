@@ -95,6 +95,29 @@ struct SessionRestoreTests {
         check(queue.claim() == window && !queue.isEmpty, "first window claims first plan")
         check(queue.drain() == [second] && queue.isEmpty && queue.claim() == nil, "leftovers drained once")
 
+        // Tab-Leisten (22.09.): Felder optional, Reihenfolge je Leiste, eigene Fenster je Leiste.
+        let tabbed = SessionSnapshot.Window(panes: [PaneSnapshot(kind: "home")], tabGroup: 1, selected: true)
+        check(try JSONDecoder().decode(SessionSnapshot.Window.self, from: JSONEncoder().encode(tabbed)) == tabbed,
+              "tab fields round trip")
+        check(v2NoFlag.windows[0].tabGroup == nil && v2NoFlag.windows[0].selected == nil, "old snapshot has no tab fields")
+        // Fenster 0 und 2 teilen eine Leiste (angezeigt: 2 vor 0), 1 steht allein, 3 meldet Unsinn.
+        let order = SessionSnapshot.tabOrder(count: 4) { i in
+            switch i { case 0, 2: return [2, 0]; case 3: return [7]; default: return nil }
+        }
+        check(order.map(\.index) == [2, 0, 1, 3] && order.map(\.group) == [0, 0, 1, 2],
+              "tabs stay together in shown order, groups by first window")
+        let a = SessionSnapshot.Window(panes: [PaneSnapshot(kind: "home")], tabGroup: 0)
+        let b = SessionSnapshot.Window(panes: [PaneSnapshot(kind: "terminal")], tabGroup: 0)
+        let c = SessionSnapshot.Window(panes: [PaneSnapshot(kind: "home")], tabGroup: 1)
+        var tabs = RestoreQueue([a, b, c])
+        check(tabs.count == 3, "queue counts plans")
+        check(tabs.claimTab()?.ownWindow == false, "first window is never moved")
+        check(tabs.claimTab()?.ownWindow == false, "same group → tab next to it")
+        check(tabs.claimTab()?.ownWindow == true, "new group → own window")
+        var legacy = RestoreQueue([window, second])
+        check(legacy.claimTab()?.ownWindow == false && legacy.claimTab()?.ownWindow == false,
+              "old snapshots become tabs of one bar")
+
         // Neustart-Helfer: wartet auf das Prozessende, dann erst der Befehl.
         let sleeper = Process()
         sleeper.executableURL = URL(fileURLWithPath: "/bin/sleep")

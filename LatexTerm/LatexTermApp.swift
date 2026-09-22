@@ -124,6 +124,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         vmPanel = panel
     }
 
+    /// „+“ in der Tab-Leiste (AppKit zeigt den Knopf, sobald die Aktion in der Responder-Kette steht).
+    @objc func newWindowForTab(_ sender: Any?) {
+        WindowTabs.open?()
+    }
+
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
         let items = QuickstartStore.shared.items
@@ -226,6 +231,9 @@ struct LatexTermApp: App {
         NotificationCenter.default.post(name: .latexTermPaneCommand, object: nil, userInfo: ["command": c])
     }
 
+    /// Id der einen WindowGroup — `WindowTabs.open` öffnet darüber neue Tabs.
+    static let windowGroupID = "main"
+
     init() { AppearanceMigration.run() }
 
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
@@ -235,7 +243,7 @@ struct LatexTermApp: App {
     @ObservedObject private var cockpit = CockpitSettings.shared
 
     var body: some Scene {
-        WindowGroup("LatexTerm") {
+        WindowGroup("LatexTerm", id: Self.windowGroupID) {
             ZStack {
                 Color(nsColor: themeStore.theme.background)
                 // Bewusst OHNE horizontales Padding: die Akzent-Outlines der
@@ -315,6 +323,11 @@ struct LatexTermApp: App {
                 // darunter die App-Kacheln aus der Registry — eine neue Art erscheint hier ohne
                 // Menü-Code. Die Tasten fängt die Kachel-Hülle (PaneContainerView.performKeyEquivalent);
                 // das Menü ist Schaufenster + Mausweg.
+                // Neuer Tab = neues Fenster in der Tab-Leiste, beginnt mit Home. ⌘T bleibt Terminal
+                // (Mats, 22.09.); ⇧⌘T ist in Terminals sonst frei.
+                Button("Neuer Tab") { WindowTabs.open?() }
+                    .keyboardShortcut("t", modifiers: [.command, .shift])
+                Divider()
                 Button("Neue Home-Kachel") {
                     NotificationCenter.default.post(name: .latexTermNewHomePane, object: nil)
                 }

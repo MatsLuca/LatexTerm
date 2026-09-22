@@ -1238,6 +1238,16 @@ ermittelbar — LatexTerm selbst schickt nur `kill(shellPid, SIGTERM)`, Unified 
 `~/.claude/skills/vm/vm suspend` (Werkstatt), antwortet `.terminateLater` und beendet nach dem Anhalten (Fallback: rc≠0,
 Startfehler oder 120 s → trotzdem beenden). Ohne VM oder ohne Werkzeug unverändert. Logger-Kategorie `quickstart`.
 
+## 2026-09-22 — Tab-Leiste als festes Feature
+Mats: die native macOS-Tab-Leiste soll standardmäßig sichtbar sein und überall mitgedacht werden. `WindowTabs.swift`:
+Leiste ab dem ersten Fenster, neuer Tab per „+“ oder ⇧⌘T (⌘T bleibt Terminal-Kachel, Mats' Wahl), Snapshot merkt
+Leisten, Reihenfolge und sichtbaren Tab, ⌥⌘R/⌥⌘Q öffnen sie wieder als Tabs, Tab schließen räumt die Kacheln auf,
+`PaneInfo.tab` + MCP-Lagebild kennen Tabs. Erster Live-Test: alle Tabs kamen als getrennte Fenster zurück — SwiftUIs
+`openWindow` tabbt nicht von selbst, auch nicht mit `tabbingMode = .preferred` und System-Einstellung „immer“.
+Fix: explizit `addTabbedWindow` an einen Anker (erstes Fenster der Leiste bzw. vorderstes LatexTerm-Fenster).
+Danach von Mats bestätigt. Offen bewusst: keine Rückfrage beim Schließen eines Tabs mit arbeitender Kachel
+(Fenster-Delegate gehört SwiftUI).
+
 ## Archiviert am 2026-09-22 — ersetzter Projektstand und Arbeitsliste
 
 ## Aktueller Stand (2026-09-15)
