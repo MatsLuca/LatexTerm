@@ -453,9 +453,10 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     /// Home-Ansicht schließt ihren Ring (bei Erfolg) und blendet dann aus.
     private func revealTerminal(success: Bool) {
         guard let home = homeView else { return }
-        if takesFocus { view.window?.makeFirstResponder(view) }
+        let focus = takesFocus
         quietLaunch = false
         homeView = nil
+        if focus { view.window?.makeFirstResponder(view) }
         home.finishLaunch(success: success) { home.removeFromSuperview() }
     }
 
