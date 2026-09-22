@@ -13,6 +13,22 @@ private let qlog = Logger(subsystem: "com.mats.LatexTerm", category: "quickstart
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         WidgetRefresher.shared.start()   // Desktop-Widgets füttern (projekte widget), dann alle 5 min
+        // macOS hängt ans App-Menü ein verstecktes „Quit and Keep Windows“ (⌥ gedrückt) mit ⌥⌘Q —
+        // doppelt zu „Beenden und Kacheln merken“. SwiftUI baut Menüs neu auf, darum bei jedem
+        // Einfügen ins App-Menü wieder entfernen.
+        DispatchQueue.main.async { Self.removeSystemKeepWindowsItem() }
+        NotificationCenter.default.addObserver(forName: NSMenu.didAddItemNotification, object: nil, queue: .main) { note in
+            guard (note.object as? NSMenu) === NSApp.mainMenu?.items.first?.submenu else { return }
+            Self.removeSystemKeepWindowsItem()
+        }
+    }
+
+    private static func removeSystemKeepWindowsItem() {
+        guard let appMenu = NSApp.mainMenu?.items.first?.submenu else { return }
+        for item in appMenu.items where item.keyEquivalent == "q"
+            && item.keyEquivalentModifierMask == [.command, .option] && item.title != "Beenden und Kacheln merken" {
+            appMenu.removeItem(item)
+        }
     }
 
     // MARK: Neu starten / Beenden und Kacheln merken
