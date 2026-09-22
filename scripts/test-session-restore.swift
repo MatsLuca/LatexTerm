@@ -24,6 +24,10 @@ struct SessionRestoreTests {
         check(decoded == snap, "v2 roundtrip")
         let noArgs = try JSONDecoder().decode(PaneSnapshot.self, from: Data(#"{"kind":"home"}"#.utf8))
         check(noArgs == PaneSnapshot(kind: "home"), "missing args decode as empty")
+        check(noArgs.id == nil && noArgs.openedBy == nil, "old snapshot has no id/openedBy")
+        let owned = PaneSnapshot(kind: "web", args: ["url": "/tmp/a.html"], id: "AAAA-1", openedBy: "BBBB-2")
+        check(try JSONDecoder().decode(PaneSnapshot.self, from: try JSONEncoder().encode(owned)) == owned,
+              "id and openedBy survive the round trip")
         let v1 = try JSONDecoder().decode(SessionSnapshot.self,
             from: Data(##"{"version":1,"paneDirectories":["/tmp/a",null],"paneAccents":["#FFFFFF"]}"##.utf8))
         check(v1.windows == [SessionSnapshot.Window(panes: [PaneSnapshot(kind: "terminal", args: ["cwd": "/tmp/a"]),

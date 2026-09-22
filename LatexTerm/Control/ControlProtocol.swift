@@ -78,6 +78,8 @@ struct PaneInfo: Codable {
     var args: [String: String]? = nil
     /// Terminal: Vordergrundprozess (claude, vim, npm …); nil = Shell-Prompt oder keine Shell.
     var foreground: String? = nil
+    /// Kachel, von der aus diese per Steuerkanal/MCP geöffnet wurde (UUID); überlebt ⌥⌘R.
+    var openedBy: String? = nil
 }
 
 /// Selbstbeschreibung einer Kachelart für Agenten (Capability `pane-kind-info`, 22.09.2026):

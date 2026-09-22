@@ -5,13 +5,15 @@ import AppKit
 /// Alles Kachel-Typische (Rahmen, Fokus, Zoom, ⌘W, Chips) kommt aus Hülle und Split-View —
 /// ein Inhalt schreibt nur, was er wirklich hat.
 final class AppPane: Pane, PaneContentDelegate {
-    let id = UUID()
+    let id: UUID
+    var openedBy: UUID?
     let content: any PaneContent
     let container = PaneContainerView()
     weak var host: PaneHost?
     private var themeObserver: NSObjectProtocol?
 
-    init(content: any PaneContent) {
+    init(content: any PaneContent, id: UUID = UUID()) {
+        self.id = id
         self.content = content
         let view = content.view
         view.frame = container.bounds

@@ -5,16 +5,24 @@ import Foundation
 struct PaneSnapshot: Codable, Equatable {
     var kind: String
     var args: [String: String] = [:]
+    /// Kachel-ID (UUID) — beim Wiederherstellen wiederverwendet; nil in alten Snapshots.
+    var id: String? = nil
+    /// ID der Kachel, von der aus diese geöffnet wurde (Agent erkennt „seine“ Kacheln wieder).
+    var openedBy: String? = nil
 
-    init(kind: String, args: [String: String] = [:]) {
+    init(kind: String, args: [String: String] = [:], id: String? = nil, openedBy: String? = nil) {
         self.kind = kind
         self.args = args
+        self.id = id
+        self.openedBy = openedBy
     }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         kind = try c.decode(String.self, forKey: .kind)
         args = try c.decodeIfPresent([String: String].self, forKey: .args) ?? [:]
+        id = try c.decodeIfPresent(String.self, forKey: .id)
+        openedBy = try c.decodeIfPresent(String.self, forKey: .openedBy)
     }
 }
 

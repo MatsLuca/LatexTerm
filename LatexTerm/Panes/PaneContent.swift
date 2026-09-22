@@ -132,11 +132,11 @@ enum PaneKindRegistry {
     }
 
     /// App-Kachel dieser Art anlegen; Fehler mit Grund (unbekannte Art, falsche Args).
-    static func makeAppPane(kind: String, args: [String: String]) throws -> AppPane {
+    static func makeAppPane(kind: String, args: [String: String], id: UUID = UUID()) throws -> AppPane {
         guard let type = contents.first(where: { $0.kind == kind }) else {
             throw PaneArgsError("Unbekannte Kachelart „\(kind)“ — bekannt: \(kinds.joined(separator: ", "))")
         }
-        return AppPane(content: try type.init(args: args))
+        return AppPane(content: try type.init(args: args), id: id)
     }
 }
 

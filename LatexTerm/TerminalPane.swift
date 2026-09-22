@@ -11,7 +11,8 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     /// Stabile Identität der Pane über UI-Umbauten hinweg — Notifications (#30)
     /// referenzieren die Ziel-Pane darüber (der Klick kommt Sekunden später,
     /// wenn Indizes längst verschoben sein können).
-    let id = UUID()
+    let id: UUID
+    var openedBy: UUID?
 
     /// Passiv erkannter Zustand der Claude-Code-Session in dieser Pane (#30).
     /// `none` = kein CC-typisches UI im Blick (nackte Shell, fremde TUI).
@@ -486,7 +487,9 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         view.needsDisplay = true
     }
 
-    override init() {
+    /// `id` nur beim Wiederherstellen vorgeben (⌥⌘R: gleiche ID = gleiche `LATEXTERM_PANE_ID`, gleicher Briefkasten).
+    init(id: UUID = UUID()) {
+        self.id = id
         let store = ThemeStore.shared
         let term = LatexTerminalView(frame: .zero)
         // Farben, Palette, Cursor, Auswahl: alles aus dem Theme (Runde 26) — siehe applyTheme().

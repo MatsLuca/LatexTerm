@@ -393,7 +393,7 @@ final class MCPServer {
     private func closePane(_ a: JSON) throws -> String {
         let (pane, panes) = try target(a)
         if pane.id == selfPane(in: panes)?.id { throw ToolFailure("Deine eigene Kachel schließt du nicht.") }
-        let mine = opened.contains(pane.id.uppercased())
+        let mine = isMine(pane)
         guard mine || a["foreign"] as? Bool == true else {
             throw ToolFailure("Kachel \(pane.index) hast nicht du geöffnet. Schließen nur, wenn der Nutzer es ausdrücklich will — dann foreign: true.")
         }
@@ -567,6 +567,14 @@ final class MCPServer {
         return (matches[0], panes)
     }
 
+    /// Von dieser Session geöffnet: in diesem Prozess gemerkt ODER laut App von unserer Kachel aus
+    /// (überlebt ⌥⌘R, weil die App Kachel-IDs und „geöffnet von“ wiederherstellt).
+    private func isMine(_ pane: PaneInfo) -> Bool {
+        if opened.contains(pane.id.uppercased()) { return true }
+        guard let paneID, let opener = pane.openedBy else { return false }
+        return opener.caseInsensitiveCompare(paneID) == .orderedSame
+    }
+
     private func selfPane(in panes: [PaneInfo]) -> PaneInfo? {
         guard let paneID else { return nil }
         return panes.first { $0.id.caseInsensitiveCompare(paneID) == .orderedSame }
@@ -590,7 +598,7 @@ final class MCPServer {
         if let program = pane.foreground, pane.agent == nil { marks.append("läuft: \(program)") }
         if pane.focused { marks.append("fokussiert") }
         if pane.zoomed { marks.append("gezoomt") }
-        if opened.contains(pane.id.uppercased()) { marks.append("von dir geöffnet") }
+        if isMine(pane) { marks.append("von dir geöffnet") }
         if !marks.isEmpty { parts.append(marks.joined(separator: ", ")) }
         if let title = pane.title, !title.isEmpty, (pane.kind ?? "terminal") != "terminal" {
             parts.append("„\(title.prefix(60))“")

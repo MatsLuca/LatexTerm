@@ -29,6 +29,9 @@ protocol Pane: AnyObject {
     var closeGuard: CloseGuard { get }
     /// Rückkanal zur Split-View; die Kachel hält ihn schwach.
     var host: PaneHost? { get set }
+    /// Kachel, von der aus diese geöffnet wurde (Steuerkanal/MCP) — bleibt über ⌥⌘R erhalten, damit ein
+    /// Agent „seine“ Kacheln auch nach dem Neustart wiedererkennt; nil = von Hand oder unbekannt.
+    var openedBy: UUID? { get set }
 
     /// Menü-Aktion, die die Kachel selbst ausführt (⌘F-Suche); false = nicht zuständig.
     func handle(_ command: PaneCommand) -> Bool

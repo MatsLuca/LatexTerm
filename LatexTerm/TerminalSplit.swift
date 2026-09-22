@@ -178,7 +178,9 @@ final class TerminalSplitView: NSView {
 
     private func windowSnapshot() -> SessionSnapshot.Window {
         SessionSnapshot.Window(entries: panes.map { pane in
-            (snapshot: pane.snapshot(), focused: isFocused(pane), zoomed: pane === zoomedPane)
+            (snapshot: pane.snapshot().map {
+                var s = $0; s.id = pane.id.uuidString; s.openedBy = pane.openedBy?.uuidString; return s
+            }, focused: isFocused(pane), zoomed: pane === zoomedPane)
         })
     }
 
@@ -189,36 +191,43 @@ final class TerminalSplitView: NSView {
 
     /// Kacheln eines gespeicherten Fensters in derselben Reihenfolge anlegen.
     private func restore(_ plan: SessionSnapshot.Window) {
-        let restored = plan.panes.map { restorePane(RestoreStep($0)) }
+        let restored = plan.panes.map { restorePane($0) }
         pendingRestoreLayout = (focused: plan.focused.flatMap { restored.indices.contains($0) ? restored[$0] : nil },
                                 zoomed: plan.zoomed.flatMap { restored.indices.contains($0) ? restored[$0] : nil })
     }
 
     /// Eine Kachel wie gespeichert: Agenten-Session → Home, das sie per „Weiter“ fortsetzt
     /// (gleicher Befehl, Farbe, Vorhang wie der Klick); sonst Shell im Verzeichnis oder Home.
+    /// Die alte Kachel-ID wird wiederverwendet (gleiche `LATEXTERM_PANE_ID` für die fortgesetzte Session),
+    /// ebenso „geöffnet von“ — außer die ID ist schon vergeben.
     @discardableResult
-    private func restorePane(_ step: RestoreStep) -> any Pane {
-        switch step {
+    private func restorePane(_ saved: PaneSnapshot) -> any Pane {
+        let taken = Set(ControlServer.shared.router.panes.map { $0.id.uppercased() })
+        let id = saved.id.flatMap(UUID.init(uuidString:)).flatMap { taken.contains($0.uuidString) ? nil : $0 } ?? UUID()
+        let pane: any Pane
+        switch RestoreStep(saved) {
         case .home:
-            return addPane(home: true)
+            pane = addPane(home: true, id: id)
         case .app(let kind, let args):
             // Art unbekannt (älterer Build) oder Args ungültig: der Platz bleibt als Home erhalten.
-            return (try? addAppPane(kind: kind, args: args)) ?? addPane(home: true)
+            pane = (try? addAppPane(kind: kind, args: args, id: id)) ?? addPane(home: true, id: id)
         case .shell(let cwd):
-            return addPane(startingIn: cwd)
+            pane = addPane(startingIn: cwd, id: id)
         case .resume(let agent, let sessionID, let cwd, let accentName):
-            let pane = addPane(home: true)
-            pane.resumeSession(HomePaneView.PendingResume(agent: agent, sessionID: sessionID,
+            let home = addPane(home: true, id: id)
+            home.resumeSession(HomePaneView.PendingResume(agent: agent, sessionID: sessionID,
                                                           cwd: cwd, accentName: accentName))
-            return pane
+            pane = home
         }
+        pane.openedBy = saved.openedBy.flatMap(UUID.init(uuidString:))
+        return pane
     }
 
     private func restoreLeftovers() {
         let leftovers = Self.restoreQueue.drain()
         guard !leftovers.isEmpty else { return }
         let focused = panes.first(where: { isFocused($0) }), zoomed = zoomedPane
-        for window in leftovers { window.panes.forEach { restorePane(RestoreStep($0)) } }
+        for window in leftovers { window.panes.forEach { restorePane($0) } }
         // Nach den Fokus-Sprüngen der neuen Kacheln (addPane fokussiert im nächsten Durchlauf).
         DispatchQueue.main.async { [weak self] in self?.applyRestoredLayout(focused: focused, zoomed: zoomed) }
     }
@@ -359,8 +368,9 @@ final class TerminalSplitView: NSView {
 
     /// Terminal- oder Home-Kachel anhängen.
     @discardableResult
-    func addPane(startingIn directory: String? = nil, home: Bool = false, focus: Bool = true) -> TerminalPane {
-        let pane = TerminalPane()
+    func addPane(startingIn directory: String? = nil, home: Bool = false, focus: Bool = true,
+                 id: UUID = UUID()) -> TerminalPane {
+        let pane = TerminalPane(id: id)
         mount(pane)
         if home {
             pane.showHome()
@@ -373,8 +383,9 @@ final class TerminalSplitView: NSView {
 
     /// App-Kachel (Scratchpad, …) aus der Registry anhängen; Fehler = unbekannte Art oder Args.
     @discardableResult
-    func addAppPane(kind: String, args: [String: String] = [:], focus: Bool = true) throws -> AppPane {
-        let pane = try PaneKindRegistry.makeAppPane(kind: kind, args: args)
+    func addAppPane(kind: String, args: [String: String] = [:], focus: Bool = true,
+                    id: UUID = UUID()) throws -> AppPane {
+        let pane = try PaneKindRegistry.makeAppPane(kind: kind, args: args, id: id)
         mount(pane)
         settle(pane, focus: focus)
         return pane
@@ -822,6 +833,8 @@ extension TerminalSplitView: ControlCommandHandler {
             return ControlResponse(ok: true, kinds: PaneKindRegistry.kinds, kindInfos: PaneKindRegistry.infos)
 
         case "new-pane":
+            // Wer öffnet: die Kachel des Aufrufers (CLI/MCP schicken ihre LATEXTERM_PANE_ID mit).
+            let opener = request.paneID.flatMap(UUID.init(uuidString:))
             let kind = request.kind ?? "terminal"
             let args = request.args ?? [:]
             if kind != "terminal", request.cwd != nil || request.exec != nil {
@@ -831,6 +844,7 @@ extension TerminalSplitView: ControlCommandHandler {
             case "terminal", "home":
                 guard args.isEmpty else { return .failure("\(kind) kennt kein --arg") }
                 let pane = addPane(startingIn: request.cwd, home: kind == "home", focus: request.focus ?? true)
+                pane.openedBy = opener
                 if let exec = request.exec, !exec.isEmpty {
                     // Sofort in die PTY — der Kernel puffert, die Shell liest das
                     // Kommando, sobald sie bereit ist (kein Delay/Poll nötig).
@@ -838,7 +852,11 @@ extension TerminalSplitView: ControlCommandHandler {
                 }
                 return ControlResponse(ok: true, pane: info(for: pane))
             default:
-                do { return ControlResponse(ok: true, pane: info(for: try addAppPane(kind: kind, args: args, focus: request.focus ?? true))) }
+                do {
+                    let pane = try addAppPane(kind: kind, args: args, focus: request.focus ?? true)
+                    pane.openedBy = opener
+                    return ControlResponse(ok: true, pane: info(for: pane))
+                }
                 catch { return .failure(String(describing: error)) }
             }
 
@@ -923,7 +941,8 @@ extension TerminalSplitView: ControlCommandHandler {
                         kind: pane.kind,
                         title: String(pane.title.prefix(120)),
                         args: terminal == nil ? pane.snapshot()?.args : nil,
-                        foreground: terminal?.foregroundProcessName)
+                        foreground: terminal?.foregroundProcessName,
+                        openedBy: pane.openedBy?.uuidString)
     }
 
     /// Löst den Ziel-Selektor des CLI auf eine Kachel auf. Semantik: reine Ziffern
