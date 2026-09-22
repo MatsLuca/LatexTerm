@@ -89,6 +89,10 @@ final class PaneContainerView: NSView {
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
+        // Die Hülle setzt die Rahmen ihres Inhalts selbst (pinContent / setFrameSize). Autoresizing obendrauf
+        // verrechnete jede Zoom-Animation ein zweites Mal — der Inhalt wuchs über die Kachel hinaus, beim
+        // Zurückzoomen schrumpfte seine Malfläche auf 0 (Scratchpad nahm nach ⌘⏎ keine Klicks mehr, 22.09.).
+        autoresizesSubviews = false
         wantsLayer = true
         layer?.cornerRadius = 8
         layer?.masksToBounds = true
