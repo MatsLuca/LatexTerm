@@ -14,7 +14,7 @@ import AppKit
 protocol PaneContent: AnyObject {
     /// Art für Registry, Steuerkanal und Snapshot, z. B. "scratchpad".
     static var kind: String { get }
-    /// Name im Menü „Ablage → Neu ▸“.
+    /// Eintrag im Menü „Kachel“ (ganze Zeile, z. B. „Neues Scratchpad“).
     static var displayName: String { get }
     /// Aus Steuerkanal (`--arg k=v`), Menü (`menuArgs`) oder Snapshot. Unsinn → `PaneArgsError` mit Grund.
     init(args: [String: String]) throws
@@ -88,7 +88,7 @@ struct PaneArgsError: Error, CustomStringConvertible {
     }
 }
 
-/// Eine Wahrheit über die Kachelarten für Steuerkanal (`new-pane --kind`), Menü „Ablage → Neu ▸“
+/// Eine Wahrheit über die Kachelarten für Steuerkanal (`new-pane --kind`), Menü „Kachel“
 /// und Session-Restore. "terminal" und "home" sind fest verdrahtet (`TerminalPane`), alles
 /// andere kommt aus `contents`.
 enum PaneKindRegistry {
@@ -117,6 +117,6 @@ enum PaneKindRegistry {
 }
 
 extension Notification.Name {
-    /// Menü „Ablage → Neu ▸ <Art>“: das Key-Fenster hängt eine App-Kachel an (`userInfo["kind"]`).
+    /// Menü „Kachel → Neues …“: das Key-Fenster hängt eine App-Kachel an (`userInfo["kind"]`).
     static let latexTermNewAppPane = Notification.Name("LatexTerm.newAppPane")
 }

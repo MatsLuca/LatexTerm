@@ -70,7 +70,7 @@ final class TerminalSplitView: NSView {
             self.addPane(home: true)
         }
 
-        // Menü „Ablage → Neu ▸ <Art>“ (aus der Registry): App-Kachel im Key-Fenster.
+        // Menü „Kachel → Neues …“ (aus der Registry): App-Kachel im Key-Fenster.
         newAppPaneObserver = NotificationCenter.default.addObserver(
             forName: .latexTermNewAppPane, object: nil, queue: .main
         ) { [weak self] note in

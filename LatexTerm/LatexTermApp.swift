@@ -241,26 +241,9 @@ struct LatexTermApp: App {
                 Button("Beenden und Kacheln merken") { appDelegate.quitKeepingPanes(relaunch: false) }
                     .keyboardShortcut("q", modifiers: [.command, .option])
             }
-            // Ablage → Neu: ⌘N Home-Kachel (Projekt-Launcher) statt SwiftUIs „Neues Fenster",
-            // ⌘T Terminal-Kachel (nackte Shell, CWD-Erbe). Die Tasten fängt die Kachel-Hülle
-            // (PaneContainerView.performKeyEquivalent); das Menü ist Schaufenster + Mausweg.
-            CommandGroup(replacing: .newItem) {
-                Button("Neue Home-Kachel") {
-                    NotificationCenter.default.post(name: .latexTermNewHomePane, object: nil)
-                }
-                .keyboardShortcut("n", modifiers: .command)
-                Button("Neue Terminal-Kachel") { paneCommand(.split) }
-                    .keyboardShortcut("t", modifiers: .command)
-                // App-Kacheln aus der Registry — eine neue Art erscheint hier ohne Menü-Code.
-                Menu("Neue Kachel") {
-                    ForEach(PaneKindRegistry.menuEntries, id: \.kind) { entry in
-                        Button(entry.displayName) {
-                            NotificationCenter.default.post(name: .latexTermNewAppPane, object: nil,
-                                                            userInfo: ["kind": entry.kind])
-                        }
-                    }
-                }
-            }
+            // Ablage/File → Neu bleibt leer: SwiftUIs „Neues Fenster“ fliegt raus, alle neuen Kacheln
+            // stehen oben im Menü „Kachel“ (Mats, 22.09.: dort sucht man sie, nicht in File).
+            CommandGroup(replacing: .newItem) {}
             // Home-Kachel: die Befehle stehen im Menü statt in einer Fußzeile in der Kachel
             // (Runde 15). Die Tastenwege selbst fängt HomePaneView.performKeyEquivalent ab —
             // die Kachel ist vor dem Menü dran; die Einträge hier sind Schaufenster + Mausweg.
@@ -310,6 +293,23 @@ struct LatexTermApp: App {
             // Kürzel. Einstellungen (Theme, Akzent, Zeilenabstand, Formelgröße …) stehen NICHT
             // hier, sondern nur in ⌘, (Menüs = Aktionen, Einstellungen = Einstellungen).
             CommandMenu("Kachel") {
+                // Neue Kacheln: ⌘N Home (Projekt-Launcher), ⌘T Terminal (nackte Shell, CWD-Erbe),
+                // darunter die App-Kacheln aus der Registry — eine neue Art erscheint hier ohne
+                // Menü-Code. Die Tasten fängt die Kachel-Hülle (PaneContainerView.performKeyEquivalent);
+                // das Menü ist Schaufenster + Mausweg.
+                Button("Neue Home-Kachel") {
+                    NotificationCenter.default.post(name: .latexTermNewHomePane, object: nil)
+                }
+                .keyboardShortcut("n", modifiers: .command)
+                Button("Neue Terminal-Kachel") { paneCommand(.split) }
+                    .keyboardShortcut("t", modifiers: .command)
+                ForEach(PaneKindRegistry.menuEntries, id: \.kind) { entry in
+                    Button(entry.displayName) {
+                        NotificationCenter.default.post(name: .latexTermNewAppPane, object: nil,
+                                                        userInfo: ["kind": entry.kind])
+                    }
+                }
+                Divider()
                 Button("Zoomen / Zoom beenden") { paneCommand(.zoom) }
                     .keyboardShortcut(.return, modifiers: .command)
                 Button("Suchen…") { paneCommand(.find) }
@@ -325,7 +325,7 @@ struct LatexTermApp: App {
                 Button("Schriftgröße zurücksetzen") { ThemeStore.shared.fontSize = ThemeStore.defaultFontSize }
                     .keyboardShortcut("0", modifiers: .command)
                 Divider()
-                // Kein ⌘W als Menükürzel: SwiftUIs „Schließen“ im Ablage-Menü trägt es schon;
+                // Kein ⌘W als Menükürzel: SwiftUIs „Schließen“ im File-Menü trägt es schon;
                 // die Kachel fängt die Taste selbst.
                 Button("Kachel schließen  (⌘W)") { paneCommand(.close) }
             }

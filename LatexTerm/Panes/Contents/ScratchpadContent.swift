@@ -5,7 +5,7 @@ import AppKit
 /// --pane N clear` leert. Flüchtig — nach ⌥⌘R kommt die Kachel nicht wieder.
 final class ScratchpadContent: PaneContent {
     static let kind = "scratchpad"
-    static let displayName = "Scratchpad"
+    static let displayName = "Neues Scratchpad"
 
     weak var delegate: PaneContentDelegate?
     private let canvas = ScratchpadCanvas()

@@ -11,7 +11,7 @@ import WebKit
 /// Standardbrowser, nie in der Kachel. Später gezielt öffnen, wenn ein Fall es braucht.
 final class WebContent: NSObject, PaneContent, WKNavigationDelegate {
     static let kind = "web"
-    static let displayName = "HTML-Datei …"
+    static let displayName = "HTML-Datei in neuer Kachel …"
 
     weak var delegate: PaneContentDelegate?
     private let webView: WKWebView
@@ -35,7 +35,7 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate {
         load(file)
     }
 
-    /// Menü „Neue Kachel ▸ HTML-Datei …“: Datei wählen, dann wie `--arg url=…`. Abbrechen = nil.
+    /// Menü „Kachel → HTML-Datei in neuer Kachel …“: Datei wählen, dann wie `--arg url=…`. Abbrechen = nil.
     static func menuArgs() -> [String: String]? {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [.html]
