@@ -18,7 +18,7 @@ Upload-Panel, Downloads → ~/Downloads. ⌘±/⌘0, ⌘F (Trefferzahl per JS), 
 **Live geprüft (Claude, per MCP/CLI):** Umlaute + fetch + fehlende Datei + JS-Fehler in `web_look`; JS geändert → neu
 geladen, Scroll unten blieb; CSS geändert → ohne Neuladen umgefärbt; `load`/`back` → Datei und Titel folgen. Nach dem
 Test: doppelte Fehlzeile, falscher „weiter unten“-Hinweis und leere Konsole nach Zurück (Verlaufs-Cache) behoben.
-Offen: Tasten, Dialoge, Upload/Download von Hand.
+Von Mats von Hand abgenommen (Zoom, Suchen, Links, Zurück, `_blank`, extern, confirm, Inspector). Upload/Download ungetestet.
 
 ## 2026-09-23 (nachts) — Vorschau mit Rückkanal, SyncTeX und Komfort
 
