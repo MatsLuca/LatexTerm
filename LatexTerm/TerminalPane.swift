@@ -1347,10 +1347,18 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         return true
     }
 
-    /// Nur gestartete Shells landen im Snapshot; Home ist flüchtig.
+    /// Home bleibt Home; ein Terminal merkt sich Verzeichnis, Agenten-Session und Farbname — was
+    /// daraus beim Neustart wird, entscheidet `RestoreStep` (Session → „Weiter“, sonst Shell).
     func snapshot() -> PaneSnapshot? {
-        guard isStarted else { return nil }
-        return PaneSnapshot(kind: "terminal", args: currentDirectory.map { ["cwd": $0] } ?? [:])
+        guard isStarted else { return PaneSnapshot(kind: "home") }
+        var args: [String: String] = [:]
+        args["cwd"] = currentDirectory
+        if let identity = agentSession.identity {
+            args["agent"] = identity.agent
+            args["session"] = identity.sessionID
+        }
+        args["accentName"] = accentName
+        return PaneSnapshot(kind: "terminal", args: args)
     }
 
     /// Aktuelles Arbeitsverzeichnis dieser Pane (OSC 7), falls die Shell eins gemeldet hat.

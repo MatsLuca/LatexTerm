@@ -38,7 +38,8 @@ protocol Pane: AnyObject {
     /// Kachel wird geschlossen: Prozess beenden, Timer stoppen, Observer lösen — hier, nicht in
     /// `deinit`.
     func willClose()
-    /// Eintrag für den Session-Snapshot (#11); nil = flüchtig (Home, ungestartet).
+    /// Eintrag für den Session-Snapshot (#11, `PaneSnapshot` in SessionStore.swift); nil = lässt
+    /// sich nicht wiederherstellen, der Platz fällt beim Neustart weg.
     func snapshot() -> PaneSnapshot?
 }
 
@@ -66,13 +67,6 @@ enum CloseGuard: Equatable {
     case free
     /// Grund als Satzrest hinter „Kachel N …“, z. B. „hat einen laufenden Prozess (vim)“.
     case busy(String)
-}
-
-/// Eine Kachel im Session-Snapshot: Art + Argumente als Strings (dieselbe Form wie später
-/// `new-pane --kind … --arg k=v`).
-struct PaneSnapshot: Equatable {
-    var kind: String
-    var args: [String: String] = [:]
 }
 
 /// Rückkanal einer Kachel zur Split-View. Ein Protokoll statt einzelner optionaler Closures:

@@ -15,6 +15,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         WidgetRefresher.shared.start()   // Desktop-Widgets füttern (projekte widget), dann alle 5 min
     }
 
+    /// Stand aller Fenster sichern (Snapshot v2). Erst hier, nach dem Ja von `VMQuitGuard`: ein
+    /// abgebrochenes Beenden hinterlässt so keine Wiederherstell-Marke.
+    func applicationWillTerminate(_ notification: Notification) {
+        SessionStore.save(TerminalSplitView.sessionSnapshot(restoreOnce: false))
+    }
+
     // MARK: Beenden mit laufender Windows-VM
     //
     // ⌘Q reißt eine laufende VMware-VM mit (`vmware-vmx` bekommt SIGTERM, Absender unklar; 21.09. und 22.09.2026

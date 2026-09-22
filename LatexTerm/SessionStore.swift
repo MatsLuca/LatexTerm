@@ -1,47 +1,168 @@
 import Foundation
 
-/// Session-Restore (#11): persistiert das Pane-Layout über App-Neustarts.
+/// Eine Kachel im Session-Snapshot: Art + Argumente als Strings (dieselbe Form wie später
+/// `new-pane --kind … --arg k=v`). Terminal-Schlüssel: `cwd`, `agent`, `session`, `accentName`.
+struct PaneSnapshot: Codable, Equatable {
+    var kind: String
+    var args: [String: String] = [:]
+
+    init(kind: String, args: [String: String] = [:]) {
+        self.kind = kind
+        self.args = args
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        kind = try c.decode(String.self, forKey: .kind)
+        args = try c.decodeIfPresent([String: String].self, forKey: .args) ?? [:]
+    }
+}
+
+/// Session-Snapshot v2 (#11, Kachel-Protokoll §3.7): je Fenster die Kacheln in Reihenfolge
+/// plus Fokus und Zoom. Die Grid-Anordnung selbst ist eine reine Funktion der Kachelzahl und
+/// Fenstergröße (`TerminalSplitView.relayout`) und braucht keinen eigenen Zustand.
 ///
-/// Gespeichert wird nur, was nicht rekonstruierbar ist: je Pane das zuletzt per
-/// OSC 7 gemeldete Arbeitsverzeichnis (nil = Home). Die Grid-Anordnung selbst ist
-/// eine reine Funktion der Pane-Anzahl + Fenstergröße (`TerminalSplitView.relayout`)
-/// und braucht keinen eigenen Zustand. Persistenz als JSON-Datei in Application
-/// Support — kein UserDefaults-Component-Salat, anschlussfähig an eine spätere
-/// Config-Datei.
-struct SessionSnapshot: Codable {
-    var version: Int = 1
-    /// Arbeitsverzeichnis je Pane, in Kachel-Reihenfolge. `nil` = Home.
-    /// Akzentfarben werden bewusst NICHT mehr persistiert: nach einem Neustart
-    /// läuft die Session hinter der Farbe nicht mehr — die Erkennung (#24)
-    /// färbt die Kachel neu, sobald wieder ein TUI-Rahmen sichtbar ist.
-    /// (Alte Snapshots mit `paneAccents`-Feld laden weiter; unbekannte
-    /// JSON-Felder ignoriert der Decoder.)
-    var paneDirectories: [String?]
+/// Geschrieben bei jedem Beenden, als Startlayout benutzt aber nur einmal nach „Neu starten“ /
+/// „Beenden und Kacheln merken“ (`restoreOnce`). Sonst beginnt die App mit Home (Mats' Entscheidung
+/// 24.08.). Akzentfarben liegen nur als Claude-Farbname bei, damit Nachbarkacheln nach dem
+/// Neustart nicht die Farben tauschen.
+struct SessionSnapshot: Codable, Equatable {
+    struct Window: Codable, Equatable {
+        var panes: [PaneSnapshot]
+        /// Index in `panes`; nil = keine Kachel fokussiert bzw. nichts gezoomt.
+        var focused: Int?
+        var zoomed: Int?
+
+        init(panes: [PaneSnapshot], focused: Int? = nil, zoomed: Int? = nil) {
+            self.panes = panes
+            self.focused = focused
+            self.zoomed = zoomed
+        }
+
+        /// Aus den Kacheln eines Fensters: Kacheln ohne Snapshot fallen weg, Fokus- und
+        /// Zoom-Index zählen danach (sonst zeigte der Index auf die falsche Kachel).
+        init(entries: [(snapshot: PaneSnapshot?, focused: Bool, zoomed: Bool)]) {
+            var panes: [PaneSnapshot] = []
+            var focused: Int?, zoomed: Int?
+            for entry in entries {
+                guard let snapshot = entry.snapshot else { continue }
+                if entry.focused { focused = panes.count }
+                if entry.zoomed { zoomed = panes.count }
+                panes.append(snapshot)
+            }
+            self.init(panes: panes, focused: focused, zoomed: zoomed)
+        }
+    }
+
+    var version = 2
+    var windows: [Window]
+    /// Beim nächsten Start einmal wiederherstellen; `SessionStore.takeRestore` löscht die Marke.
+    var restoreOnce = false
+
+    init(windows: [Window], restoreOnce: Bool = false) {
+        self.windows = windows
+        self.restoreOnce = restoreOnce
+    }
+
+    private enum CodingKeys: String, CodingKey { case version, windows, restoreOnce }
+    private enum V1Keys: String, CodingKey { case paneDirectories }
+
+    /// v1 (`paneDirectories`: CWD je Kachel, nil = Home) wird zu einem Fenster übersetzt; v1 hatte
+    /// nie eine Wiederherstell-Marke. Unbekannte Versionen sind ein Fehler (→ Home).
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        let version = try c.decode(Int.self, forKey: .version)
+        switch version {
+        case 1:
+            let dirs = try decoder.container(keyedBy: V1Keys.self)
+                .decode([String?].self, forKey: .paneDirectories)
+            windows = [Window(panes: dirs.map { dir in
+                dir.map { PaneSnapshot(kind: "terminal", args: ["cwd": $0]) } ?? PaneSnapshot(kind: "home")
+            })]
+        case 2:
+            windows = try c.decode([Window].self, forKey: .windows)
+            restoreOnce = try c.decodeIfPresent(Bool.self, forKey: .restoreOnce) ?? false
+        default:
+            throw DecodingError.dataCorruptedError(forKey: .version, in: c,
+                                                   debugDescription: "Snapshot-Version \(version) unbekannt")
+        }
+    }
+}
+
+/// Was aus einer gespeicherten Kachel beim Wiederherstellen wird. Alles im Snapshot gilt als
+/// ungeprüft (Datei auf der Platte): Session-IDs und Farbnamen landen später in einem getippten
+/// Befehl und müssen deshalb dieselben Regeln erfüllen wie im Steuerkanal.
+enum RestoreStep: Equatable {
+    /// Home-Kachel (auch für Arten, die diese Version nicht kennt: der Platz bleibt erhalten).
+    case home
+    /// Nackte Shell im Verzeichnis — auch für Kacheln ohne Session-Identität oder mit fremdem
+    /// Vordergrundprozess (vim, ssh): deren Zustand lässt sich nicht fortsetzen.
+    case shell(cwd: String?)
+    /// Agenten-Session über den Home-Weg „Weiter“ fortsetzen.
+    case resume(agent: String, sessionID: String, cwd: String?, accentName: String?)
+
+    init(_ pane: PaneSnapshot) {
+        guard pane.kind == "terminal" else { self = .home; return }
+        let cwd = pane.args["cwd"].flatMap { $0.hasPrefix("/") ? $0 : nil }
+        guard let agent = pane.args["agent"], ["claude", "codex"].contains(agent),
+              let session = pane.args["session"], AgentSession.validID(session) else {
+            self = .shell(cwd: cwd); return
+        }
+        let accent = pane.args["accentName"].flatMap { name in
+            (1...16).contains(name.count) && name.allSatisfy { $0.isASCII && $0.isLowercase } ? name : nil
+        }
+        self = .resume(agent: agent, sessionID: session, cwd: cwd, accentName: accent)
+    }
 }
 
 enum SessionStore {
 
-    private static var fileURL: URL? {
+    static var defaultURL: URL? {
         guard let base = FileManager.default.urls(
             for: .applicationSupportDirectory, in: .userDomainMask).first else { return nil }
         return base.appendingPathComponent("LatexTerm/session.json")
     }
 
-    static func save(_ snapshot: SessionSnapshot) {
-        guard let url = fileURL,
-              let data = try? JSONEncoder().encode(snapshot) else { return }
+    static func save(_ snapshot: SessionSnapshot, to url: URL? = defaultURL) {
+        guard let url, let data = try? JSONEncoder().encode(snapshot) else { return }
         try? FileManager.default.createDirectory(
             at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? data.write(to: url, options: .atomic)
     }
 
-    /// Letzter Snapshot — nil bei fehlender/korrupter Datei oder unbekannter Version
-    /// (→ Aufrufer startet mit dem Default-Layout, eine Kachel im Home).
-    static func load() -> SessionSnapshot? {
-        guard let url = fileURL,
-              let data = try? Data(contentsOf: url),
-              let snap = try? JSONDecoder().decode(SessionSnapshot.self, from: data),
-              snap.version == 1, !snap.paneDirectories.isEmpty else { return nil }
-        return snap
+    /// Letzter Snapshot — nil bei fehlender/korrupter Datei oder unbekannter Version.
+    static func load(from url: URL? = defaultURL) -> SessionSnapshot? {
+        guard let url, let data = try? Data(contentsOf: url) else { return nil }
+        return try? JSONDecoder().decode(SessionSnapshot.self, from: data)
+    }
+
+    /// Fenster zum Wiederherstellen, wenn die Marke steht — sonst nil (normaler Start mit Home).
+    /// Die Marke wird VOR dem Wiederherstellen gelöscht: bricht der Start ab, kommt beim nächsten
+    /// Öffnen wieder Home statt derselben Wiederherstellung in Schleife.
+    static func takeRestore(from url: URL? = defaultURL) -> [SessionSnapshot.Window]? {
+        guard var snapshot = load(from: url), snapshot.restoreOnce else { return nil }
+        snapshot.restoreOnce = false
+        save(snapshot, to: url)
+        let windows = snapshot.windows.filter { !$0.panes.isEmpty }
+        return windows.isEmpty ? nil : windows
+    }
+}
+
+/// Wiederherzustellende Fenster beim Start. Jedes neue Fenster holt sich das nächste; was nach
+/// dem Start niemand geholt hat (macOS öffnet nach ⌘Q meist nur ein Fenster), hängt das erste
+/// Fenster als Kacheln an — keine Session geht verloren, nur die Fenstergrenze.
+struct RestoreQueue {
+    private var windows: [SessionSnapshot.Window]
+    init(_ windows: [SessionSnapshot.Window]) { self.windows = windows }
+
+    var isEmpty: Bool { windows.isEmpty }
+
+    mutating func claim() -> SessionSnapshot.Window? {
+        windows.isEmpty ? nil : windows.removeFirst()
+    }
+
+    mutating func drain() -> [SessionSnapshot.Window] {
+        defer { windows = [] }
+        return windows
     }
 }

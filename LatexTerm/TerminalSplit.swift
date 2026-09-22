@@ -18,7 +18,6 @@ final class TerminalSplitView: NSView {
     private weak var zoomedPane: (any Pane)?
     private let vibrancyView = NSVisualEffectView()
     private var isFirstLayout = true
-    private var terminateObserver: NSObjectProtocol?
     private var newHomeObserver: NSObjectProtocol?
 
     private var showHomeObserver: NSObjectProtocol?
@@ -102,10 +101,7 @@ final class TerminalSplitView: NSView {
             self.runQuickstart(q)
         }
 
-        // Beim Beenden den aktuellen Stand sichern (CWDs werden live ausgelesen).
-        terminateObserver = NotificationCenter.default.addObserver(
-            forName: NSApplication.willTerminateNotification, object: nil, queue: .main
-        ) { [weak self] _ in self?.saveSession() }
+        Self.live.append(Weak(self))
 
         // Notification-Klick → Pane fokussieren + zoomen (#30). Der Zugriff
         // setzt zugleich den UNUserNotificationCenter-Delegate früh.
@@ -117,7 +113,6 @@ final class TerminalSplitView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     deinit {
-        if let terminateObserver { NotificationCenter.default.removeObserver(terminateObserver) }
         if let newHomeObserver { NotificationCenter.default.removeObserver(newHomeObserver) }
         if let showHomeObserver { NotificationCenter.default.removeObserver(showHomeObserver) }
         if let quickstartObserver { NotificationCenter.default.removeObserver(quickstartObserver) }
@@ -148,11 +143,24 @@ final class TerminalSplitView: NSView {
         return order.first { !taken.contains($0) } ?? wanted
     }
 
-    /// Home-Kacheln sind flüchtig: nur gestartete Shells landen im Snapshot. Sind es
-    /// keine, wird nichts gespeichert → nächster Start beginnt wieder mit Home.
-    private func saveSession() {
-        let shells = panes.compactMap { $0.snapshot() }.filter { $0.kind == "terminal" }
-        SessionStore.save(SessionSnapshot(paneDirectories: shells.map { $0.args["cwd"] }))
+    // MARK: - Session-Snapshot (#11)
+
+    private struct Weak { weak var view: TerminalSplitView?; init(_ v: TerminalSplitView) { view = v } }
+    /// Alle Fenster in Entstehungsreihenfolge — der Snapshot beim Beenden ist EINE Datei für alle
+    /// (früher schrieb jedes Fenster seine eigene, das letzte gewann).
+    private static var live: [Weak] = []
+
+    /// Stand aller offenen Fenster; CWDs und Session-Identitäten werden live ausgelesen.
+    static func sessionSnapshot(restoreOnce: Bool) -> SessionSnapshot {
+        live.removeAll { $0.view == nil }
+        let windows = live.compactMap(\.view).filter { $0.window != nil }.map { $0.windowSnapshot() }
+        return SessionSnapshot(windows: windows.filter { !$0.panes.isEmpty }, restoreOnce: restoreOnce)
+    }
+
+    private func windowSnapshot() -> SessionSnapshot.Window {
+        SessionSnapshot.Window(entries: panes.map { pane in
+            (snapshot: pane.snapshot(), focused: isFocused(pane), zoomed: pane === zoomedPane)
+        })
     }
 
     /// Für Home: alle anderen Kacheln aus allen Fenstern, mit expliziter Session-Identität.
