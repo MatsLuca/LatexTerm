@@ -667,10 +667,13 @@ final class PreviewContent: NSObject, PaneContent {
         if let selection = pdfView.currentSelection, !selection.isFindResult(in: findResults),
            let text = selection.string?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty,
            let page = selection.pages.first {
-            let lines = selection.selectionsByLine().filter { $0.pages.first == page }.map { $0.bounds(for: page) }
-            let rect = lines.reduce(selection.bounds(for: page)) { $0.union($1) }
+            let raw = selection.selectionsByLine().filter { $0.pages.first == page }.map { $0.bounds(for: page) }
+            let words = Self.wholeWords(selection, lines: raw, on: page) ?? selection
+            let lines = words.selectionsByLine().filter { $0.pages.first == page }.map { $0.bounds(for: page) }
+            let rect = lines.reduce(words.bounds(for: page)) { $0.union($1) }
+            let wordText = words.string?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
             pending = PreviewMark(kind: .text, page: doc.index(for: page), rect: rect, lines: lines,
-                                  text: Self.wholeWords(selection, lines: lines, on: page) ?? text)
+                                  text: wordText.isEmpty ? text : wordText)
             refreshMarks()
             updateMarkUI()
         } else if pending?.kind == .text {
@@ -680,12 +683,12 @@ final class PreviewContent: NSObject, PaneContent {
     }
 
     /// Text der Auswahl auf ganze Wörter erweitert („ücke ist“ → „Lücke ist“) — halb getroffene Wörter beim Ziehen sind normal.
-    private static func wholeWords(_ selection: PDFSelection, lines: [NSRect], on page: PDFPage) -> String? {
+    private static func wholeWords(_ selection: PDFSelection, lines: [NSRect], on page: PDFPage) -> PDFSelection? {
         guard let first = lines.first, let last = lines.last,
               let copy = selection.copy() as? PDFSelection else { return nil }
         if let start = page.selectionForWord(at: NSPoint(x: first.minX + 1, y: first.midY)) { copy.add(start) }
         if let end = page.selectionForWord(at: NSPoint(x: last.maxX - 1, y: last.midY)) { copy.add(end) }
-        return copy.string?.trimmingCharacters(in: .whitespacesAndNewlines)
+        return copy
     }
 
     private func pdfRegion(page: PDFPage, rect: NSRect) {
