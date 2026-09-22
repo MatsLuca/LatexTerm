@@ -1,5 +1,6 @@
 import AppKit
 import WebKit
+import UniformTypeIdentifiers
 
 /// Zweite App-Kachel (Kachel-Protokoll, Schritt 8): zeigt eine lokale HTML-Datei — Plots,
 /// Berichte, Mini-Apps, die ein Skript oder ein Mod erzeugt. `latexterm new-pane --kind web
@@ -23,6 +24,7 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate {
     private let webView: WKWebView
     private(set) var file: URL
     private var titleObservation: NSKeyValueObservation?
+    private let folderServer = LocalFolderServer()
 
     required init(args: [String: String]) throws {
         try PaneArgsError.rejectUnknown(args, allowed: ["url"], kind: Self.kind)
@@ -32,6 +34,7 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate {
         file = try Self.resolve(raw)
         let config = WKWebViewConfiguration()
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
+        config.setURLSchemeHandler(folderServer, forURLScheme: LocalFolderServer.scheme)
         webView = WKWebView(frame: .zero, configuration: config)
         super.init()
         webView.navigationDelegate = self
@@ -78,9 +81,18 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate {
         return URL(fileURLWithPath: path).standardizedFileURL
     }
 
+    /// HTML läuft über `LocalFolderServer` (eigenes Schema): WebKit rät bei file:// ohne Zeichensatz-Angabe
+    /// Latin-1 — aus „€“ wird „â‚¬“. Der Server liefert HTML ohne Angabe als UTF-8 und alles aus demselben
+    /// Ordner (Bilder, Skripte, CSS) mit; `load(Data)` hätte Umlaute gerettet, aber relative Dateien
+    /// gesperrt. PDF, Bilder direkt: wie gehabt über file://.
     private func load(_ url: URL) {
         file = url
-        webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        if ["html", "htm"].contains(url.pathExtension.lowercased()) {
+            folderServer.root = url.deletingLastPathComponent()
+            webView.load(URLRequest(url: LocalFolderServer.url(for: url)))
+        } else {
+            webView.loadFileURL(url, allowingReadAccessTo: url.deletingLastPathComponent())
+        }
         delegate?.contentStyleChanged()
     }
 
@@ -103,7 +115,8 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate {
     /// `reload` lädt neu (nach dem Überschreiben der Datei), `load <pfad>` zeigt eine andere Datei.
     func receive(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed == "reload" { webView.reloadFromOrigin(); return true }
+        // Neu von der Platte über denselben Weg wie beim ersten Laden (Ordner-Server bzw. file://).
+        if trimmed == "reload" { load(file); return true }
         guard trimmed.hasPrefix("load "), let url = try? Self.resolve(String(trimmed.dropFirst(5))) else { return false }
         load(url)
         return true
@@ -123,11 +136,55 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate {
     func webView(_ webView: WKWebView, decidePolicyFor action: WKNavigationAction,
                  decisionHandler: @escaping (WKNavigationActionPolicy) -> Void) {
         guard let url = action.request.url else { decisionHandler(.cancel); return }
-        if url.isFileURL || url.scheme == "about" { decisionHandler(.allow); return }
+        if url.isFileURL || url.scheme == "about" || url.scheme == LocalFolderServer.scheme { decisionHandler(.allow); return }
         // Geklickter Link nach draußen: Standardbrowser, die Kachel bleibt lokal.
         if action.navigationType == .linkActivated, ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") {
             NSWorkspace.shared.open(url)
         }
         decisionHandler(.cancel)
+    }
+}
+
+/// Liefert Dateien EINES Ordners (samt Unterordnern) an die Web-Kachel aus — `latexterm-file:///abs/pfad`.
+/// Außerhalb von `root` gibt es nichts (wie `allowingReadAccessTo`), kein Netz. HTML ohne eigene
+/// Zeichensatz-Angabe (BOM oder `charset` in den ersten 1024 Bytes) geht als UTF-8 raus.
+final class LocalFolderServer: NSObject, WKURLSchemeHandler {
+    static let scheme = "latexterm-file"
+    var root: URL?
+
+    static func url(for file: URL) -> URL {
+        var c = URLComponents(); c.scheme = scheme; c.host = ""; c.path = file.path
+        return c.url!
+    }
+
+    func webView(_ webView: WKWebView, start task: WKURLSchemeTask) {
+        guard let requested = task.request.url, let root else { return fail(task) }
+        let file = URL(fileURLWithPath: requested.path).standardizedFileURL
+        let base = root.standardizedFileURL.path
+        guard file.path == base || file.path.hasPrefix(base + "/"),
+              let data = try? Data(contentsOf: file) else { return fail(task) }
+        let type = UTType(filenameExtension: file.pathExtension)
+        let mime = type?.preferredMIMEType ?? "application/octet-stream"
+        let isHTML = type?.conforms(to: .html) ?? false
+        let encoding = isHTML && !Self.declaresCharset(data) ? "utf-8" : nil
+        task.didReceive(URLResponse(url: requested, mimeType: mime, expectedContentLength: data.count,
+                                    textEncodingName: encoding))
+        task.didReceive(data)
+        task.didFinish()
+    }
+
+    func webView(_ webView: WKWebView, stop task: WKURLSchemeTask) {}
+
+    private func fail(_ task: WKURLSchemeTask) {
+        task.didFailWithError(URLError(.fileDoesNotExist))
+    }
+
+    /// BOM oder `charset` in den ersten 1024 Bytes — dort muss die Angabe laut HTML-Standard stehen.
+    static func declaresCharset(_ data: Data) -> Bool {
+        let head = data.prefix(1024)
+        if head.starts(with: [0xEF, 0xBB, 0xBF]) || head.starts(with: [0xFE, 0xFF]) || head.starts(with: [0xFF, 0xFE]) {
+            return true
+        }
+        return String(decoding: head, as: UTF8.self).lowercased().contains("charset")
     }
 }
