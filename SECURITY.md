@@ -60,6 +60,14 @@ Please do not open a public issue with full exploit details before a fix is avai
   control socket — a remote URL from a hook context would be a new channel to the outside. `send`
   to a web pane only understands `reload` and `load <local path>`. Widening this to remote content
   needs its own review.
+- **MCP server `latexterm mcp` (by design):** a stdio child process of an agent session that speaks to
+  the same control socket — it adds no new listener and no new caller class. It narrows rather than
+  widens what the CLI can do: no `force` close, never typing into the caller's own pane, `run_in_pane`
+  only into idle shells (busy programs need an explicit flag), and closing panes the session did not
+  open requires an explicit flag. Prompt delivery uses per-pane mailbox files under
+  `~/Library/Application Support/LatexTerm/mailbox/` (created 0700, written atomically); the app does
+  not read them — a receiver inside the target session submits them. Pane titles returned to the model
+  are truncated and labelled as data. Without `LATEXTERM_PANE_ID` the server exposes no tools.
 - **Agent status hooks:** optional provider/session/turn identifiers and bounded prompt/answer
   excerpts travel over that same socket and may appear in local chips or macOS notifications.
   The Codex bridge reads lifecycle-event input, not transcript files. It verifies the emitting

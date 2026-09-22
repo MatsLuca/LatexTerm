@@ -164,8 +164,8 @@ Agents (or you) can drive the terminal from any shell — the app listens on a p
 ```sh
 latexterm list-panes [--json]                     # all windows; index, UUID, CWD, state, provider/session/window IDs
 latexterm close-pane [--pane SEL] [--force]       # without --force: idle shell with no foreground job
-latexterm new-pane [--cwd DIR] [--exec CMD]
-latexterm new-pane --kind KIND [--arg KEY=VALUE]...   # e.g. --kind web --arg url=$PWD/plot.html
+latexterm new-pane [--cwd DIR] [--exec CMD] [--no-focus]
+latexterm new-pane --kind KIND [--arg KEY=VALUE]... [--no-focus]   # e.g. --kind web --arg url=$PWD/plot.html
 latexterm pane-kinds                              # terminal, home, scratchpad, web, …
 latexterm send [--pane SEL] [--no-enter] TEXT...  # type into a pane (Enter by default)
 latexterm zoom [--pane SEL]
@@ -181,6 +181,29 @@ ln -s /Applications/LatexTerm.app/Contents/Helpers/latexterm /opt/homebrew/bin/l
 ```
 
 That closes the loop: a Claude Code session can open panes, start fresh Claudes in them, prompt them, and watch their status — Claude orchestrating Claude.
+
+### MCP server — `latexterm mcp`
+
+The same binary speaks the [Model Context Protocol](https://modelcontextprotocol.io) over stdio, so agents get
+LatexTerm as native tools instead of shell commands — and know where they are without a skill having to load:
+
+```sh
+claude mcp add -s user latexterm -e 'LATEXTERM_START_CLAUDE=claude' -- /opt/homebrew/bin/latexterm mcp
+codex mcp add latexterm -- /opt/homebrew/bin/latexterm mcp   # then add env_vars = ["LATEXTERM_PANE_ID"] to its [mcp_servers.latexterm]
+```
+
+- **Intent-level tools:** `panes`, `open_terminal`, `start_agent`, `ask_session`, `wait_session`, `run_in_pane`,
+  `pane_action`, `focus_pane`, `close_pane` — plus one `open_<kind>` per app pane kind (`open_web`, `open_scratchpad`),
+  generated from each kind's self-description (`pane-kinds` → `kindInfos`). A new pane kind becomes a new tool with no
+  server change.
+- **Situational instructions:** on `initialize` the server tells the model which pane it is in, what else is open and
+  what panes are good for (show results, run long processes beside the chat, parallel agents).
+- **Guard rails by construction:** new panes open without stealing focus; no `force` close; never types into its own
+  pane; `run_in_pane` refuses agent sessions and busy programs unless asked; prompts to agents go through the pane's
+  mailbox (`~/Library/Application Support/LatexTerm/mailbox/<pane-uuid>/*.md`, delivered by a receiver inside the
+  session) and fall back to a two-step paste; a session may close foreign panes only with an explicit `foreign` flag.
+- **Scope:** outside a LatexTerm pane (`$LATEXTERM_PANE_ID` unset) the server offers no tools. Agent start commands come
+  from `LATEXTERM_START_CLAUDE` / `LATEXTERM_START_CODEX` (defaults `claude` / `codex`).
 
 ## Install
 

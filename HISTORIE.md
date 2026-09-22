@@ -1,5 +1,31 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-22 — MCP-Server `latexterm mcp`
+
+**Anlass (Mats, per 42 erörtert):** Der Werkstatt-Skill `latexterm` sprang manchmal nicht an — dann wusste Claude
+nichts von den Kacheln. Wunsch: Claude versteht, dass es im Gesamtsetup sitzt, nutzt Kacheln „ganz natürlich“, und das
+wächst mit jeder neuen Kachelart mit, ohne Skill-Pflege.
+
+**Entscheidung:** MCP-Server als Unterbefehl `mcp` im vorhandenen CLI (Swift). Gleicher Socket-Code und dieselbe
+`ControlProtocol.swift` → App und Server laufen nicht auseinander. Schicht auf dem Steuerkanal, kein Ersatz (Mods,
+Hooks, Launcher bleiben beim CLI). Verworfen: Node/TS-Server (zweite Laufzeit), Mod-Werkzeuge per `$.tool.register`
+(nur Claude, early access), `.mcp.json` im Bridge-Plugin (nur Wrapper-Sessions, Codex nicht).
+
+**Gebaut:**
+- Werkzeuge auf Absichts-Ebene + je App-Kachelart `open_<art>` aus der neuen Selbstbeschreibung (`PaneContent.manual`
+  Pflicht, `pane-kinds` → `kindInfos`). Alte App ohne Handbuch → generisches Schema.
+- Lagebild in `instructions` (eigene Kachel, andere Kacheln, wofür Kacheln gut sind).
+- Schutz als Bauart: `new-pane` mit `focus: false` (neu im Protokoll, CLI `--no-focus`), kein `force`, nie in die eigene
+  Kachel, `run_in_pane` nur in ruhende Shells (neues `PaneInfo.foreground`), fremde Kacheln schließen nur mit `foreign`.
+- Briefkasten gehört jetzt zum Protokoll (`ControlProtocol.mailboxPath`); `ask_session` schreibt atomar, wartet auf
+  Abholung und fällt ohne Empfänger auf zweistufiges Einfügen zurück. `start_agent` gibt den ersten Prompt nicht in die
+  Befehlszeile (frische PTY puffert vor dem Shell-Start nur ~1 KB), sondern stellt ihn nach dem Start zu.
+- `open_web` mit derselben Datei lädt die offene Kachel neu statt zu stapeln (`PaneInfo.args`).
+
+**Geprüft:** `scripts/test-mcp-server.swift` (Fake-App: Werkzeugliste, alle Schutzregeln, Briefkasten mit/ohne Empfänger,
+Wiederverwendung, alte App), stdio-Handtest gegen die laufende App, `claude -p` und `codex exec` sehen Werkzeuge und
+Lagebild. Lehre: Codex filtert die Env für MCP-Server — ohne `env_vars = ["LATEXTERM_PANE_ID"]` sähe der Server keine Kachel.
+
 ## 2026-09-22 — Kachel-Protokoll: Kacheln, die kein Terminal sind
 
 Anlass: Mats will Kacheln, die kein Terminal sind (erste Idee: ein Scratchpad zum Malen) — „wenn, dann
