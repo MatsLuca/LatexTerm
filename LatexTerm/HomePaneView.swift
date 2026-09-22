@@ -560,13 +560,15 @@ final class HomePaneView: NSView {
         if s.turns > 0 { sub.append("\(s.turns) Züge") }
         var badge: LauncherPalette.Badge? = Self.contextBadge(s.context).map { .init(text: $0.0, color: $0.1) }
         if badge == nil, s.context?.advice == "critical" { badge = .init(text: "kompakten!", color: Self.red) }
+        let live = liveSession(s.id, agent: "claude")
+        if let live { badge = Self.paneBadge(live.state) }
         let resume = Action.resume(s, path: p.path, title: title, age: Self.age(s.lastAt), project: p.name)
         var e = LauncherPalette.Entry(id: "s:" + s.id, kind: .session, title: title,
             subtitle: sub.joined(separator: " · "),
             keywords: p.aliases.joined(separator: " ") + " " + String((s.lastPrompt ?? "").prefix(240)),
             agent: "claude", accent: accentColor(for: p.path), badge: badge, recency: Self.date(s.lastAt),
-            pinned: s.pinned ?? false, primaryHint: "⏎ Weiter", copyText: s.id) { [weak self] in self?.run(resume) }
-        if templates.compact != nil, s.context?.advice != nil, s.context?.advice != "ok" {
+            pinned: s.pinned ?? false, primaryHint: live == nil ? "⏎ Weiter" : "⏎ Zur Kachel", copyText: s.id) { [weak self] in self?.run(resume) }
+        if live == nil, templates.compact != nil, s.context?.advice != nil, s.context?.advice != "ok" {
             e.secondaryHint = "Weiter + /compact"
             e.secondary = { [weak self] in self?.run(.compact(s, path: p.path)) }
         } else {
@@ -577,10 +579,12 @@ final class HomePaneView: NSView {
     }
     private func codexEntry(_ s: ProjekteData.AgentSession) -> LauncherPalette.Entry {
         let action = codexResume(s, in: s.path)
+        let live = liveSession(s.id, agent: "codex")
         var e = LauncherPalette.Entry(id: "c:" + s.id, kind: .session, title: s.title,
             subtitle: (s.path as NSString).lastPathComponent + " · " + Self.age(s.lastAt),
             keywords: Self.rootRelative(s.path), agent: "codex", accent: accentColor(for: s.path),
-            recency: Self.date(s.lastAt), pinned: s.pinned ?? false, primaryHint: "⏎ Weiter", copyText: s.id) { [weak self] in self?.run(action) }
+            badge: live.map { Self.paneBadge($0.state) }, recency: Self.date(s.lastAt), pinned: s.pinned ?? false,
+            primaryHint: live == nil ? "⏎ Weiter" : "⏎ Zur Kachel", copyText: s.id) { [weak self] in self?.run(action) }
         e.secondaryHint = "Projekt zeigen"
         e.secondary = { [weak self] in self?.browse(s.path) }
         return e
@@ -1818,8 +1822,12 @@ final class HomePaneView: NSView {
 
     /// Resume an already attached session by focusing its exact pane, including other windows.
     /// CWD alone is deliberately insufficient: two different sessions can share a folder.
+    private func liveSession(_ id: String, agent: String) -> HomePaneInfo? {
+        otherPanes?().first(where: { $0.matches(sessionID: id, agent: agent) })
+    }
+
     private func focusLiveSession(_ id: String, agent: String) -> Bool {
-        guard let pane = otherPanes?().first(where: { $0.matches(sessionID: id, agent: agent) }) else { return false }
+        guard let pane = liveSession(id, agent: agent) else { return false }
         onFocusPane?(pane.id)
         return true
     }
@@ -2373,7 +2381,7 @@ extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
         default: tip = "Ordner"
         }
         if let a = p?.aliases, !a.isEmpty { tip += " · Alias: " + a.joined(separator: ", ") }
-        if dot != nil { tip += " · hier läuft eine Claude-Kachel" }
+        if dot != nil { tip += " · hier ist eine Kachel geöffnet" }
         cell.toolTip = tip
         return cell
     }
@@ -2406,19 +2414,22 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
             let r = templates.resume
             let star = (s.pinned ?? false) ? "★ " : ""
             let agent = s.agent == "codex" ? "Codex" : "Claude"
+            let label = liveSession(s.id, agent: s.agent ?? "claude") == nil ? r.label : "Zur Kachel"
             var meta = agent + " · " + age
             var metaColor: NSColor? = nil
             if let (badge, color) = Self.contextBadge(s.context) { meta = agent + " · " + badge + "  " + age; metaColor = color }
-            cell.set(glyph: r.glyph, text: star + (project.map { "\(r.label) · \($0)" } ?? r.label), detail: t, meta: meta, header: false, accent: Self.green, metaColor: metaColor)
+            cell.set(glyph: r.glyph, text: star + (project.map { "\(label) · \($0)" } ?? label), detail: t, meta: meta, header: false, accent: Self.green, metaColor: metaColor)
             cell.toolTip = s.lastPrompt.map { "Zuletzt: „\($0)“" + (s.context.map { "\n" + Self.contextLine($0) } ?? "") }
         case .run(let t, _):
             let color: NSColor = t.command == nil ? Self.blue : (t.glyph == "+" ? Self.cyan : Self.violet)
             let agent = t.agent == "codex" ? "Codex" : "Claude"
             let meta = agent + (t.lastAt.map { " · " + Self.age($0) } ?? "")
-            cell.set(glyph: t.glyph, text: t.label, detail: t.hint ?? "", meta: t.command == nil ? "" : meta, header: false, accent: color)
+            let live = t.sessionID.flatMap { liveSession($0, agent: t.agent ?? "claude") }
+            cell.set(glyph: t.glyph, text: live == nil ? t.label : "Zur Kachel", detail: t.hint ?? "", meta: t.command == nil ? "" : meta, header: false, accent: color)
         case .compact(let s, _):
             let t = templates.compact!
-            cell.set(glyph: t.glyph, text: t.label, detail: s.context.map(Self.contextLine) ?? (t.hint ?? ""), meta: "Claude", header: false,
+            let live = liveSession(s.id, agent: s.agent ?? "claude")
+            cell.set(glyph: t.glyph, text: live == nil ? t.label : "Zur Kachel · dort kompakten", detail: s.context.map(Self.contextLine) ?? (t.hint ?? ""), meta: "Claude", header: false,
                      accent: s.context?.advice == "critical" ? Self.red : Self.yellow)
         case .togglePin(_, let pinned):
             let t = (pinned ? templates.unpin : templates.pin)!
