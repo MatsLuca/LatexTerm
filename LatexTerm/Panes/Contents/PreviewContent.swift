@@ -338,14 +338,14 @@ final class PreviewContent: NSObject, PaneContent {
 
     private func closeFind() {
         guard root.findBar.isVisible || !findText.isEmpty else { return }
+        // Vor dem Ausblenden fragen: danach hat AppKit den Fokus schon ans Fenster gegeben (Kachel verlor ihn, 23.09.).
+        let hadFocus = (root.window?.firstResponder as? NSView)?.isDescendant(of: root.findBar) == true
+        if hadFocus { root.window?.makeFirstResponder(keyView) }
         root.findBar.hide()
         findText = ""
         findResults = []
         pdfView.highlightedSelections = nil
         pdfView.clearSelection()
-        if root.window?.firstResponder === root.findBar.field.currentEditor() || root.window?.firstResponder === root.findBar.field {
-            root.window?.makeFirstResponder(keyView)
-        }
     }
 
     /// Gleicher Text = nächster Treffer (bzw. voriger), neuer Text = neue Suche ab der aktuellen Seite.
