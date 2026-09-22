@@ -1,5 +1,25 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-23 — Web-Kachel „wie ein Browser“ + `web_look`
+
+**Anlass (Mats):** „die web kachel müssen wir noch perfektionieren“ — alle vier Pakete gewählt: Agent sieht die Seite,
+Live-Reload ganz, Navigation korrekt, Bedienung wie Browser.
+
+**Gebaut:** `WebContent.swift` neu, Hilfsteile in `WebSupport.swift` (Ordner-Server, Konsolen-Skript, Wurzel-View).
+Der Ordner-Server meldet jede ausgelieferte Datei → `FileWatcher` je Datei, Änderungen 0,15 s gesammelt; nur CSS →
+Stylesheets per `?latexterm=` austauschen, sonst neu laden; Scroll per rAF-Schleife nachsetzen (JS-Seiten sind bei
+`didFinish` noch kurz). `Cache-Control: no-store`, CORS für `fetch`. Konsole: Nutzerskript `atDocumentStart` →
+`WKScriptMessageHandler` (über `WeakScriptHandler`), fehlende Dateien vom Server; roter Chip „N ⚠“. `call look <png>`
+antwortet sofort und schreibt Bild + `<png>.json`, sobald die Seite geruht hat (`takeSnapshot` ist asynchron, `call`
+synchron) — MCP `web_look` wartet auf die JSON. Navigation: `file`/Titel/Snapshot folgen `didCommit`, `root` bleibt der
+Ordner der zuerst geöffneten Datei (Arg `root`, `zoom`), `_blank` lokal, Dialoge als Blatt (max. 5 je Seite),
+Upload-Panel, Downloads → ~/Downloads. ⌘±/⌘0, ⌘F (Trefferzahl per JS), ⌘R, ⌘ü/⌘[ zurück, Wischen, Pinch, Inspector.
+
+**Live geprüft (Claude, per MCP/CLI):** Umlaute + fetch + fehlende Datei + JS-Fehler in `web_look`; JS geändert → neu
+geladen, Scroll unten blieb; CSS geändert → ohne Neuladen umgefärbt; `load`/`back` → Datei und Titel folgen. Nach dem
+Test: doppelte Fehlzeile, falscher „weiter unten“-Hinweis und leere Konsole nach Zurück (Verlaufs-Cache) behoben.
+Offen: Tasten, Dialoge, Upload/Download von Hand.
+
 ## 2026-09-23 (nachts) — Vorschau mit Rückkanal, SyncTeX und Komfort
 
 **Anlass (Mats):** „bau alle Punkte sinnvoll perfekt“ — die Vorschau soll nicht nur zeigen, sondern zurück zur Session zeigen.
