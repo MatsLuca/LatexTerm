@@ -1,5 +1,43 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-22 — Kachel-Protokoll: Kacheln, die kein Terminal sind
+
+Anlass: Mats will Kacheln, die kein Terminal sind (erste Idee: ein Scratchpad zum Malen) — „wenn, dann
+richtig“: eine Grundinfrastruktur statt eines weiteren Home-Tricks. Bauplan in der claude-werkstatt
+(`plans/kachel-protokoll_2026-09-22.md`), Branch `kachel-protokoll`, ein Commit je Schritt.
+
+Befund vorher: `TerminalPane` war alles in einem, die Split-View griff an 29 Stellen direkt darauf zu,
+13 optionale Closures als Rückkanal. Drei Dinge lagen doppelt: Kachel-Kürzel (Terminal-View, Home, Menü),
+Fokus-Meldung (je Inhaltsansicht per `becomeFirstResponder`) und die Hüll-Optik (auf `TerminalPane`
+gerechnet, auf der Hülle gemalt).
+
+Gebaut (Schritte 1–8): die Hülle `PaneContainerView` besitzt die ganze Kachel-Optik und verteilt
+⌘T/⌘W/⌘1–9/⌘⏎; die Split-View beobachtet `window.firstResponder` per KVO als einzige Fokus-Wahrheit
+(setzt `hasFocus`, Fenstertitel, Titelleiste); `PaneHost` ersetzt die Closures; `Pane` ist das Protokoll,
+das die Split-View spricht (`[any Pane]`, drei kommentierte `as? TerminalPane`); `AppPane` ist der eine
+Wirt für App-Kacheln, `PaneContent` das Inhalts-Protokoll, `PaneKindRegistry` die Wahrheit für Menü,
+Steuerkanal und Restore. Erste Arten: `scratchpad` (Malfläche) und `web` (lokale HTML-Datei). Steuerkanal:
+`new-pane --kind … --arg k=v`, `pane-kinds`, `kind` in `list-panes`. Neue Kacheln stehen oben im Menü
+„Kachel“ (File → Neu ist leer). Schritt 9 (Snapshot v2) kam vorgezogen als „Neu starten mit Kacheln“
+(Eintrag unten), App-Kacheln mit `snapshotArgs` (web) kommen nach ⌥⌘R wieder.
+
+Abweichungen vom Plan: `Pane` bewusst ohne Protokoll-Defaults (eine um ein Zeichen vertippte Signatur
+bekäme sonst still den Default); `receive(_:enter:)` statt `receive(_:)`; die Registry wirft
+`PaneArgsError` mit Grund statt `init?`; `PaneContent.menuArgs()` für Arten mit Pflicht-Args (web öffnet
+im Menü einen Dateidialog).
+
+Lehren: **⌘T erbte seit jeher das Verzeichnis der ältesten Terminal-Kachel**, nicht der fokussierten —
+`performKeyEquivalent` läuft in Subview-Reihenfolge und ⌘T hatte als einziges Kürzel keinen Fokusfilter;
+mit der Hülle als einzigem Verteiler behoben. **Unter einer Home-Ansicht liegt ein ungestartetes Terminal**
+in derselben Hülle; ohne eigenen Fokus-Check öffnete es bei ⌘F eine unsichtbare Suchleiste — der Check
+bleibt im Terminal. **WKWebView schluckt Kürzel** und reicht unerledigte nur ans Menü: darum kommen
+⌘T/⌘W/⌘1–9 vor dem Inhalt dran, ⌘⏎ erst danach (die ⌘K-Palette belegt es als Zweitaktion).
+Abdunkeln greift auch auf WebKit-Inhalt (Hüll-Alpha). Leck-Probe: DEBUG-Zeile „PANE <art> freed“ in
+`/tmp/latexterm-status.log` nach jedem Schließen — für Terminal (⌘W und `exit`), Scratchpad und Web
+gesehen. Pixelvergleich vor/nach Schritt 1–2: fokussiert (22,20,20), gedimmt (40,39,39), Steg (73,73,73)
+identisch. Prüfliste `docs/pruefliste-kacheln.md`; Mats hat nach Schritt 2, 5 und 8 abgenommen
+(„passt alles“, „alles funktioniert“).
+
 ## 2026-09-22 — Neu starten mit Kacheln
 
 Anlass: Mats baut LatexTerm in LatexTerm. Nach jedem Build hieß es ⌘Q, wieder öffnen und jede

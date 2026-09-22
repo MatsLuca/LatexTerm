@@ -148,6 +148,15 @@ Allgemein (home tree, Ghostty import), Darstellung, Kacheln (accent, focus), Cla
 
 ![Ghostty and LatexTerm side by side](docs/optik-side-by-side.png)
 
+### Pane kinds — not every pane is a terminal
+
+A pane can be a shell, the home launcher, or an **app pane**: grid, borders, focus, zoom, `⌘W` and
+the title-bar chips work the same for every kind. Two app panes ship today — **Scratchpad** (draw with
+the mouse; `⌘Z` undo stroke, `⌘⌫` clear) and **Web** (shows a *local* HTML file: plots, reports,
+previews a script just wrote; `http(s)` is refused by design, see [SECURITY.md](SECURITY.md)). Open them
+from the **Kachel** menu or the CLI; `send … reload` refreshes a web pane after its file changed.
+A new kind is one Swift file in `LatexTerm/Panes/Contents/` plus one line in `PaneKindRegistry`.
+
 ### The `latexterm` CLI
 
 Agents (or you) can drive the terminal from any shell — the app listens on a per-user socket (0600 + peer check, see [SECURITY.md](SECURITY.md)):
@@ -156,6 +165,8 @@ Agents (or you) can drive the terminal from any shell — the app listens on a p
 latexterm list-panes [--json]                     # all windows; index, UUID, CWD, state, provider/session/window IDs
 latexterm close-pane [--pane SEL] [--force]       # without --force: idle shell with no foreground job
 latexterm new-pane [--cwd DIR] [--exec CMD]
+latexterm new-pane --kind KIND [--arg KEY=VALUE]...   # e.g. --kind web --arg url=$PWD/plot.html
+latexterm pane-kinds                              # terminal, home, scratchpad, web, …
 latexterm send [--pane SEL] [--no-enter] TEXT...  # type into a pane (Enter by default)
 latexterm zoom [--pane SEL]
 latexterm focus [--pane SEL]

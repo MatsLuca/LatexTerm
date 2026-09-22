@@ -53,6 +53,13 @@ Please do not open a public issue with full exploit details before a fix is avai
   user can achieve the same effect by other means (spawning shells directly).
   Anything that would widen the caller set (TCP, world-writable socket,
   privileged helper) must not be added without a confirmation UI.
+- **Web pane (by design, local only):** `latexterm new-pane --kind web --arg url=…` (or the Kachel
+  menu) shows a local HTML file in a `WKWebView`. Only `file:` paths are accepted; `http(s)` and
+  other schemes are refused, the page may read only its own folder, and a clicked external link
+  opens in the default browser instead of the pane. Reason: panes are opened by agents through the
+  control socket — a remote URL from a hook context would be a new channel to the outside. `send`
+  to a web pane only understands `reload` and `load <local path>`. Widening this to remote content
+  needs its own review.
 - **Agent status hooks:** optional provider/session/turn identifiers and bounded prompt/answer
   excerpts travel over that same socket and may appear in local chips or macOS notifications.
   The Codex bridge reads lifecycle-event input, not transcript files. It verifies the emitting
