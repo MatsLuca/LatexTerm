@@ -15,7 +15,7 @@ Seitenlabels), Werkzeugleiste beim Überfahren, Ordner-Modus (`FolderWatcher`, n
 (bei genau einer Agenten-Kachel direkt, sonst Menü). Dateien: `PreviewContent`, `PreviewChrome`, `PreviewImage`,
 `PreviewSupport`.
 
-**Live geprüft (Claude, per CLI/MCP):** `sync main.tex:235` → S. 5 der Projektarbeit, `preview_look` liefert Bild + Text,
+**Live geprüft (Claude, per CLI/MCP):** `sync main.tex:235` → S. 5 einer echten LaTeX-Arbeit, `preview_look` liefert Bild + Text,
 Änderung auf S. 3 → Sprung + `back`, Ordner rückt bei neuem Plot vor, CSV per QuickLook. Offen: Markieren/Senden von Hand.
 
 **Lehre:** SwiftDefaultActorIsolation = MainActor — was im Hintergrund läuft (SyncTeX, Text zusammensetzen), explizit
