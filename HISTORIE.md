@@ -1,5 +1,18 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-22 — Scratchpad ausgebaut
+
+**Anlass (Mats):** Die Malfläche war nur ein Beispiel fürs Kachel-Protokoll — jetzt ein „basic cooles Scratchpad“ mit Farben,
+Speichern, ⌘Z und Radierer.
+
+**Gebaut:** schwebende Werkzeugleiste (hochkant, quer wenn die Kachel zu flach ist): Stift, Marker (halbdeckend, unter der
+Tinte), Radierer (löscht ganze Striche, Rechtsklick radiert immer), sieben Farben als Index ins Theme (Theme-Wechsel färbt mit),
+drei Stärken, Undo/Redo als Schritt-Stapel (ein Radier-Zug = ein Schritt, Leeren rückgängig machbar), Striche geglättet,
+⇧ = gerade Linie, Zeiger als Kreis in Werkzeuggröße. Tasten P/M/E, 1–7, +/−, ⌘Z/⇧⌘Z, ⌘⌫, ⌘S (PNG, Dialog), ⌘C (Bild).
+Sicherung bei jeder Änderung nach `Application Support/LatexTerm/scratchpads/<id>.json` → kommt nach ⌥⌘R wieder; ⌘W löscht
+sie, Waisen nach 30 Tagen. `close-pane` ohne `--force` lehnt ein bemaltes Scratchpad ab. `send save <pfad>` schreibt ein
+zugeschnittenes PNG — der Weg, auf dem Claude eine Skizze ansehen kann.
+
 ## 2026-09-22 — MCP-Server `latexterm mcp`
 
 **Anlass (Mats, per 42 erörtert):** Der Werkstatt-Skill `latexterm` sprang manchmal nicht an — dann wusste Claude

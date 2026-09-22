@@ -151,8 +151,8 @@ Allgemein (home tree, Ghostty import), Darstellung, Kacheln (accent, focus), Cla
 ### Pane kinds — not every pane is a terminal
 
 A pane can be a shell, the home launcher, or an **app pane**: grid, borders, focus, zoom, `⌘W` and
-the title-bar chips work the same for every kind. Two app panes ship today — **Scratchpad** (draw with
-the mouse; `⌘Z` undo stroke, `⌘⌫` clear) and **Web** (shows a *local* HTML file: plots, reports,
+the title-bar chips work the same for every kind. Two app panes ship today — **Scratchpad** (pen, highlighter,
+eraser, theme colours; `⌘Z`/`⇧⌘Z`, `⌘S` saves a PNG, `⌘C` copies it; survives a restart) and **Web** (shows a *local* HTML file: plots, reports,
 previews a script just wrote; `http(s)` is refused by design, see [SECURITY.md](SECURITY.md)). Open them
 from the **Kachel** menu or the CLI; `send … reload` refreshes a web pane after its file changed.
 A new kind is one Swift file in `LatexTerm/Panes/Contents/` plus one line in `PaneKindRegistry`.
