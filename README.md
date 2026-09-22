@@ -210,6 +210,7 @@ xcodebuild test -project LatexTerm.xcodeproj -scheme LatexTerm \
 | `⌘+` `⌘-` `⌘0` | font size (all panes, persisted) |
 | `⌘L` | toggle formula overlays |
 | `⌘,` | settings window (six tabs — theme, font, line spacing, accent, formula scale, notifications …) |
+| `⌥⌘R` / `⌥⌘Q` | **restart** / quit and **keep panes**: next launch brings back the same panes once — agent sessions via the launcher's resume, shells in their folder (plain `⌘Q` starts with Home) |
 
 **Tip — testing formulas:** zsh `echo` mangles backslashes; use `printf '%s\n' '$E=mc^2$'` or a quoted here-doc.
 

@@ -1,5 +1,47 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-22 — Neu starten mit Kacheln
+
+Anlass: Mats baut LatexTerm in LatexTerm. Nach jedem Build hieß es ⌘Q, wieder öffnen und jede
+Session im Home per „Weiter“ suchen. Neu im App-Menü über „Beenden“: **Neu starten** (⌥⌘R) und
+**Beenden und Kacheln merken** (⌥⌘Q, wie macOS' „Beenden und Fenster behalten“). Beide laufen
+durch `applicationShouldTerminate` samt `VMQuitGuard`. Erst `applicationWillTerminate` schreibt den
+Snapshot mit Marke `restoreOnce`; ein abgebrochenes Beenden setzt sie zurück. „Neu starten“
+startet danach `AppRelaunch`: ein losgelöster `/bin/sh` wartet auf das Prozessende (max. 60 s)
+und öffnet dann das eigene Bundle, also den frisch gebauten Debug-Build. Vorher zu öffnen ginge
+nicht, denn LaunchServices aktivierte nur die alte Instanz. Arbeitet eine Kachel noch, fragt die
+App vorher nach. Normales ⌘Q startet weiter mit Home (Entscheidung 24.08. unverändert).
+
+Snapshot v2 (Kachel-Protokoll §3.7), gegenüber dem Plan um Fenster erweitert:
+`{version: 2, windows: [{panes: [{kind, args}], focused, zoomed}], restoreOnce}`. v1 wird
+übersetzt. Terminal-Args: `cwd`, `agent`, `session`, `accentName`; Home = `kind home`.
+Geschrieben wird einmal zentral für alle Fenster (vorher schrieb jedes Fenster, das letzte
+gewann). `SessionStore.takeRestore` löscht die Marke **vor** dem Wiederherstellen, damit ein
+gescheiterter Start nicht in Schleife wiederherstellt.
+
+Wiederherstellen (`RestoreStep`, Foundation, getestet): Agenten-Session → Home-Kachel, die nach
+dem Laden einmal „Weiter“ ausführt. Das ist derselbe Weg wie der Klick: Claude über
+`actions.resume` und Projektpfad der Session (sonst gemerktes CWD), Codex über `resumeAction`
+aus `agentSessions`. Farbe, Farbzeile und Vorhang sind identisch; der alte Farbname bleibt,
+solange er zur Familie gehört und frei ist. Kachel ohne Identität, mit vim/ssh oder mitten im
+Start → Shell im CWD. Home → Home, unbekannte Art → Home. IDs und Farbnamen werden wie im
+Steuerkanal geprüft. Jedes neue Fenster holt sich sein Fenster; was macOS nicht wieder öffnet
+(„Fenster beim Beenden schließen“), hängt das erste Fenster nach 1,5 s als Kacheln an.
+Wiederhergestellte Kacheln nehmen Vorhang-/Terminal-Fokus nur, wenn sie ihn schon haben;
+Fokus und Zoom kommen zurück. Ein Kaltstart-Quickstart übernimmt keine Home-Kachel, die gleich
+fortsetzt.
+
+Grenzen: Codex-Session nicht in `projekte --json` (älter als das Ordnerlimit) → Home bleibt,
+Ordner ausgewählt. Schlägt `projekte` beim Start fehl, wartet der Auftrag auf ⌘R. Ein laufender
+Turn bricht beim Neustart ab (daher die Rückfrage). Der Vorhang erscheint erst, wenn Home
+geladen hat (kurz ist Home sichtbar).
+
+Verifiziert: `scripts/test-session-restore.swift` (32 Fälle: Codec v1/v2, Indizes, Restore-
+Regeln inkl. unsicherer IDs, Marke genau einmal, Fensterverteilung, Neustart-Helfer mit echtem
+Prozess), in `test-regressions.sh`; 63 native Xcode-Tests; Compile-Check im Worktree
+`sitzung-merken`. **Keine Live-Abnahme** — die App wurde bewusst nicht gestartet (zweite
+Instanz übernähme den Socket); Prüfung nach dem Merge.
+
 ## 2026-09-22 — Explizite Agenten-Sessions und fensterübergreifendes Cockpit
 
 `AgentSession` bindet Anbieter und echte Session-ID, optional Turn-ID. Ein fremder/alter Turn
