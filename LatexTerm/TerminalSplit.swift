@@ -880,7 +880,8 @@ extension TerminalSplitView: ControlCommandHandler {
                     return .failure("send braucht einen Text")
                 }
                 guard pane.receive(text, enter: request.enter ?? true) else {
-                    return .failure("Kachel (\(pane.kind)) nimmt keinen Text an")
+                    return .failure(pane.kind == "home" ? "Home-Kachel hat noch keine Shell, die Text annimmt"
+                                    : "Kachel (\(pane.kind)) versteht „\(text.prefix(40))“ nicht")
                 }
             case "zoom":
                 toggleZoom(pane)

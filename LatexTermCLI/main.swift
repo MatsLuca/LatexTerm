@@ -166,6 +166,9 @@ if wantsJSON {
 
 func describe(_ pane: PaneInfo) -> String {
     var marks: [String] = []
+    // App-Kacheln tragen ihre Art vorn (terminal/home bleiben ohne Marke wie bisher).
+    let isApp = pane.kind.map { $0 != "terminal" && $0 != "home" } ?? false
+    if isApp, let kind = pane.kind { marks.append(kind) }
     if pane.focused { marks.append("fokussiert") }
     if pane.zoomed { marks.append("gezoomt") }
     if pane.state != "none" { marks.append(pane.state) }
@@ -173,10 +176,8 @@ func describe(_ pane: PaneInfo) -> String {
     if let id = pane.sessionID { marks.append(String(id.prefix(8))) }
     let suffix = marks.isEmpty ? "" : "  [\(marks.joined(separator: ", "))]"
     let home = FileManager.default.homeDirectoryForCurrentUser.path
-    // App-Kacheln haben meist kein Verzeichnis — dann steht ihre Art an dessen Platz.
-    let isApp = pane.kind.map { $0 != "terminal" && $0 != "home" } ?? false
-    let cwd = pane.cwd.map { $0.hasPrefix(home) ? "~" + $0.dropFirst(home.count) : $0 }
-        ?? (isApp ? "(\(pane.kind!))" : "?")
+    // App-Kacheln ohne Verzeichnis (Scratchpad): Strich statt „?“ — es kommt keins mehr.
+    let cwd = pane.cwd.map { $0.hasPrefix(home) ? "~" + $0.dropFirst(home.count) : $0 } ?? (isApp ? "–" : "?")
     return "\(pane.index)  \(pane.id.prefix(8))  \(cwd)\(suffix)"
 }
 
