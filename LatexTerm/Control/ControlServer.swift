@@ -1,11 +1,5 @@
 import Foundation
 
-/// Führt ein Steuerkommando aus — implementiert von `TerminalSplitView` (dort, wo
-/// die Pane-Liste lebt und `private` bleiben darf). Läuft immer auf dem Main-Thread.
-protocol ControlCommandHandler: AnyObject {
-    func handleControl(_ request: ControlRequest) -> ControlResponse
-}
-
 /// Unix-Socket-Server des Steuerkanals (#28): nimmt JSON-Zeilen-Requests des
 /// `latexterm`-CLIs an und reicht sie an die registrierte `TerminalSplitView`.
 ///
@@ -18,17 +12,15 @@ final class ControlServer {
     static let shared = ControlServer()
     private init() {}
 
-    /// Ziel der Kommandos. Bei mehreren Fenstern gewinnt das zuletzt registrierte
-    /// (v1-Vereinfachung; LatexTerm läuft praktisch mit einem Fenster).
-    private weak var handler: ControlCommandHandler?
+    let router = ControlRouter()
 
     private var listenFD: Int32 = -1
     private var acceptSource: DispatchSourceRead?
     private let ioQueue = DispatchQueue(label: "latexterm.control-io", qos: .utility)
 
-    /// Startet den Listener beim ersten Aufruf; weitere Aufrufe wechseln nur das Ziel.
+    /// Startet den Listener beim ersten Aufruf; weitere Fenster ergänzen das Zielverzeichnis.
     func register(_ handler: ControlCommandHandler) {
-        self.handler = handler
+        router.register(handler)
         guard listenFD < 0 else { return }
         start()
     }
@@ -107,10 +99,10 @@ final class ControlServer {
         var response: ControlResponse
         if let request = try? JSONDecoder().decode(ControlRequest.self, from: data) {
             response = DispatchQueue.main.sync { [weak self] in
-                guard let handler = self?.handler else {
+                guard let self else {
                     return .failure("Kein Terminal-Fenster registriert")
                 }
-                return handler.handleControl(request)
+                return self.router.route(request)
             }
         } else {
             response = .failure("Request nicht lesbar (JSON-Zeile erwartet)")

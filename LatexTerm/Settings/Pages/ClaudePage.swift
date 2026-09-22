@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Claude-Code-Cockpit: Benachrichtigungen und der experimentelle Prompt-Text-Stil.
+/// Gemeinsamer Agentenstatus plus Claude-spezifische Darstellung und Lokal-Modus.
 struct ClaudePage: View {
     @ObservedObject private var cockpit = CockpitSettings.shared
     @ObservedObject private var store = ThemeStore.shared
@@ -8,14 +8,14 @@ struct ClaudePage: View {
 
     var body: some View {
         Form {
-            SettingsGroup("Lokal-Modus (Ollama)",
+            SettingsGroup("Claude: Lokal-Modus (Ollama)",
                           help: "Launcher und Home-Kachel starten jedes Projekt über `lokal` statt `claude`: Claude Code gegen ein lokales Ollama-Modell — für „kein Internet“ oder „Tokens leer“. Permissions dann acceptEdits statt yolo; Statuszeile zeigt 🦙 mit CPU und Tok/s. Laufende Sessions bleiben unberührt.") {
                 Toggle("Neue Sessions lokal starten", isOn: $lokal.enabled)
             }
             .onAppear { lokal.load() }
 
             SettingsGroup("Benachrichtigungen",
-                          help: "„Claude fertig · Projekt“ mit deiner Frage, Dauer, Schritten und dem Anfang der Antwort; „Claude braucht dich“ mit der offenen Frage; Fehler immer. Abbrüche (Ctrl+C) und Antworten unter 2 s bleiben stumm. Quelle ist der Bridge-Mod in Claude Code (OSC 5522); Terminal-Glocke und passive Erkennung sind Fallback. Klick auf ein Banner holt die Kachel nach vorn.") {
+                          help: "Claude und Codex melden fertige Antworten und offene Fragen mit ihrem Namen. Banner zeigen Dauer, Schritte und einen kurzen Textauszug, soweit verfügbar. Abbrüche und Antworten unter 2 s bleiben stumm. Für präzisen Status braucht Claude den Bridge-Mod und Codex die LatexTerm-Hooks. Klick auf ein Banner holt die zugehörige Kachel nach vorn, auch aus einem anderen Fenster.") {
                 Toggle("Benachrichtigungen zeigen", isOn: $cockpit.notificationsEnabled)
                 Toggle("Nur wenn die Session unbeobachtet ist", isOn: $cockpit.notifyOnlyUnobserved)
                     .disabled(!cockpit.notificationsEnabled)
@@ -31,7 +31,7 @@ struct ClaudePage: View {
                 }
             }
 
-            SettingsGroup("Prompt-Text (experimentell)",
+            SettingsGroup("Claude: Prompt-Text (experimentell)",
                           help: "Färbt den getippten Text in Claude Codes Eingabe-Box (Erkennung der Box über ihre Rahmenlinien). Hängt an Claude Codes Zeichnung — kann nach einem Update aussetzen.") {
                 Picker("Farbe", selection: $store.promptTintMode) {
                     ForEach(ThemeStore.PromptTintMode.allCases) { Text($0.label).tag($0) }

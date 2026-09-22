@@ -6,24 +6,26 @@ enum AppFonts {
 }
 final class ThemeStore {
     static let shared = ThemeStore()
-    let theme = Theme()
-    struct Theme {
-        let background = NSColor.windowBackgroundColor, foreground = NSColor.labelColor
-        let dim = NSColor.secondaryLabelColor, faint = NSColor.tertiaryLabelColor
-    }
+    let theme = TerminalTheme()
 }
-enum HomePaneView { static let cyan = NSColor.systemTeal, orange = NSColor.systemOrange }
+struct TerminalTheme {
+    let background = NSColor.windowBackgroundColor, foreground = NSColor.labelColor
+    let dim = NSColor.secondaryLabelColor, faint = NSColor.tertiaryLabelColor
+}
+extension NSColor {
+    func lightened(by amount: CGFloat) -> NSColor { blended(withFraction: amount, of: .white) ?? self }
+}
+enum HomePaneView {
+    static let cyan = NSColor.systemTeal, orange = NSColor.systemOrange
+    static let yellow = NSColor.systemYellow, green = NSColor.systemGreen
+}
 struct LoaderError: Error { var message: String }
-final class HomeTable: NSTableView {
-    var onKey: ((NSEvent) -> Bool)?
-    override func keyDown(with event: NSEvent) { if onKey?(event) != true { super.keyDown(with: event) } }
-}
 
 final class TriggerView: NSView {
     var palette: LauncherPalette?
     override var acceptsFirstResponder: Bool { true }
     override func keyDown(with event: NSEvent) {
-        let palette = LauncherPalette(frame: bounds, entries: [], query: event.characters ?? "")
+        let palette = LauncherPalette(frame: bounds, catalog: .init(home: [], searchable: []), query: event.characters ?? "")
         self.palette = palette
         addSubview(palette)
         palette.focus()

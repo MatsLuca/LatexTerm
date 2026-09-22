@@ -3,7 +3,7 @@ import Foundation
 // latexterm — Steuerkanal-CLI (#28). Spricht die JSON-Zeilen des ControlProtocol
 // über den Unix-Socket der laufenden App. Bewusst ohne ArgumentParser-Dependency:
 // sieben Verben, eine Handvoll Flags. Wird ins App-Bundle eingebettet
-// (LatexTerm.app/Contents/MacOS/latexterm); Nutzung via Symlink oder PATH.
+// (LatexTerm.app/Contents/Helpers/latexterm); Nutzung via Symlink oder PATH.
 
 let usage = """
 latexterm — steuert die laufende LatexTerm.app
@@ -15,18 +15,18 @@ Verwendung:
   latexterm zoom [--pane ZIEL]
   latexterm focus [--pane ZIEL]
   latexterm close-pane [--pane ZIEL] [--force]
-  latexterm status [--pane ZIEL] PAYLOAD
+  latexterm status [--pane ZIEL] [--agent claude|codex --session ID] [--turn ID] PAYLOAD
 
 ZIEL ist der 1-basierte Index aus `list-panes` oder eine Pane-UUID (auch Präfix).
 Ohne --pane verwenden send/zoom/focus/close-pane $LATEXTERM_PANE_ID — also die Kachel,
 in deren Shell dieses Kommando läuft.
 
-close-pane schließt ohne --force nur eine nackte Shell oder ein Claude, das auf
-Eingabe wartet; arbeitet Claude oder läuft ein Vordergrundprozess, Exit 1 mit Grund.
+close-pane schließt ohne --force nur eine ruhende Shell ohne Vordergrundprozess.
+Bei arbeitender Session oder laufendem Vordergrundprozess: Exit 1 mit Grund.
 --force entspricht Cmd+W ohne Rückfrage.
 
-status meldet den Claude-Code-Zustand einer Kachel (`working;Bash;t=12;n=3`) — der Weg des
-Bridge-Mods, damit niemand neben Claude Code in die TTY schreibt.
+status meldet Agenten-Zustand und optional die echte Session-ID (`working;Bash;t=12;n=3`).
+Zustände: ready / working / input / done / closed. Ohne Anbieterfelder bleibt das Legacy-Claude-Protokoll.
 
 Exit-Codes: 0 ok · 1 Fehler aus der App · 2 Aufruffehler · 3 App nicht erreichbar
 """
@@ -60,6 +60,9 @@ while !args.isEmpty {
     case "--exec":     request.exec = value(for: arg)
     case "--no-enter": request.enter = false
     case "--force":    request.force = true
+    case "--agent":    request.agent = value(for: arg)
+    case "--session":  request.sessionID = value(for: arg)
+    case "--turn":     request.turnID = value(for: arg)
     case "--json":     wantsJSON = true
     case "--help", "-h": print(usage); exit(0)
     case "--":
@@ -79,6 +82,10 @@ case "send":
     request.text = positional.joined(separator: " ")
 case "status":
     guard !positional.isEmpty else { fail("status braucht eine Payload\n\n\(usage)", code: 2) }
+    guard (request.agent == nil && request.sessionID == nil && request.turnID == nil) ||
+            (["claude", "codex"].contains(request.agent ?? "") && !(request.sessionID ?? "").isEmpty) else {
+        fail("status: --agent claude|codex und --session ID zusammen angeben", code: 2)
+    }
     request.text = positional.joined(separator: " ")
 default:
     fail("Unbekanntes Kommando „\(cmd)“\n\n\(usage)", code: 2)
@@ -151,6 +158,8 @@ func describe(_ pane: PaneInfo) -> String {
     if pane.focused { marks.append("fokussiert") }
     if pane.zoomed { marks.append("gezoomt") }
     if pane.state != "none" { marks.append(pane.state) }
+    if let agent = pane.agent { marks.append(agent) }
+    if let id = pane.sessionID { marks.append(String(id.prefix(8))) }
     let suffix = marks.isEmpty ? "" : "  [\(marks.joined(separator: ", "))]"
     let home = FileManager.default.homeDirectoryForCurrentUser.path
     let cwd = pane.cwd.map { $0.hasPrefix(home) ? "~" + $0.dropFirst(home.count) : $0 } ?? "?"

@@ -15,6 +15,10 @@ maintained project and contributions of all sizes are welcome.
 2. `open LatexTerm.xcodeproj` and `Cmd+R`.
 3. The terminal/LaTeX architecture is documented in the [README](README.md#how-it-works).
 
+Run `bash scripts/test-regressions.sh` for launcher search, Codex readiness, folder boundaries,
+off-screen AppKit keyboard input, and VM quit failure cases. These checks also run in CI,
+alongside the Xcode test suite. VM checks use temporary helper processes, without touching a real VM.
+
 ## Pull request guidelines
 
 - Keep PRs focused on one change; describe the *why*, not just the *what*.

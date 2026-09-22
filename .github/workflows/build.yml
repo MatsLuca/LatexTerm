@@ -30,6 +30,9 @@ jobs:
             CODE_SIGNING_ALLOWED=NO \
             test
 
+      - name: Launcher, agent session and VM quit regressions
+        run: bash scripts/test-regressions.sh
+
       - name: Build
         run: |
           xcodebuild \

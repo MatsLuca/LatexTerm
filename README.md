@@ -13,9 +13,9 @@ A native macOS terminal that renders LaTeX live over the text — with a shared 
 - **Live LaTeX overlays** — formulas between `$…$`, `$$…$$`, `\(…\)`, `\[…\]` render as KaTeX exactly on their source characters. No OCR: a vendored SwiftTerm fork exposes the real cell grid.
 - **Hover, pin & export** — hover shows a formula full-size; a click pins it with copy buttons: **LaTeX**, **readable Unicode** (`(-b ± √(b²-4ac))/(2a)`), **PNG**, **vector PDF**, **Markdown**.
 - **Edit loop** — ✎ opens the formula in an inline editor with live preview; Enter types the result into your prompt.
-- **Auto-tiling panes** — ⌘T splits into a balanced grid, ⌘⏎ zooms one pane, layout + working dirs survive a relaunch.
+- **Auto-tiling panes** — ⌘T splits into a balanced grid, ⌘⏎ zooms one pane. Relaunch opens Home; sessions resume through the launcher.
 - **Claude + Codex launcher** — provider-specific resume, quotas, pins and titles; projects, tasks and pins in one Home screen. ⌘K or typing opens one search palette; `/` explicitly sends a free AI prompt when the optional backend is installed.
-- **Claude Code cockpit** — every pane knows whether its agent is working, done, or waiting for input, notifies you, and picks up the session's `/color` as its accent. Agents drive the terminal themselves via the `latexterm` CLI.
+- **Claude + Codex cockpit** — optional hooks report session identity, work and input requests. Home focuses an already connected session across windows. Claude's `/color` supplies its accent; both agents can use the `latexterm` CLI.
 - Plus: ⌘F search, KaTeX errors underlined instead of swallowed, overlays that follow the scroll, a native settings window (⌘,).
 
 ## Why
@@ -33,7 +33,7 @@ PTY (login shell) → SwiftTerm VT parser → buffer grid
 ```
 
 - One WebView hosts *all* formulas; KaTeX loads once, offline (bundled CSS/JS/fonts).
-- Overlays are keyed to the absolute scrollback row — scrolling repositions them (one GPU-composited translate) instead of rebuilding.
+- Overlay identity uses column, formula body and occurrence; grid rows position them. Scrolling repositions surviving overlays instead of rebuilding them.
 - Detection handles soft-wrapped inline formulas, Claude Code's own word-wrap (indented continuation lines) and multi-line `$$ … $$` blocks; inline hits scale to fit their row and grow into empty neighbour rows.
 - The source characters under a formula are drawn transparent by the terminal itself (no mask), so selection and coloured backgrounds stay intact.
 - Clicks on empty space pass through to normal terminal selection; only formula hitboxes are interactive.
@@ -56,8 +56,10 @@ Claude-specific maintenance stays separately labelled; its status/color heuristi
 run on Codex panes. Codex has its own dismissible startup curtain.
 
 Home navigation groups **Projekte / Aufgaben / Pins**; tasks group due follow-ups and show
-the Inbox count. Open-pane results target the exact pane in the current window, not simply
-another pane with the same folder. Reliable live session identity is not yet available.
+the Inbox count. Open-pane results target an exact pane across all windows. With session hooks,
+resume actions focus an already connected session with the same provider and session ID.
+The working directory alone never identifies a session. Until its first hook arrives, a new
+session is not yet known to Home; launches in that interval are not deduplicated.
 
 **One search bar:** `⌘K` and typing in Home open the same palette, preserving the first
 character. Empty, it shows what matters now: panes waiting for input, due follow-ups, recent
@@ -95,9 +97,28 @@ widget brings LatexTerm to the front and focuses a Home pane; reminder rows open
 
 Each pane tracks its session as a **chip in the titlebar** (its colored dot plus a live status: `Bash · 0:42 · 3 steps`, `needs you`, then `✓ done · 1:42` until you've looked; idle panes show only the dot). Clicking a chip focuses the pane. **done** / **needs input** also post a macOS notification when the pane is unwatched (your prompt, duration, steps and the first line of the answer); clicking it focuses and zooms the pane.
 
-- **Precise:** a Claude Code hook (best: a function-hooks mod) reports `working|input|done|ready[;detail][;k=v…]` via `latexterm status --pane ID PAYLOAD` (control socket). Don't send it as OSC to the pane's tty while Claude Code is running — a second writer on the line tears the TUI's escape sequences apart and leaves rendering garbage (`\e]5522;status=…\a` is still accepted for legacy senders). `detail` is the tool name or the open question; optional fields `t` (seconds), `n` (tool steps), `p` (prompt), `a` (answer), `r` (reason: answer/aborted/refusal/error) feed the pill (`◐ Bash · 0:42 · 3 steps`, then `✓ done · 1:42 · 7 steps` until you've looked) and the notification body. `ready` only lifts the home-tile launch curtain.
-- **Zero-config fallback:** the pane detects spinner vs. input box straight from the buffer grid; a fresh hook signal silences it for 10 minutes (hooks win, the fallback self-heals crashed sessions).
+- **Precise:** hooks report `ready|working|input|done|closed[;detail][;k=v…]` through the control socket. Use `latexterm status --pane ID --agent claude --session SESSION_ID -- PAYLOAD` (or `--agent codex`); optional `--turn ID` rejects stale turn events. `ready` attaches the session and lifts the launch curtain, `closed` detaches it. `detail` describes the tool/question; fields `t` (seconds), `n` (steps), `p` (prompt), `a` (answer), `r` (answer/aborted/refusal/error) feed chips and notifications. Never write status to the TTY beside a running TUI: interleaved escape sequences corrupt its display. OSC 5522 remains accepted for legacy senders.
+- **Claude fallback:** without an identified session, grid heuristics detect its spinner/input box; legacy hooks suppress them for 10 minutes. Identified sessions remain hook-driven until their foreground process leaves the pane. Codex panes do not use Claude heuristics or prompt styling.
 - Terminal bell (`\a`) and OSC 777 (`\e]777;notify;Title;Body\a`) notify instantly too.
+
+### Codex status setup
+
+The included bridge uses Codex's [lifecycle hooks](https://learn.chatgpt.com/docs/hooks).
+From this checkout, with Python 3.9+ and a Codex CLI that supports hooks:
+
+```sh
+python3 scripts/install_codex_hooks.py           # preview
+python3 scripts/install_codex_hooks.py --apply   # preserve other hooks and notify settings
+```
+
+Review and trust the eight LatexTerm entries in Codex `/hooks`, then start or resume a
+Codex session inside LatexTerm. The installer copies the bridge into
+`~/.local/share/latexterm/` and adds commands to `$CODEX_HOME/hooks.json`
+(`~/.codex` by default); rerun it after bridge updates. Existing changed files are backed up.
+The bridge reads hook input only, sends bounded text excerpts over the local socket,
+and stays silent outside LatexTerm or with an older app. It does not read transcripts.
+It checks that the emitting Codex process owns the pane's foreground job; shared background
+daemons are not attached by guessing. Settings → **Agenten** controls chips and notifications.
 
 ### Per-pane accent color
 
@@ -132,15 +153,17 @@ Allgemein (home tree, Ghostty import), Darstellung, Kacheln (accent, focus), Cla
 Agents (or you) can drive the terminal from any shell — the app listens on a per-user socket (0600 + peer check, see [SECURITY.md](SECURITY.md)):
 
 ```sh
-latexterm list-panes [--json]                     # index, UUID, CWD, session state
-latexterm close-pane [--pane SEL] [--force]       # close a pane; without --force only an idle shell or Claude awaiting input
+latexterm list-panes [--json]                     # all windows; index, UUID, CWD, state, provider/session/window IDs
+latexterm close-pane [--pane SEL] [--force]       # without --force: idle shell with no foreground job
 latexterm new-pane [--cwd DIR] [--exec CMD]
 latexterm send [--pane SEL] [--no-enter] TEXT...  # type into a pane (Enter by default)
 latexterm zoom [--pane SEL]
 latexterm focus [--pane SEL]
 ```
 
-Without `--pane`, the calling shell's own pane is targeted (via `$LATEXTERM_PANE_ID`). Put the bundled binary on your PATH once:
+Indices and unique UUID prefixes address all windows consistently. Without `--pane`, the
+calling shell's own pane is targeted (via `$LATEXTERM_PANE_ID`); `new-pane` outside a pane uses
+the active window. Focusing raises the owning window. Put the bundled binary on your PATH once:
 
 ```sh
 ln -s /Applications/LatexTerm.app/Contents/Helpers/latexterm /opt/homebrew/bin/latexterm

@@ -138,8 +138,12 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     private var turnPrompt: String?
     private var badgeTicker: Timer?
     /// Hat diese Session schon Bridge-Felder geschickt? Dann werden feldlose Signale der
-    /// alten Shell-Hooks (laufen parallel als Fallback) ignoriert — sonst Doppel-Banner.
+    /// alten Shell-Hooks ignoriert — sonst Doppel-Banner. Lokal seit 21.09. entfernt.
     private var bridgeSeen = false
+    fileprivate var agentSession = AgentSession()
+    private var sessionOwnerGroup: pid_t?
+    private var sessionWatch: Timer?
+    private var agentName: String { agentSession.identity?.name ?? "Claude" }
     /// Nachklang nach Turn-Ende („✓ fertig · 1:42 · 7 Schritte"): bleibt, bis jemand hingesehen
     /// hat (Kachel beobachtet + 6 s), höchstens 10 min. Sichtbar nur bei `sessionState == .none`.
     private struct TurnSummary {
@@ -389,7 +393,10 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
                     lines.append(text)
                 }
                 let state = CodexLaunchReadiness.state(lines: lines)
-                if case .ready = state { readySince = readySince ?? Date() } else { readySince = nil }
+                let signalled = self.launchReady
+                if case .ready = state { readySince = readySince ?? Date() }
+                else if signalled { readySince = readySince ?? Date() }
+                else { readySince = nil }
                 let stable = readySince.map { Date().timeIntervalSince($0) >= 0.5 } ?? false
                 let timeout = Date().timeIntervalSince(started) >= 12
                 let interaction: Bool
@@ -718,6 +725,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         rainbowTimer?.invalidate()
         badgeTicker?.invalidate()
         summaryTimer?.invalidate()
+        sessionWatch?.invalidate()
     }
 
     /// Verarbeitet eine OSC-5522-Payload (`key=value`; das Format ist bewusst
@@ -742,7 +750,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     }
 
     /// Hook-getriebener Session-Status (#27 Vollausbau): `status=<working|input|done|ready>[;detail]`
-    /// über den 5522-Kanal — präzise Events aus Claude-Code-Hooks statt Grid-Heuristik.
+    /// über den Socket (OSC 5522 nur für Altsender) — präzise Agenten-Events.
     /// Setzt den Zustand OHNE Hysterese (der Hook weiß es sicher); die passive
     /// Erkennung läuft weiter und bestätigt ihn beim nächsten Scan von selbst.
     /// Notifications laufen über den bestehenden `onAttentionSignal`-Pfad
@@ -783,8 +791,24 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
         return status
     }
 
-    fileprivate func applyHookStatus(_ value: String) {
-        guard let hook = Self.parseHookStatus(value) else { return }
+    @discardableResult
+    fileprivate func applyHookStatus(_ value: String, agent: String? = nil, sessionID: String? = nil,
+                                    turnID: String? = nil, sourceGroup: Int32? = nil) -> Bool {
+        let previousIdentity = agentSession.identity
+        guard let hook = Self.parseHookStatus(value),
+              sourceGroup == nil || sourceGroup == (hook.state == "closed" ? sessionOwnerGroup : foregroundProcessGroup),
+              agent == nil || hook.state == "closed" || foregroundProcessGroup != nil,
+              agent != nil || usesClaudeIntegration,
+              agentSession.accept(state: hook.state, agent: agent, sessionID: sessionID, turnID: turnID,
+                                  startsTurn: hook.state == "working" && hook.seconds == 0 && hook.steps == 0) else { return false }
+        if previousIdentity != agentSession.identity {
+            turnSummary = nil; turnPrompt = nil; turnStartedAt = nil; turnSteps = 0
+            sessionState = .none; statusDetail = nil; bridgeSeen = false
+        }
+        if let identity = agentSession.identity {
+            usesClaudeIntegration = identity.agent == "claude"
+            watchAgentProcess()
+        }
         pendingSessionScans = 0
 #if DEBUG
         Self.statusLog("HOOK status=\(hook.state) detail=\(hook.detail ?? "-") fields=\(hook.fields)")
@@ -795,9 +819,9 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             bridgeSeen = false
         } else if !hook.fields.isEmpty {
             bridgeSeen = true
-        } else if bridgeSeen {
+        } else if bridgeSeen && agent == nil {
             lastHookStatusAt = Date()
-            return
+            return true
         }
         switch hook.state {
         case "working":
@@ -812,6 +836,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             } else if turnStartedAt == nil {
                 turnStartedAt = Date()
             }
+            if hook.fields["inc"] == "1" { turnSteps += 1 }
             sessionState = .working
             statusDetail = hook.detail     // nil (Turn-Start) löscht den alten Tool-Namen bewusst
             updateStatusBadge()            // Uhr/Schritte ändern sich auch ohne Zustandswechsel
@@ -819,7 +844,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             lastHookStatusAt = Date()
             sessionState = .awaitingInput
             statusDetail = hook.detail
-            onAttentionSignal?(self, "Claude braucht dich · \(folderName)", hook.detail ?? turnPrompt)
+            onAttentionSignal?(self, "\(agentName) braucht dich · \(folderName)", hook.detail ?? turnPrompt)
         case "done":
             lastHookStatusAt = Date()
             let seconds = hook.seconds.map(Double.init)
@@ -836,9 +861,42 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             // die Hook-Frist, damit der Grid-Rater der frischen Eingabe-Box nichts unterstellt.
             lastHookStatusAt = Date()
             launchReady = true
+        case "closed":
+            clearAgentSession()
         default:
             break                          // unbekannter/kaputter Status erneuert NICHT
         }
+        onStyleChanged?()
+        return true
+    }
+
+    /// SessionEnd may be delayed by an agent daemon. The PTY's foreground job is the
+    /// authoritative attachment: once it changes, the old identity must not claim this pane.
+    private func watchAgentProcess() {
+        guard let process = view.process, process.childfd >= 0 else { return }
+        let group = tcgetpgrp(process.childfd)
+        if group > 0, group != process.shellPid { sessionOwnerGroup = group }
+        guard sessionWatch == nil else { return }
+        let timer = Timer(timeInterval: 1, repeats: true) { [weak self] _ in
+            guard let self, let owner = self.sessionOwnerGroup,
+                  let process = self.view.process, process.childfd >= 0 else { return }
+            if tcgetpgrp(process.childfd) != owner { self.clearAgentSession() }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        sessionWatch = timer
+    }
+
+    private func clearAgentSession() {
+        let wasCodex = agentSession.identity?.agent == "codex"
+        agentSession.clear()
+        sessionWatch?.invalidate(); sessionWatch = nil; sessionOwnerGroup = nil
+        turnSummary = nil; turnPrompt = nil; turnStartedAt = nil; turnSteps = 0
+        sessionState = .none; statusDetail = nil; bridgeSeen = false; lastHookStatusAt = nil
+        launchReady = false
+        // A former Codex pane remains free of Claude heuristics until a Claude hook identifies it.
+        if wasCodex { usesClaudeIntegration = false }
+        updateStatusBadge()
+        onStyleChanged?()
     }
 
     /// Turn-Ende: Nachklang-Pille je nach Grund, Banner nur wenn es sich lohnt — Abbruch (Ctrl+C)
@@ -856,7 +914,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             showTurnSummary(long: "⚠ \(label) · \(clock)\(stepsPart)", short: "⚠ \(label)", glyph: "⚠",
                             tone: theme.red)
             let body = [prompt.map { "„\($0)“" }, answer].compactMap { $0 }.joined(separator: "\n")
-            onAttentionSignal?(self, "Claude: \(label) · \(folderName)", body.isEmpty ? nil : body)
+            onAttentionSignal?(self, "\(agentName): \(label) · \(folderName)", body.isEmpty ? nil : body)
         default:
             showTurnSummary(long: "✓ fertig · \(clock)\(stepsPart)", short: "✓ \(clock)", glyph: "✓",
                             tone: theme.green)
@@ -865,7 +923,7 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
             if let prompt { lines.append("„\(prompt)“") }
             lines.append(clock + stepsPart)
             if let answer { lines.append(answer) }
-            onAttentionSignal?(self, "Claude fertig · \(folderName)", lines.joined(separator: "\n"))
+            onAttentionSignal?(self, "\(agentName) fertig · \(folderName)", lines.joined(separator: "\n"))
         }
     }
 
@@ -1218,6 +1276,8 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// Scans bestätigen will, muss sich Folge-Scans selbst nachlegen
     /// (`scheduleContrastAnalysis()`), sonst bleibt der Zustand ewig hängen.
     private func registerSessionScan(_ raw: SessionState) {
+        // Explicit agent events remain authoritative for the lifetime of the foreground job.
+        guard agentSession.identity == nil else { pendingSessionScans = 0; return }
 #if DEBUG
         if raw != lastLoggedRaw {
             lastLoggedRaw = raw
@@ -1420,13 +1480,18 @@ final class TerminalPane: NSObject, LocalProcessTerminalViewDelegate {
     /// ohne `--force`: eine Kachel mit laufendem Vordergrundprozess (claude, vim, ssh …)
     /// schließt der Steuerkanal nicht ungefragt.
     var foregroundProcessName: String? {
-        guard isStarted, let process = view.process, process.childfd >= 0 else { return nil }
-        let pgrp = tcgetpgrp(process.childfd)
-        guard pgrp > 0, pgrp != process.shellPid else { return nil }
+        guard let pgrp = foregroundProcessGroup else { return nil }
         var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN))
         let n = proc_name(pgrp, &buffer, UInt32(buffer.count))
         let name = n > 0 ? String(cString: buffer) : ""
         return name.isEmpty ? "pid \(pgrp)" : name
+    }
+
+    private var foregroundProcessGroup: pid_t? {
+        guard isStarted, let process = view.process, process.childfd >= 0 else { return nil }
+        let pgrp = tcgetpgrp(process.childfd)
+        guard pgrp > 0, pgrp != process.shellPid else { return nil }
+        return pgrp
     }
 
     /// Startet die Login-Shell des Users. `directory` (z.B. das CWD der fokussierten
@@ -1602,7 +1667,9 @@ final class TerminalSplitView: NSView {
 
         // Notification-Klick → Pane fokussieren + zoomen (#30). Der Zugriff
         // setzt zugleich den UNUserNotificationCenter-Delegate früh.
-        SessionNotifier.shared.onActivatePane = { [weak self] id in self?.activatePane(id: id) }
+        SessionNotifier.shared.onActivatePane = { id in
+            _ = ControlServer.shared.router.route(ControlRequest(cmd: "activate", pane: id.uuidString))
+        }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -1645,19 +1712,13 @@ final class TerminalSplitView: NSView {
         SessionStore.save(SessionSnapshot(paneDirectories: started.map { $0.currentDirectory }))
     }
 
-    /// Für die Home-Kachel: (CWD, Claude-Status) aller ANDEREN gestarteten Kacheln — der Baum
-    /// markiert Ordner, in denen gerade eine Session läuft.
+    /// Für Home: alle anderen Kacheln aus allen Fenstern, mit expliziter Session-Identität.
     private func paneSummary(excluding me: TerminalPane) -> [HomePaneInfo] {
-        panes.compactMap { p in
-            guard p !== me, p.isStarted, let cwd = p.currentDirectory else { return nil }
-            let state: String
-            switch p.sessionState {
-            case .working: state = "working"
-            case .awaitingInput: state = "awaitingInput"
-            case .none: state = "none"
-            }
-            return HomePaneInfo(id: p.id.uuidString, path: cwd, agent: nil, sessionID: nil,
-                                state: state, label: p.launcherLabel ?? (cwd as NSString).lastPathComponent)
+        ControlServer.shared.router.panes.compactMap { p in
+            guard p.id != me.id.uuidString, let cwd = p.cwd else { return nil }
+            let name = p.agent.map { $0 == "codex" ? "Codex" : "Claude" }
+            return HomePaneInfo(id: p.id, path: cwd, agent: p.agent, sessionID: p.sessionID,
+                                state: p.state, label: [name, (cwd as NSString).lastPathComponent].compactMap { $0 }.joined(separator: " · "))
         }
     }
 
@@ -1788,9 +1849,8 @@ final class TerminalSplitView: NSView {
             pane.showHome(otherPanes: { [weak self, weak pane] in
                 guard let self, let pane else { return [] }
                 return self.paneSummary(excluding: pane)
-            }, focusPane: { [weak self] paneID in
-                guard let self, let target = self.panes.first(where: { $0.isStarted && $0.id.uuidString == paneID }) else { return }
-                self.focusPane(target)
+            }, focusPane: { paneID in
+                _ = ControlServer.shared.router.route(ControlRequest(cmd: "focus", pane: paneID))
             })
         } else {
             pane.start(in: directory)
@@ -2008,7 +2068,7 @@ final class TerminalSplitView: NSView {
     // MARK: - Session-Status → Notification (#30)
 
     /// Melden nur, wenn die Session gerade niemand ansieht — App im Hintergrund ODER andere
-    /// Kachel fokussiert; Einstellung „Claude → nur wenn unbeobachtet“ (aus = immer).
+    /// Kachel fokussiert; Einstellung „Agenten → nur wenn unbeobachtet“ (aus = immer).
     private func isUnobserved(_ pane: TerminalPane) -> Bool {
         !CockpitSettings.shared.notifyOnlyUnobserved || !NSApp.isActive || !isFocused(pane)
     }
@@ -2034,7 +2094,8 @@ final class TerminalSplitView: NSView {
         TerminalPane.statusLog("NOTIFY? native title=\(title ?? "-") appActive=\(NSApp.isActive) focused=\(isFocused(pane))")
 #endif
         guard isUnobserved(pane) else { return }
-        let fallback = pane.sessionState != .none ? "Claude braucht Input" : "Terminal-Glocke"
+        let agent = pane.agentSession.identity?.name ?? "Claude"
+        let fallback = pane.sessionState != .none ? "\(agent) braucht Input" : "Terminal-Glocke"
         let detail = body ?? pane.currentDirectory.map { ($0 as NSString).abbreviatingWithTildeInPath }
         SessionNotifier.shared.notify(paneID: pane.id, title: title ?? fallback, body: detail)
     }
@@ -2195,6 +2256,9 @@ final class TerminalSplitView: NSView {
 /// Pane-Verwaltung (`panes`, `toggleZoom`, …) privat bleiben kann. Der
 /// `ControlServer` ruft `handleControl` synchron auf dem Main-Thread.
 extension TerminalSplitView: ControlCommandHandler {
+    var isActiveControlWindow: Bool { window?.isKeyWindow == true }
+    var controlPanes: [PaneInfo] { window == nil ? [] : panes.map { info(for: $0) } }
+
 
     func handleControl(_ request: ControlRequest) -> ControlResponse {
         switch request.cmd {
@@ -2216,7 +2280,7 @@ extension TerminalSplitView: ControlCommandHandler {
             }
             if !(request.force ?? false) {
                 if pane.sessionState == .working {
-                    return .failure("Kachel \(panes.firstIndex(where: { $0 === pane }).map { $0 + 1 } ?? 0) arbeitet gerade (Claude) — warten oder --force")
+                    return .failure("Kachel arbeitet gerade — warten oder --force")
                 }
                 if let name = pane.foregroundProcessName {
                     return .failure("Kachel \(panes.firstIndex(where: { $0 === pane }).map { $0 + 1 } ?? 0) hat einen laufenden Prozess (\(name)) — erst beenden oder --force")
@@ -2236,10 +2300,13 @@ extension TerminalSplitView: ControlCommandHandler {
             guard let text = request.text, !text.isEmpty else {
                 return .failure("status braucht eine Payload")
             }
-            pane.applyHookStatus(text)
+            guard pane.applyHookStatus(text, agent: request.agent, sessionID: request.sessionID,
+                                       turnID: request.turnID, sourceGroup: request.sourceGroup) else {
+                return .failure("Ungültiges oder veraltetes Session-Ereignis")
+            }
             return ControlResponse(ok: true)
 
-        case "send", "zoom", "focus":
+        case "send", "zoom", "focus", "activate":
             guard let pane = resolvePane(request.pane ?? request.paneID) else {
                 return .failure("Kachel nicht gefunden: „\(request.pane ?? request.paneID ?? "kein Ziel angegeben")“ — `latexterm list-panes` zeigt Index und ID")
             }
@@ -2251,7 +2318,11 @@ extension TerminalSplitView: ControlCommandHandler {
                 pane.view.send(txt: text + ((request.enter ?? true) ? "\r" : ""))
             case "zoom":
                 toggleZoom(pane)
+            case "activate":
+                activatePane(id: pane.id)
             default:
+                NSApp.activate(ignoringOtherApps: true)
+                window?.makeKeyAndOrderFront(nil)
                 focusPane(pane)
             }
             return ControlResponse(ok: true, pane: info(for: pane))
@@ -2264,7 +2335,7 @@ extension TerminalSplitView: ControlCommandHandler {
     private func info(for pane: TerminalPane) -> PaneInfo {
         let state: String
         switch pane.sessionState {
-        case .none: state = "none"
+        case .none: state = pane.agentSession.identity == nil ? "none" : "ready"
         case .working: state = "working"
         case .awaitingInput: state = "awaitingInput"
         }
@@ -2273,7 +2344,9 @@ extension TerminalSplitView: ControlCommandHandler {
                         cwd: pane.currentDirectory,
                         focused: isFocused(pane),
                         zoomed: pane === zoomedPane,
-                        state: state)
+                        state: state, agent: pane.agentSession.identity?.agent,
+                        sessionID: pane.agentSession.identity?.sessionID,
+                        windowID: window.map { String($0.windowNumber) })
     }
 
     /// Löst den Ziel-Selektor des CLI auf eine Kachel auf. Semantik: reine Ziffern

@@ -1,5 +1,52 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-22 — Explizite Agenten-Sessions und fensterübergreifendes Cockpit
+
+`AgentSession` bindet Anbieter und echte Session-ID, optional Turn-ID. Ein fremder/alter Turn
+oder Legacy-Status überschreibt keine identifizierte Session. `ready` bindet, `closed` löst;
+der PTY-Vordergrundprozess räumt bei Exit/Wechsel auch ohne Abschluss-Hook auf. Der Claude-Mod
+meldet die Engine-Session-ID. Codex nutzt einen stillen Python-Sender für acht offizielle
+Lifecycle-Hooks: keine Transkriptanalyse, keine TTY-Schreibzugriffe, kurze Socket-Timeouts,
+Capability-Abfrage vor dem ersten Status und Abgleich der emittierenden Prozessgruppe.
+Der Installer bewahrt andere Hooks/notify-Einstellungen und sichert ersetzte Dateien.
+
+`ControlRouter` hält alle Fenster schwach referenziert. `list-panes`, Index/UUID-Präfix,
+Fokus und Notification-Klick haben damit ein gemeinsames Zielverzeichnis. Home nutzt
+Anbieter + Session-ID für bereits verbundene Sessions; gleiche CWDs reichen nicht.
+Zwischen Start und erstem Hook gibt es noch keine Bindung und keine Startreservierung.
+Status-Einstellungen heißen „Agenten“, Claude-spezifische Optionen bleiben benannt.
+
+Dokumentation berichtigt: Status läuft seit 21.09. über den Socket, globale OSC-Fallback-Hooks
+sind entfernt. Neustarts öffnen Home; die gespeicherte Verzeichnisliste wird derzeit nicht
+wiederhergestellt. Overlay-Identität hängt an Spalte/Inhalt/Vorkommen, Position am Raster.
+Der frühere Projektstand ist unten unverändert archiviert. Alte Sichtprüfungen sind weiterhin
+als solche markiert; Tests sind kein Beleg für eine Nutzerabnahme.
+
+Verifiziert: 63 native Xcode-Tests; eigenständige Swift-Regressionen für Launcher, VM,
+Identität und Routing; 11 Python-Hook-/Installer-Tests. Abschließender Debug-Build in
+Default-DerivedData signiert und mit `codesign --verify --deep --strict` geprüft.
+Live-/Sichtabnahme des neuen Prozesses nach Nutzer-Neustart steht noch aus.
+
+## 2026-09-22 — Launcher-Regressionen in CI und VM-Beenden abgesichert
+
+Die eigenständigen Launcher-Tests waren nicht an CI angeschlossen: Suchtests riefen nach dem
+Paletten-Umbau noch das entfernte `score` auf, der vollständige AppKit-Test verwendete den alten
+Paletten-Initializer und veraltete Präsentations-Stubs. Beide aktualisiert; Suchtests decken zusätzlich
+Rangfolge, Unicode-Hervorhebung und fehlende Session-Identität ab. `bash scripts/test-regressions.sh`
+führt dieselben 42 Launcher-Fälle lokal und in CI aus (Suche, Codex-Start, Pfadgrenzen, Fokus und
+vollständige Tastatureingabe in unsichtbaren AppKit-Fenstern).
+
+Der VM-Beenden-Pfad ist in `VMQuitGuard` ausgelagert. Bei fehlendem/nicht startbarem Werkzeug,
+Fehler, unbekanntem VM-Zustand oder 120-s-Timeout bleibt die App geöffnet und zeigt den Grund.
+Auch nach Exit 0 wird geprüft, ob noch eine VM läuft. Ein verspäteter Erfolg nach Timeout beendet
+die App nicht nachträglich; solange der Helfer noch arbeitet, startet kein zweiter Suspend-Versuch.
+Der Helfer wird beim Timeout nicht unterbrochen, damit er das Speichern abschließen kann.
+16 zusätzliche Regressionen verwenden nur temporäre Hilfsprozesse, keine echte VM und keinen
+App-Neustart. Der vorhandene lokale Werkzeugpfad bleibt kompatibel.
+
+Verifiziert: alle 58 eigenständigen Regressionen und 63 Xcode-Tests grün; abschließender
+Debug-Build in DerivedData signiert. Echte VM und laufende App für die Tests nicht beendet.
+
 ## 2026-09-21 — Status über den Socket statt über die TTY (Rendering-Artefakte in Claude Code)
 
 Anlass: Mats' Screenshot — im Claude-Code-TUI stand `;255;255;255mjo` als Text, Zeilen waren versetzt,
@@ -1024,3 +1071,83 @@ ermittelbar — LatexTerm selbst schickt nur `kill(shellPid, SIGTERM)`, Unified 
 „vor ⌘Q `/labor aus`": `applicationShouldTerminate` prüft `pgrep -x vmware-vmx`, zeigt ein kleines Panel und ruft
 `~/.claude/skills/vm/vm suspend` (Werkstatt), antwortet `.terminateLater` und beendet nach dem Anhalten (Fallback: rc≠0,
 Startfehler oder 120 s → trotzdem beenden). Ohne VM oder ohne Werkzeug unverändert. Logger-Kategorie `quickstart`.
+
+## Archiviert am 2026-09-22 — ersetzter Projektstand und Arbeitsliste
+
+## Aktueller Stand (2026-09-15)
+
+**Status-Chips + Banner neu (15.09.):** Fundament ist der Bridge-Mod (Werkstatt `mods/latexterm-bridge`), der Claude Codes
+echten Zustand liefert. Erste Runde (schwebende Pille in der Kachel) von Mats abgenommen („Feature passt und läuft"),
+dann auf seinen Wunsch in die Titelleiste verlegt: Chips = Punkt + Text, ersetzen die alten Punkte und die Pille.
+Zeigt Tätigkeit, laufende Uhr, Schritte, danach Nachklang „✓ fertig · 1:42 · 7 Schritte" bis hingesehen; Banner mit
+Frage, Dauer, Schritten, Antwort-Anfang (live gesehen: „braucht dich"-Banner, Klick holt die Kachel). Modi
+Aus/Kompakt/Mit Details; Mats' Default per `defaults write` auf „Mit Details". Signiert gebaut; Sichtabnahme der
+Chips nach Neustart offen. Details `HISTORIE.md` 15.09.
+
+**Desktop-Widgets (11.09.):** neues Target `LatexTermWidgets` (WidgetKit, sandboxed, App-Group; Abschnitt oben unter
+Architecture) mit Claude-Cockpit und Claude Wrapped, `WidgetRefresher` als Schreiber (`projekte widget`, Setting
+„Widget-Befehl“). Signiert gebaut, beide Widgets auf Mats' Schreibtisch, zwei Nachbesserungen nach Abnahme
+(kein Kachel-Stapeln bei `latexterm://home`, Fristen fließend hinter zweizeiligen Titeln, große Variante).
+Von Mats abgenommen (16:50); kleine Varianten nur in der Galerie gesehen.
+
+**Feierabend-Übergabe 05.09.:** Claude und Codex sind im Home gleichberechtigt: Anbieterwahl je Ordner,
+eigene Kontingente/Startvorhänge, Direkt-Resume mit nativem Picker als Fallback, Pins/Titel,
+gemeinsame Wiedervorlagen. Navigation Projekte/Aufgaben/Pins; Kachelsprünge per UUID statt CWD.
+
+**Entschiedene Bedienung:** ⌘K und freies Tippen öffnen genau eine Suchleiste. Normaler Text sucht
+lokal; führendes `/` ist ein freier KI-Prompt, Enter sendet. Keine vorgefertigten KI-Modusschalter
+oder zusätzlichen Versanddialoge; OpenAI-/Kontingenthinweis sichtbar. Kachelstarts brauchen weiterhin
+eine Vorschau und Bestätigung. KI erkennt Absicht intern; Suchen liefert lokale Belegausschnitte,
+Start/Team erzeugen validierte Vorschläge, freie Antworten/Vergleiche bleiben lesend.
+Private Daten-/Befehlslogik: Werkstatt `launcher/assistant.py`, Vertrag in `launcher/README.md`.
+
+**Bestätigt:** Mats meldet nach Neustart „funktioniert erstmal“ für den Erstzeichen-Fix.
+Vollständiger AppKit-Palettentest reproduzierte vorher moin→oin und /frage→frage:
+verzögertes Select-all nach Fokusübergabe. Bewachte Runloop-Korrektur behebt beide Fälle.
+Der frühere isolierte SearchField-Test allein war unzureichend. Code + Repro:
+`LauncherSearchField.swift`, `scripts/test-launcher-palette-input.swift`.
+
+**Prüfstand:** 57 Backend-Tests, 14 Swift-Such-/Slash-Fälle, vier isolierte Fokusfälle,
+zwei vollständige AppKit-Tastaturpfade und native Xcode-Suite grün. Ein synthetischer Luna-Test
+über bestehenden Codex-Login: 3,4 s (Finden-Pfad, keine privaten Daten/keine Test-Kacheln).
+Finaler Debug-Build in DerivedData signiert und Signatur geprüft. Tagesänderungen per `$finish`
+als `1d1d5dc` committet/gepusht (Werkstatt: `b406ea3`); bestehende fremde Änderungen erhalten.
+
+**Grenzen:** Suche max. 160 jüngste Katalog-Sessions / 48 übertragene Kandidaten, kein Vollarchiv.
+Live-Session-ID und fensterübergreifende Zuordnung fehlen; Team-Antworten zum Vergleich bewusst
+in den Prompt einfügen, nicht automatisch aus laufenden Kacheln holen. Frühere Formel-/Optik-
+Abnahmen bleiben offen, Details der ersetzten Stände 1:1 in HISTORIE.md.
+
+## HIER WEITERMACHEN
+
+- [x] **Widgets** 11.09. abgenommen (Rendering, große Variante); Rebuild-Rezept im Abschnitt „Desktop-Widgets“ oben.
+- [ ] **Morgen zuerst:** ⌘K → `/wo hatten wir über … gesprochen?` an bekanntem Thema testen;
+      dann eine Start-/Team-Vorschau prüfen, echte Starts nur im tatsächlich gewünschten Projekt.
+- [ ] **Formel-Runde 02.09. abnehmen** (Details im archivierten Stand in HISTORIE.md). Bekannte Reste: zwei Formeln mit derselben
+      leeren Zeile dazwischen können sich im Overlay überlappen (beide wachsen hinein); ein echter weicher
+      Umbruch direkt am `$` bleibt wie gehabt Grenzfall.
+- [ ] **Terminal-Optik, Reste:** Ghostty-Import-Knopf einmal von Mats drücken (Vorschau zeigt nur „Innenabstand →
+      15 px“); feste Signing-Identität fürs Target (TCC-Grants kleben am Debug-Build) — To-Do in der Werkstatt-CLAUDE.md.
+      Prompt-Stil ist experimentell: bricht leise, wenn Claude Code die Box-Zeichnung ändert (`PromptBoxLocator`-Tests
+      dann anpassen, `/tmp/latexterm-status.log` → `BOX`-Zeilen).
+- [ ] **Home-Kachel:** Runden 1–25 abgenommen; Heimatort `claude-werkstatt/launcher/README.md` (Übergabe, JSON-Vertrag,
+      Offenes) — dort zuerst lesen. Neue Befunde → `HISTORIE.md`.
+- [ ] #28 v2, Etappe E1: lokale MCP-Bridge auf `control.sock` — zuerst den Plan-Kommentar in #28 lesen.
+- [ ] OSS-Antwort abwarten; bei Absage ist der einzige Weg Kategorie „20+ externe Contributor" =
+      Sichtbarkeits-Push (Show HN, r/macapps, LaTeX-/Terminal-Communities) — Monatsprojekt, `HISTORIE.md`.
+- [x] Codex-Einstieg 05.09.: `AGENTS.md` zeigt auf diese gemeinsame Quelle. Home rendert
+      additive `agentActions`; gleichwertiger Claude/Codex-Schalter merkt die Wahl pro Ordner.
+      Wartung unter „Mehr“, Sessionaktionen mit Anbieterkennung. Codex hat einen eigenen Startvorhang
+      im gemeinsamen Ring-Design (Escape/Knopf zum Aufdecken, maximal 12 s), ohne Claude-Folgebefehle
+      und ohne Claude-Prompt-/Statusheuristiken. Acht Readiness-Fixtures und Xcode-Tests grün,
+      signierter Build erfolgreich. Projektfarbe bleibt. Sichtprüfung nach Neustart offen;
+      erste Optik von Mats abgenommen. Codex-Direktfortsetzung jetzt über `agentSessions`,
+      ältere unter „Mehr“, nativer Picker als Fallback, auch in Projekt-Pins. Gemeinsame
+      Wiedervorlagen über `agentActions` an den gewählten Agenten, kein Codex-Start-Hook.
+      Sechs Pfadgrenzen-Fixtures grün. Codex-Pins/-Titel jetzt mit ⌘P/⌘E und Mehr-Aktionen:
+      Pins launcher-lokal, Titel nativ; eigene Anbietergruppen im Pin-Screen. Auswahl beim Reload
+      erhalten, Fehler sichtbar. Neue Sichtprüfung und Live-Status noch offen.
+      Kontingente beider Agenten jetzt in eigener Zeile unter dem
+      Schalter, mit Reset, getrenntem Cache und ehrlichem Fehler-/Veraltet-Zustand.
+      Live-Datenprobe beider Anbieter erfolgreich; visuelle Abnahme nach Neustart offen.
+      Datenvertrag: Launcher-README.

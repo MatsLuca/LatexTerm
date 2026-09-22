@@ -543,6 +543,7 @@ final class HomePaneView: NSView {
         switch state {
         case "awaitingInput": return .init(text: "wartet auf dich", color: orange)
         case "working": return .init(text: "arbeitet", color: green)
+        case "ready": return .init(text: "bereit", color: cyan)
         default: return .init(text: "Shell", color: faint)
         }
     }
@@ -1759,6 +1760,7 @@ final class HomePaneView: NSView {
         guard !isLaunching, !isUpdating else { return }   // ein Start pro Kachel
         switch a {
         case .resume(let s, let path, _, _, let project):
+            if focusLiveSession(s.id, agent: s.agent ?? "claude") { return }
             if s.agent == "codex", let t = s.resumeAction {
                 onLaunch?(colored(LaunchRequest(path: path, command: t.command,
                     label: "Codex · \(project ?? (path as NSString).lastPathComponent)",
@@ -1768,10 +1770,12 @@ final class HomePaneView: NSView {
             let cmd = (templates.resume.command ?? "").replacingOccurrences(of: "{session}", with: s.id)
             onLaunch?(colored(LaunchRequest(path: path, command: cmd, label: "Claude · \(project ?? (path as NSString).lastPathComponent)", followUp: nil), session: s.id))
         case .compact(let s, let path):
+            if focusLiveSession(s.id, agent: s.agent ?? "claude") { return }
             guard let t = templates.compact else { return }
             let cmd = (t.command ?? "").replacingOccurrences(of: "{session}", with: s.id)
             onLaunch?(colored(LaunchRequest(path: path, command: cmd, label: "Claude · \((path as NSString).lastPathComponent) · \(t.label)", followUp: t.followUp), session: s.id))
         case .run(let t, let path):
+            if let id = t.sessionID, focusLiveSession(id, agent: t.agent ?? "claude") { return }
             let agent = t.agent == "codex" ? "Codex" : "Claude"
             onLaunch?(colored(LaunchRequest(path: path, command: t.command, label: "\(agent) · \((path as NSString).lastPathComponent)", followUp: t.followUp, integration: t.integration), session: nil))
         case .togglePin(let s, let pinned):
@@ -1810,6 +1814,14 @@ final class HomePaneView: NSView {
         let r = list.selectedRow
         guard r >= 0, r < actions.count, case .more(_, let e) = actions[r] else { return nil }
         return e
+    }
+
+    /// Resume an already attached session by focusing its exact pane, including other windows.
+    /// CWD alone is deliberately insufficient: two different sessions can share a folder.
+    private func focusLiveSession(_ id: String, agent: String) -> Bool {
+        guard let pane = otherPanes?().first(where: { $0.matches(sessionID: id, agent: agent) }) else { return false }
+        onFocusPane?(pane.id)
+        return true
     }
 
     /// Pin über die Datenschicht setzen (`projekte pin|unpin <id>`), dann neu laden.

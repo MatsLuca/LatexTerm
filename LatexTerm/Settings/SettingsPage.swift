@@ -13,7 +13,7 @@ enum SettingsPage: String, CaseIterable, Identifiable {
         case .general: return "Allgemein"
         case .appearance: return "Darstellung"
         case .panes: return "Kacheln"
-        case .claude: return "Claude"
+        case .claude: return "Agenten"
         case .statusline: return "Statuszeile"
         case .formulas: return "Formeln"
         case .advanced: return "Erweitert"

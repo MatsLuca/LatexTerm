@@ -53,6 +53,13 @@ Please do not open a public issue with full exploit details before a fix is avai
   user can achieve the same effect by other means (spawning shells directly).
   Anything that would widen the caller set (TCP, world-writable socket,
   privileged helper) must not be added without a confirmation UI.
+- **Agent status hooks:** optional provider/session/turn identifiers and bounded prompt/answer
+  excerpts travel over that same socket and may appear in local chips or macOS notifications.
+  The Codex bridge reads lifecycle-event input, not transcript files. It verifies the emitting
+  process group against the pane's foreground job to avoid stale or misplaced status; this is
+  a correctness check, not authentication against other processes of the same user. The socket's
+  existing peer check remains the security boundary. Hook installation preserves other hook
+  entries and requires Codex's normal trust review before execution.
 - **Cmd-click link opening (standard terminal behaviour):** Cmd-clicking a link
   opens arbitrary URL schemes via `NSWorkspace` (http, mailto, custom schemes…);
   file paths are resolved against the OSC 7 working directory and revealed via

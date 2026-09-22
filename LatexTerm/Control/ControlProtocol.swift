@@ -31,25 +31,33 @@ struct ControlRequest: Codable {
     var cwd: String?
     /// new-pane: Kommando, das nach dem Shell-Start ausgeführt wird.
     var exec: String?
-    /// close-pane: auch schließen, wenn Claude arbeitet oder ein Vordergrundprozess
-    /// läuft (= Cmd+W ohne Rückfrage). Default false: dann nur nackte Shell oder
-    /// Claude, das auf Eingabe wartet.
+    /// close-pane: auch bei arbeitender Session oder Vordergrundprozess schließen.
+    /// Default false: dann nur eine ruhende Shell ohne Vordergrundprozess.
     var force: Bool?
+    /// Optional precise status identity. Legacy status senders remain valid Claude senders.
+    var agent: String?
+    var sessionID: String?
+    var turnID: String?
+    var sourceGroup: Int32?
 }
 
 struct PaneInfo: Codable {
     var id: String
-    /// 1-basierte Position in der Grid-Reihenfolge (= Reihenfolge der Titlebar-Punkte).
+    /// 1-basierte Position: registrierte Fenster, darin jeweils Grid-Reihenfolge.
     var index: Int
     var cwd: String?
     var focused: Bool
     var zoomed: Bool
-    /// Passiv erkannter Claude-Code-Zustand: "none" | "working" | "awaitingInput".
+    /// "none" | "ready" | "working" | "awaitingInput"; identity fields distinguish agents.
     var state: String
+    var agent: String? = nil
+    var sessionID: String? = nil
+    var windowID: String? = nil
 }
 
 struct ControlResponse: Codable {
     var ok: Bool
+    var capabilities: [String]? = ["agent-sessions", "all-windows"]
     var error: String?
     /// list-panes: alle Kacheln.
     var panes: [PaneInfo]?
