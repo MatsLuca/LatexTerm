@@ -2,72 +2,88 @@ import AppKit
 import WebKit
 import UniformTypeIdentifiers
 
-/// Zweite App-Kachel (Kachel-Protokoll, Schritt 8): zeigt eine lokale HTML-Datei — Plots,
-/// Berichte, Mini-Apps, die ein Skript, ein Mod oder ein Agent erzeugt. `latexterm new-pane --kind web
-/// --arg url=/pfad/datei.html`; danach `send --pane N 'load /anderer/pfad.html'`, `reload`, `back` …
+/// Zweite App-Kachel (Kachel-Protokoll, Schritt 8): zeigt eine lokale HTML-Datei oder einen Dev-Server auf
+/// localhost — Plots, Berichte, Mini-Apps, die ein Skript, ein Mod oder ein Agent erzeugt. `latexterm new-pane
+/// --kind web --arg url=/pfad/datei.html` (oder `url=localhost:5173`); danach `send`-Aktionen (siehe `manual`).
 ///
-/// Sicherheitsentscheid (Bauplan §6.8): nur lokale Dateien. Der Steuerkanal ist 0600 + Peer-Check,
-/// aber Claude schreibt die Aufrufe — eine http-URL aus einem Hook-Kontext wäre ein neuer Kanal nach
-/// außen. Gelesen werden darf nur der Ordner der zuerst geöffneten Datei (`root`); Links nach draußen
-/// öffnet ein Klick im Standardbrowser, nie in der Kachel.
+/// Sicherheitsentscheid (Bauplan §6.8, erweitert 23.09.): nur lokale Dateien und `http(s)://localhost`/127.0.0.1.
+/// Eine beliebige http-URL aus einem Hook-Kontext wäre ein neuer Kanal nach außen. Dateien liest die Kachel nur aus
+/// dem Ordner der zuerst geöffneten Datei (`rootFolder`); Links nach draußen öffnet ein Klick im Standardbrowser.
 ///
-/// Runde 23.09. („wie ein Browser“): lädt neu, sobald sich die Seite ODER eine ihrer Dateien ändert (CSS
-/// ohne Neuladen), Scrollposition bleibt auch bei Seiten, die per JS rendern; lokale Links, Zurück/Vor,
-/// `target=_blank`, alert/confirm/prompt, Datei-Upload und Downloads gehen; ⌘± Zoom, ⌘F Suchen, ⌘R, Element
-/// untersuchen. Agenten sehen die Seite per `call look` (MCP `web_look`): Bild, Text, Konsole.
+/// Runde 23.09.: (1) „wie ein Browser“ — beobachtet alle geladenen Dateien, CSS ohne Neuladen, Scroll bleibt, Links,
+/// Zurück/Vor, `_blank`, Dialoge, Upload, Downloads, ⌘± ⌘F ⌘R ⌘ü, Inspector. (2) Rückkanal wie die Vorschau: Text
+/// markieren oder ⌥-Klick auf ein Element → ⇧⌘⏎ an die Session; lokale Seiten dürfen per `latexterm.send()` selbst
+/// einen Prompt an die Eigentümer-Session schicken (`board`). (3) Agenten sehen (`web_look`, auch ganze Seite) und
+/// bedienen (`web_act`) die Seite. Agenten-Teil: `WebContent+Agent.swift`.
 final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegate, WKScriptMessageHandler, WKDownloadDelegate {
     static let kind = "web"
     static let displayName = "HTML-Datei in neuer Kachel …"
     static let manual = PaneKindManual(
-        summary: "Zeigt eine lokale HTML-Datei neben der Session (interaktive Plots, Berichte, Mini-Apps). Nur Dateien auf dem Mac, "
-            + "kein http; Skripte/CSS/Daten aus demselben Ordner gehen. Lädt von selbst neu, sobald die Seite oder eine ihrer Dateien "
-            + "sich ändert (Scrollposition bleibt). Mit web_look siehst du die Seite samt Konsolenfehlern. PDF und Bilder → open_preview.",
-        args: [PaneKindArg(name: "url", summary: "absoluter Pfad der Datei (auch ~/…); Ordner = deren index.html", required: true)],
-        actions: [PaneKindAction(name: "reload", summary: "neu laden (passiert bei Änderungen von selbst)"),
-                  PaneKindAction(name: "load <pfad>", summary: "andere lokale Datei in derselben Kachel zeigen"),
+        summary: "Zeigt eine lokale HTML-Datei oder einen Dev-Server auf localhost neben der Session (interaktive Plots, Berichte, "
+            + "Mini-Apps, Vite/Jupyter/Streamlit). Kein Internet. Lädt von selbst neu, sobald die Seite oder eine ihrer Dateien sich "
+            + "ändert (Scrollposition bleibt). Mit web_look siehst du die Seite samt Konsole, mit web_act bedienst du sie. "
+            + "Eigene Seiten können per latexterm.send(\"text\") bei einem Klick einen Prompt an dich schicken "
+            + "({submit: false} = nur einfügen). PDF und Bilder → open_preview.",
+        args: [PaneKindArg(name: "url", summary: "absoluter Pfad der Datei (auch ~/…; Ordner = deren index.html) oder http://localhost:PORT",
+                           required: true)],
+        actions: [PaneKindAction(name: "reload", summary: "neu laden (passiert bei Dateiänderungen von selbst)"),
+                  PaneKindAction(name: "load <pfad|localhost-url>", summary: "andere Seite in derselben Kachel zeigen"),
                   PaneKindAction(name: "back / forward", summary: "im Verlauf der Kachel zurück/vor"),
-                  PaneKindAction(name: "scroll <top|bottom|px|#id>", summary: "Ansicht verschieben (auch für den Nutzer)"),
+                  PaneKindAction(name: "scroll <top|bottom|px|selektor>", summary: "Ansicht verschieben (auch für den Nutzer)"),
                   PaneKindAction(name: "zoom <in|out|reset|Prozent>", summary: "Seitenzoom"),
                   PaneKindAction(name: "find <text>", summary: "auf der Seite suchen und hinspringen")])
 
     weak var delegate: PaneContentDelegate?
-    private let webView: WKWebView
-    private let root: WebRootView
-    /// Gerade gezeigte Seite (folgt lokalen Links).
-    private(set) var file: URL
+    let webView: WKWebView
+    let root: WebRootView
+    /// Gerade gezeigte Seite: Datei-URL (folgt lokalen Links) oder http://localhost-URL.
+    private(set) var page: URL
     /// Ordner, den die Kachel lesen darf — der der zuerst geöffneten Datei; `load` setzt ihn neu.
-    private var rootFolder: URL
+    private(set) var rootFolder: URL
     private var titleObservation: NSKeyValueObservation?
     private let folderServer = LocalFolderServer()
     /// Seite und alle Dateien, die sie geladen hat → bei Änderung neu laden (CSS: nur austauschen).
     private var watchers: [String: FileWatcher] = [:]
     private var pendingChanges: Set<String> = []
     private var changeWork: DispatchWorkItem?
+    /// localhost nicht erreichbar → alle 2 s wieder versuchen (Dev-Server startet noch).
+    private var retryWork: DispatchWorkItem?
+    private var waitingForServer = false
     /// Scrollposition über ein Neuladen hinweg.
     private var restoreScroll: (x: Double, y: Double)?
     /// Konsole der aktuellen Seite (für `web_look` und den Chip).
-    private var console: [WebConsole.Entry] = []
+    var console: [WebConsole.Entry] = []
     /// Konsole je Seite: Zurück/Vor holt Seiten aus dem Verlaufs-Cache, ohne ihre Skripte neu laufen zu lassen.
     private var consoleByPage: [String: [WebConsole.Entry]] = [:]
     private var historyStep = false
     private var dialogsThisPage = 0
     private var findText = ""
     private var loadedOnce = false
+    // Rückkanal (WebContent+Agent.swift)
+    var marks: [WebMark] = []
+    var pendingMark: WebMark?
+    var sending = false
+    var boardTimes: [Date] = []
+    /// Läuft gerade `web_act`: `latexterm.send` geht dann nicht an die Session, sondern ins Ergebnis (sonst schriebe
+    /// sich der Agent per Klick selbst Prompts — WebKit zählt App-Skripte als Nutzergeste).
+    var acting = false
+    var actSends: [String] = []
+
     private static let zoomSteps: [CGFloat] = [0.5, 0.67, 0.75, 0.8, 0.9, 1, 1.1, 1.25, 1.5, 1.75, 2, 2.5, 3]
-    private static let clock: DateFormatter = {
+    static let clock: DateFormatter = {
         let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; return f
     }()
 
     required init(args: [String: String]) throws {
         try PaneArgsError.rejectUnknown(args, allowed: ["url", "root", "zoom"], kind: Self.kind)
         guard let raw = args["url"] else {
-            throw PaneArgsError("web braucht --arg url=/pfad/datei.html")
+            throw PaneArgsError("web braucht --arg url=/pfad/datei.html oder url=http://localhost:PORT")
         }
-        file = try Self.resolve(raw)
-        rootFolder = file.deletingLastPathComponent()
-        if let rawRoot = args["root"] {
+        page = try Self.resolve(raw)
+        rootFolder = page.isFileURL ? page.deletingLastPathComponent() : URL(fileURLWithPath: NSHomeDirectory())
+        if page.isFileURL, let rawRoot = args["root"] {
             let folder = URL(fileURLWithPath: (rawRoot as NSString).expandingTildeInPath).standardizedFileURL
-            if file.path.hasPrefix(folder.path + "/") { rootFolder = folder }
+            if page.path.hasPrefix(folder.path + "/") { rootFolder = folder }
         }
         let config = WKWebViewConfiguration()
         config.preferences.javaScriptCanOpenWindowsAutomatically = false
@@ -75,6 +91,8 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
         config.setURLSchemeHandler(folderServer, forURLScheme: LocalFolderServer.scheme)
         config.userContentController.addUserScript(
             WKUserScript(source: WebConsole.script, injectionTime: .atDocumentStart, forMainFrameOnly: false))
+        config.userContentController.addUserScript(
+            WKUserScript(source: WebPageKit.script, injectionTime: .atDocumentStart, forMainFrameOnly: true))
         webView = WKWebView(frame: .zero, configuration: config)
         webView.isInspectable = true
         webView.allowsBackForwardNavigationGestures = true
@@ -84,7 +102,9 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
         if let zoom = args["zoom"].flatMap(Double.init), zoom >= 0.3, zoom <= 5 { webView.pageZoom = zoom }
         root = WebRootView(webView: webView)
         super.init()
-        config.userContentController.add(WeakScriptHandler(self), name: WebConsole.handlerName)
+        let handler = WeakScriptHandler(self)
+        config.userContentController.add(handler, name: WebConsole.handlerName)
+        config.userContentController.add(handler, name: WebPageKit.handlerName)
         webView.navigationDelegate = self
         webView.uiDelegate = self
         titleObservation = webView.observe(\.title) { [weak self] _, _ in
@@ -95,7 +115,11 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
         root.onKeyEquivalent = { [weak self] event in self?.keyEquivalent(event) ?? false }
         root.findBar.onSearch = { [weak self] text, backwards in self?.find(text, backwards: backwards) }
         root.findBar.onClose = { [weak self] in self?.closeFind() }
-        load(file)
+        root.markBar.onKeep = { [weak self] note in self?.keepPending(note: note) }
+        root.markBar.onSend = { [weak self] note in self?.send(note: note, choose: NSEvent.modifierFlags.contains(.option)) }
+        root.markBar.onDiscard = { [weak self] in self?.discardPending() }
+        root.markBar.onClear = { [weak self] in self?.clearMarks() }
+        load(page)
     }
 
     /// Menü „Kachel → HTML-Datei in neuer Kachel …“: Datei wählen, dann wie `--arg url=…`. Abbrechen = nil.
@@ -107,19 +131,38 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
         return panel.runModal() == .OK ? panel.url.map { ["url": $0.path] } : nil
     }
 
-    /// Absoluter Pfad, `~/…` oder `file://…` auf eine existierende Datei (Ordner → deren index.html).
-    /// Relative Pfade nicht: die App kennt das Verzeichnis des Aufrufers nicht.
+    static func isLocalHost(_ host: String?) -> Bool {
+        guard let host = host?.lowercased() else { return false }
+        return ["localhost", "127.0.0.1", "::1", "[::1]", "0.0.0.0"].contains(host) || host.hasSuffix(".localhost")
+    }
+
+    static func isLocalWeb(_ url: URL?) -> Bool {
+        guard let url, ["http", "https"].contains(url.scheme?.lowercased() ?? "") else { return false }
+        return isLocalHost(url.host)
+    }
+
+    /// Absoluter Pfad, `~/…`, `file://…` (Ordner → deren index.html) oder `http(s)://localhost…`
+    /// (auch kurz `localhost:5173`). Relative Pfade nicht: die App kennt das Verzeichnis des Aufrufers nicht.
     static func resolve(_ raw: String) throws -> URL {
         var path = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        if path.range(of: #"^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?(/|$)"#, options: .regularExpression) != nil {
+            path = "http://" + path
+        }
         if let url = URL(string: path), let scheme = url.scheme?.lowercased() {
+            if scheme == "http" || scheme == "https" {
+                guard isLocalHost(url.host) else {
+                    throw PaneArgsError("web zeigt nur localhost, nicht \(url.host ?? path) — Seiten aus dem Netz gehören in den Browser")
+                }
+                return url
+            }
             guard scheme == "file" else {
-                throw PaneArgsError("web lädt nur lokale Dateien, keine \(scheme)-Adressen")
+                throw PaneArgsError("web lädt nur lokale Dateien und http://localhost, keine \(scheme)-Adressen")
             }
             path = url.path
         }
         path = (path as NSString).expandingTildeInPath
         guard path.hasPrefix("/") else {
-            throw PaneArgsError("web braucht einen absoluten Pfad (z. B. \"$PWD/\(raw)\"), bekam „\(raw)“")
+            throw PaneArgsError("web braucht einen absoluten Pfad (z. B. \"$PWD/\(raw)\") oder http://localhost:PORT, bekam „\(raw)“")
         }
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: path, isDirectory: &isDir) else {
@@ -135,20 +178,36 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
         return URL(fileURLWithPath: path).standardizedFileURL
     }
 
-    private static func isHTML(_ url: URL) -> Bool { ["html", "htm", "xhtml"].contains(url.pathExtension.lowercased()) }
+    static func isHTML(_ url: URL) -> Bool { ["html", "htm", "xhtml"].contains(url.pathExtension.lowercased()) }
+
+    /// Anzeigename der Seite: Pfad mit ~ bzw. host:port/pfad.
+    var pageLabel: String {
+        if page.isFileURL { return (page.path as NSString).abbreviatingWithTildeInPath }
+        var label = (page.host ?? "localhost") + (page.port.map { ":\($0)" } ?? "")
+        if page.path.count > 1 { label += page.path }
+        return label
+    }
+
+    /// Gerade eine lokale Datei über den Ordner-Server (nur dort gibt es `latexterm.send`).
+    var showsLocalFile: Bool { webView.url?.scheme == LocalFolderServer.scheme }
 
     /// HTML läuft über `LocalFolderServer` (eigenes Schema): WebKit rät bei file:// ohne Zeichensatz-Angabe
     /// Latin-1 — aus „€“ wird „â‚¬“. Der Server liefert HTML ohne Angabe als UTF-8 und alles aus dem Ordner
-    /// (Bilder, Skripte, CSS, fetch-Daten) mit und meldet jede Datei zum Beobachten. Anderes über file://.
+    /// (Bilder, Skripte, CSS, fetch-Daten) mit und meldet jede Datei zum Beobachten. Andere Dateien über
+    /// file://, localhost direkt.
     private func load(_ url: URL) {
-        file = url
-        if !url.path.hasPrefix(rootFolder.path + "/") { rootFolder = url.deletingLastPathComponent() }
+        retryWork?.cancel()
+        retryWork = nil
+        page = url
+        if url.isFileURL, !url.path.hasPrefix(rootFolder.path + "/") { rootFolder = url.deletingLastPathComponent() }
         resetWatchers()
-        if Self.isHTML(url) {
+        if url.isFileURL, Self.isHTML(url) {
             folderServer.root = rootFolder
             webView.load(URLRequest(url: LocalFolderServer.url(for: url)))
-        } else {
+        } else if url.isFileURL {
             webView.loadFileURL(url, allowingReadAccessTo: rootFolder)
+        } else {
+            webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
         }
         delegate?.contentStyleChanged()
     }
@@ -159,7 +218,7 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
         watchers.values.forEach { $0.stop() }
         watchers = [:]
         pendingChanges = []
-        watch(file)
+        if page.isFileURL { watch(page) }
     }
 
     private func watch(_ url: URL) {
@@ -184,7 +243,7 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
         pendingChanges = []
         guard !paths.isEmpty else { return }
         let names = paths.map { ($0 as NSString).lastPathComponent }.sorted().joined(separator: ", ")
-        if paths.allSatisfy({ $0.lowercased().hasSuffix(".css") }), Self.isHTML(file) {
+        if paths.allSatisfy({ $0.lowercased().hasSuffix(".css") }), showsLocalFile {
             webView.evaluateJavaScript("""
             document.querySelectorAll('link[rel~="stylesheet"]').forEach(l => {
               const u = new URL(l.href); u.searchParams.set('latexterm', Date.now()); l.href = u.toString(); });
@@ -195,14 +254,14 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
         reloadKeepingScroll(announce: "↻ " + names + " · " + Self.clock.string(from: Date()))
     }
 
-    /// Neu von der Platte, Scrollposition bleibt (bei HTML; PDF/Bild über file:// fangen oben an).
-    private func reloadKeepingScroll(announce: String? = nil) {
+    /// Neu laden, Scrollposition bleibt (bei HTML; PDF/Bild über file:// fangen oben an).
+    func reloadKeepingScroll(announce: String? = nil) {
         webView.evaluateJavaScript("[window.scrollX, window.scrollY]") { [weak self] result, _ in
             guard let self else { return }
             if let xy = result as? [NSNumber], xy.count == 2, xy[0].doubleValue != 0 || xy[1].doubleValue != 0 {
                 self.restoreScroll = (xy[0].doubleValue, xy[1].doubleValue)
             }
-            self.load(self.file)
+            self.load(self.page)
             if let announce { self.root.pill.flash(announce) }
         }
     }
@@ -213,21 +272,25 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
     var keyView: NSView { webView }
     var title: String {
         if let t = webView.title, !t.isEmpty { return t }
-        return file.lastPathComponent
+        return page.isFileURL ? page.lastPathComponent : pageLabel
     }
     var chip: StatusChip? {
-        let path = (file.path as NSString).abbreviatingWithTildeInPath
         let errors = console.filter { $0.level == "error" || $0.level == "resource" }.count
+        if waitingForServer {
+            return StatusChip(short: "wartet", tone: ThemeStore.shared.theme.yellow, pulsing: true,
+                              tooltip: "\(pageLabel) — Server antwortet noch nicht, die Kachel versucht es alle 2 s")
+        }
         guard errors == 0 else {
             return StatusChip(short: "\(errors) ⚠", tone: ThemeStore.shared.theme.red,
-                              tooltip: "\(path) — \(errors) Fehler in der Konsole (Agenten sehen sie per web_look)")
+                              tooltip: "\(pageLabel) — \(errors) Fehler in der Konsole (Agenten sehen sie per web_look)")
         }
-        return StatusChip(tone: ThemeStore.shared.accentColor, tooltip: path)
+        return StatusChip(tone: ThemeStore.shared.accentColor, tooltip: pageLabel)
     }
-    var directory: String? { file.deletingLastPathComponent().path }
+    var directory: String? { page.isFileURL ? page.deletingLastPathComponent().path : nil }
 
     func applyTheme(_ theme: TerminalTheme) {
         root.applyTheme(theme)
+        showMarksInPage()
     }
 
     func receive(_ text: String) -> Bool {
@@ -239,7 +302,7 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
         case "forward": webView.goForward()
         case "load":
             guard let url = try? Self.resolve(rest) else { return false }
-            rootFolder = url.deletingLastPathComponent()
+            if url.isFileURL { rootFolder = url.deletingLastPathComponent() }
             load(url)
         case "scroll":
             guard !rest.isEmpty else { return false }
@@ -262,75 +325,50 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
         return true
     }
 
-    private static func split(_ text: String) -> (String, String) {
+    static func split(_ text: String) -> (String, String) {
         guard let space = text.firstIndex(of: " ") else { return (text, "") }
         return (String(text[..<space]), text[space...].trimmingCharacters(in: .whitespaces))
     }
 
-    /// `state` sofort; `look <png>` asynchron: schreibt zuerst das Bild, dann `<png>.json` mit allem Übrigen.
+    /// `state` sofort; `look <png> [full]` und `act <png> <json>` asynchron: erst Bild(er), dann `<png>.json`.
     func call(_ text: String) throws -> String {
         let trimmed = text.trimmingCharacters(in: .whitespaces)
+        let (command, rest) = Self.split(trimmed)
         var reply: [String: Any]
-        if trimmed == "state" {
+        switch command {
+        case "state":
             reply = state()
-        } else if trimmed.hasPrefix("look ") {
-            let path = String(trimmed.dropFirst(5)).trimmingCharacters(in: .whitespaces)
+        case "look":
+            let (path, options) = Self.split(rest)
             guard path.hasPrefix("/") else { throw PaneArgsError("look braucht einen absoluten PNG-Pfad") }
-            look(writingTo: path, started: Date())
+            look(writingTo: path, started: Date(), full: options.contains("full"))
             reply = ["pending": true, "meta": path + ".json"]
-        } else {
-            throw PaneArgsError("web versteht call state, look <png>")
+        case "act":
+            let (path, json) = Self.split(rest)
+            guard path.hasPrefix("/") else { throw PaneArgsError("act braucht einen absoluten PNG-Pfad") }
+            guard let data = json.data(using: .utf8), let spec = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let steps = spec["steps"] as? [[String: Any]], !steps.isEmpty else {
+                throw PaneArgsError("act braucht JSON {\"steps\": [{\"do\": \"click\", \"selector\": \"#knopf\"}, …]}")
+            }
+            act(writingTo: path, steps: steps, look: spec["look"] as? Bool ?? true, full: spec["full"] as? Bool ?? false)
+            reply = ["pending": true, "meta": path + ".json"]
+        default:
+            throw PaneArgsError("web versteht call state, look <png> [full], act <png> <json>")
         }
         let data = try JSONSerialization.data(withJSONObject: reply, options: [.sortedKeys])
         return String(decoding: data, as: UTF8.self)
     }
 
-    private func state() -> [String: Any] {
-        var state: [String: Any] = ["file": file.path, "root": rootFolder.path, "zoom": Int((webView.pageZoom * 100).rounded()),
+    func state() -> [String: Any] {
+        var state: [String: Any] = ["file": page.isFileURL ? page.path : page.absoluteString,
+                                    "zoom": Int((webView.pageZoom * 100).rounded()),
                                     "loading": webView.isLoading, "canGoBack": webView.canGoBack,
-                                    "console": console.count,
+                                    "console": console.count, "marks": marks.count,
                                     "errors": console.filter { $0.level == "error" || $0.level == "resource" }.count]
+        if page.isFileURL { state["root"] = rootFolder.path }
+        if waitingForServer { state["waiting"] = true }
         if let title = webView.title, !title.isEmpty { state["title"] = title }
         return state
-    }
-
-    /// Wartet, bis die Seite geladen ist und kurz geruht hat (Diagramme rendern per JS nach), dann Bild + Daten.
-    private func look(writingTo path: String, started: Date) {
-        if webView.isLoading, Date().timeIntervalSince(started) < 5 {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { [weak self] in self?.look(writingTo: path, started: started) }
-            return
-        }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) { [weak self] in
-            guard let self else { return }
-            let js = """
-            JSON.stringify({x: scrollX, y: scrollY, w: innerWidth, h: innerHeight,
-              sw: document.documentElement.scrollWidth, sh: document.documentElement.scrollHeight,
-              text: document.body ? document.body.innerText.slice(0, 6000) : ''})
-            """
-            self.webView.evaluateJavaScript(js) { result, _ in
-                var meta = self.state()
-                if let json = result as? String, let data = json.data(using: .utf8),
-                   let page = try? JSONSerialization.jsonObject(with: data) as? [String: Any] {
-                    meta["page"] = page
-                }
-                meta["log"] = self.console.suffix(40).map { ["level": $0.level, "text": $0.text] }
-                self.webView.takeSnapshot(with: nil) { image, error in
-                    if let cg = image?.cgImage(forProposedRect: nil, context: nil, hints: nil),
-                       let png = PreviewRender.scaled(cg, maxPixels: 1600) {
-                        try? png.write(to: URL(fileURLWithPath: path), options: .atomic)
-                        meta["image"] = path
-                    } else {
-                        meta["problem"] = "kein Bild: " + (error?.localizedDescription ?? "Kachel nicht sichtbar?")
-                    }
-                    Self.writeMeta(meta, to: path + ".json")
-                }
-            }
-        }
-    }
-
-    private static func writeMeta(_ meta: [String: Any], to path: String) {
-        guard let data = try? JSONSerialization.data(withJSONObject: meta, options: [.sortedKeys]) else { return }
-        try? data.write(to: URL(fileURLWithPath: path), options: .atomic)
     }
 
     func handle(_ command: PaneCommand) -> Bool {
@@ -342,19 +380,20 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
 
     func willClose() {
         changeWork?.cancel()
+        retryWork?.cancel()
         watchers.values.forEach { $0.stop() }
         watchers = [:]
         titleObservation = nil
         webView.stopLoading()
         webView.navigationDelegate = nil
         webView.uiDelegate = nil
-        webView.configuration.userContentController.removeScriptMessageHandler(forName: WebConsole.handlerName)
+        webView.configuration.userContentController.removeAllScriptMessageHandlers()
     }
 
     /// Nach ⌥⌘R kommt die Kachel mit derselben Seite, demselben Lese-Ordner und Zoom wieder.
     func snapshotArgs() -> [String: String]? {
-        var args = ["url": file.path]
-        if rootFolder != file.deletingLastPathComponent() { args["root"] = rootFolder.path }
+        var args = ["url": page.isFileURL ? page.path : page.absoluteString]
+        if page.isFileURL, rootFolder != page.deletingLastPathComponent() { args["root"] = rootFolder.path }
         if abs(webView.pageZoom - 1) > 0.01 { args["zoom"] = String(format: "%.2f", webView.pageZoom) }
         return args
     }
@@ -365,6 +404,7 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
     private func keyEquivalent(_ event: NSEvent) -> Bool {
         let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
         let key = event.charactersIgnoringModifiers ?? ""
+        let isReturn = event.keyCode == 36 || event.keyCode == 76
         switch mods {
         case .command:
             switch key {
@@ -384,6 +424,7 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
                 webView.goBack()
             }
         case [.command, .shift]:
+            if isReturn { send(note: root.markBar.note.stringValue, choose: false); return true }
             switch key.lowercased() {
             case "+", "=": zoomStep(1)
             case "g":
@@ -391,6 +432,9 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
                 find(root.findBar.field.stringValue, backwards: true)
             default: return false
             }
+        case [.command, .shift, .option]:
+            guard isReturn else { return false }
+            send(note: root.markBar.note.stringValue, choose: true)
         default: return false
         }
         return true
@@ -454,15 +498,18 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
         root.window?.makeFirstResponder(webView)
     }
 
-    // MARK: Konsole
+    // MARK: Nachrichten aus der Seite
 
     func userContentController(_ controller: WKUserContentController, didReceive message: WKScriptMessage) {
-        guard message.name == WebConsole.handlerName, let body = message.body as? [String: Any],
-              let level = body["level"] as? String, let text = body["text"] as? String else { return }
-        log(level, text)
+        guard let body = message.body as? [String: Any] else { return }
+        if message.name == WebConsole.handlerName, let level = body["level"] as? String, let text = body["text"] as? String {
+            log(level, text)
+        } else if message.name == WebPageKit.handlerName, message.frameInfo.isMainFrame {
+            pageMessage(body)
+        }
     }
 
-    private func log(_ level: String, _ text: String) {
+    func log(_ level: String, _ text: String) {
         // Fehlende Datei aus dem Ordner meldet schon der Server — die Browser-Meldung dazu wäre doppelt.
         if level == "error", text.hasPrefix("Laden fehlgeschlagen: \(LocalFolderServer.scheme):") { return }
         let wasClean = !console.contains { $0.level == "error" || $0.level == "resource" }
@@ -474,35 +521,41 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
     // MARK: WKNavigationDelegate
 
     func webView(_ webView: WKWebView, didStartProvisionalNavigation navigation: WKNavigation!) {
-        consoleByPage[file.path] = console
+        consoleByPage[page.absoluteString] = console
         console = []
         dialogsThisPage = 0
+        pendingMark = nil
     }
 
-    /// Lokaler Link zu einer anderen Seite: Titel, Beobachter und Wiederherstellung folgen ihr.
+    /// Link zu einer anderen Seite: Titel, Beobachter und Wiederherstellung folgen ihr.
     func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
         guard let url = webView.url else { return }
         let shown: URL
         if url.scheme == LocalFolderServer.scheme { shown = URL(fileURLWithPath: url.path).standardizedFileURL }
         else if url.isFileURL { shown = url.standardizedFileURL }
+        else if Self.isLocalWeb(url) { shown = url }
         else { return }
-        if shown != file {
-            watchers.removeValue(forKey: file.path)?.stop()
-            file = shown
-            watch(shown)
+        if shown != page {
+            if page.isFileURL { watchers.removeValue(forKey: page.path)?.stop() }
+            if shown.isFileURL != page.isFileURL || shown.host != page.host { marks = [] }
+            page = shown
+            if shown.isFileURL { watch(shown) }
         }
-        if historyStep, console.isEmpty { console = consoleByPage[shown.path] ?? [] }
+        if historyStep, console.isEmpty { console = consoleByPage[shown.absoluteString] ?? [] }
         historyStep = false
+        if waitingForServer { waitingForServer = false }
         delegate?.contentStyleChanged()
     }
 
     func webView(_ webView: WKWebView, didFinish navigation: WKNavigation!) {
-        if !loadedOnce {
+        if !loadedOnce, webView.url?.scheme != "about" {
             loadedOnce = true
             // Ab jetzt wie ein Browser: Seiten ohne eigenen Hintergrund sind weiß, nicht durchsichtig.
             webView.setValue(true, forKey: "drawsBackground")
         }
         delegate?.contentStyleChanged()
+        showMarksInPage()
+        updateMarkUI()
         guard let scroll = restoreScroll else { return }
         restoreScroll = nil
         // Seiten, die per JS aufbauen, sind bei didFinish oft noch zu kurz — ein paar Frames lang nachsetzen.
@@ -516,33 +569,51 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
     }
 
     func webView(_ webView: WKWebView, didFailProvisionalNavigation navigation: WKNavigation!, withError error: Error) {
-        showProblem("„\(file.lastPathComponent)“ lässt sich nicht laden", detail: error.localizedDescription)
+        let code = (error as NSError).code
+        // Abgelöst (neue Navigation) oder zum Download geworden: kein Fehler.
+        if code == NSURLErrorCancelled || code == 102 { return }
+        if !page.isFileURL {
+            // Dev-Server startet noch oder ist weg: warten und es alle 2 s wieder versuchen.
+            if !waitingForServer {
+                waitingForServer = true
+                log("resource", "\(pageLabel) nicht erreichbar: \(error.localizedDescription)")
+                delegate?.contentStyleChanged()
+            }
+            showProblem("Warte auf \(pageLabel) …", detail: "Läuft der Server? Die Kachel versucht es alle 2 s von selbst.", logIt: false)
+            let work = DispatchWorkItem { [weak self] in guard let self else { return }; self.load(self.page) }
+            retryWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 2, execute: work)
+            return
+        }
+        showProblem("„\(page.lastPathComponent)“ lässt sich nicht laden", detail: error.localizedDescription)
     }
 
     func webView(_ webView: WKWebView, didFail navigation: WKNavigation!, withError error: Error) {
+        let code = (error as NSError).code
+        if code == NSURLErrorCancelled || code == 102 { return }
         log("error", "Laden abgebrochen: \(error.localizedDescription)")
     }
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         log("error", "WebKit-Prozess abgestürzt — neu geladen")
-        load(file)
+        load(page)
     }
 
     /// Fehlerseite im Theme; die Kachel beobachtet die Datei weiter und lädt, sobald sie wieder da ist.
-    private func showProblem(_ title: String, detail: String) {
+    private func showProblem(_ title: String, detail: String, logIt: Bool = true) {
         let theme = ThemeStore.shared.theme
         let esc = { (s: String) in s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;") }
         let html = """
         <meta charset="utf-8"><body style="margin:0;height:100vh;display:grid;place-items:center;background:\(Self.css(theme.background));\
         color:\(Self.css(theme.foreground));font:13px -apple-system,sans-serif;text-align:center">\
         <div><div style="font-size:15px;margin-bottom:6px">\(esc(title))</div>\
-        <div style="opacity:.6">\(esc(detail))<br>\(esc((file.path as NSString).abbreviatingWithTildeInPath))</div></div>
+        <div style="opacity:.6">\(esc(detail))<br>\(esc(pageLabel))</div></div>
         """
         webView.loadHTMLString(html, baseURL: nil)
-        log("resource", "\(title): \(detail)")
+        if logIt { log("resource", "\(title): \(detail)") }
     }
 
-    private static func css(_ color: NSColor) -> String {
+    static func css(_ color: NSColor) -> String {
         let c = color.usingColorSpace(.sRGB) ?? color
         return String(format: "#%02x%02x%02x", Int(round(c.redComponent * 255)), Int(round(c.greenComponent * 255)), Int(round(c.blueComponent * 255)))
     }
@@ -552,7 +623,8 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
         guard let url = action.request.url else { decisionHandler(.cancel); return }
         if action.targetFrame?.isMainFrame == true { historyStep = action.navigationType == .backForward }
         if action.shouldPerformDownload { decisionHandler(.download); return }
-        if url.scheme == LocalFolderServer.scheme || url.scheme == "about" || url.scheme == "blob" || url.scheme == "data" {
+        if url.scheme == LocalFolderServer.scheme || url.scheme == "about" || url.scheme == "blob" || url.scheme == "data"
+            || Self.isLocalWeb(url) {
             decisionHandler(.allow); return
         }
         if url.isFileURL {
@@ -614,7 +686,7 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
     func webView(_ webView: WKWebView, createWebViewWith configuration: WKWebViewConfiguration,
                  for action: WKNavigationAction, windowFeatures: WKWindowFeatures) -> WKWebView? {
         guard let url = action.request.url else { return nil }
-        if url.scheme == LocalFolderServer.scheme || url.isFileURL {
+        if url.scheme == LocalFolderServer.scheme || url.isFileURL || Self.isLocalWeb(url) {
             webView.load(action.request)
         } else if action.navigationType == .linkActivated, ["http", "https", "mailto"].contains(url.scheme?.lowercased() ?? "") {
             NSWorkspace.shared.open(url)
@@ -631,7 +703,7 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
             return
         }
         let alert = NSAlert()
-        alert.messageText = webView.title.flatMap { $0.isEmpty ? nil : $0 } ?? file.lastPathComponent
+        alert.messageText = webView.title.flatMap { $0.isEmpty ? nil : $0 } ?? page.lastPathComponent
         alert.informativeText = message
         buttons.forEach { alert.addButton(withTitle: $0) }
         if let field { alert.accessoryView = field; alert.window.initialFirstResponder = field }

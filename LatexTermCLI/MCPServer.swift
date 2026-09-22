@@ -144,8 +144,11 @@ final class MCPServer {
         Vorschau (open_preview) = PDF/Bild neben dir: nach dem Kompilieren mit preview_look selbst prüfen, mit pane_action \
         sync <datei.tex>:<zeile> zeigen, wo eine Änderung gelandet ist. Schickt der Nutzer Stellen daraus („Aus der Vorschau …“), \
         stehen Seite, Quelltext-Zeile und ein Ausschnitt-Bild dabei.
-        Web (open_web) = eigene HTML-Seite neben dir: nach dem Schreiben mit web_look prüfen, ob sie aussieht wie gedacht \
-        und die Konsole sauber ist; Änderungen an HTML, CSS, JS oder Daten lädt die Kachel von selbst.
+        Web (open_web) = eigene HTML-Seite oder Dev-Server (http://localhost:PORT) neben dir: nach dem Schreiben mit web_look \
+        prüfen, ob sie aussieht wie gedacht und die Konsole sauber ist; interaktive Seiten mit web_act selbst durchklicken. \
+        Änderungen an HTML, CSS, JS oder Daten lädt die Kachel von selbst. Soll ein Klick auf deiner Seite dich erreichen \
+        (Auswahl, Knopf „erledigt“), ruft sie latexterm.send("…") auf — kommt als Prompt mit Herkunftszeile bei dir an. \
+        Schickt der Nutzer Stellen daraus („Aus der Web-Kachel …“), stehen Selektor, Quellzeile und ein Ausschnitt-Bild dabei.
         """)
         return lines.joined(separator: "\n")
     }
@@ -208,7 +211,16 @@ final class MCPServer {
              ["pane": paneProperty, "page": ["type": "integer", "description": "PDF: diese Seite statt der aktuellen (ab 1)"]], [], readOnly: true),
         tool("web_look", "Web-Kachel ansehen",
              "Zeigt dir, was eine Web-Kachel (open_web) gerade zeigt: den sichtbaren Ausschnitt als Bild, dazu Seitentext, Scrollposition, Seitengröße und die Konsole (console.*, JS-Fehler, fehlende Dateien). Nach dem Schreiben oder Ändern einer HTML-Seite aufrufen, um Layout und Fehler selbst zu prüfen, statt nach Screenshots zu fragen. Weiter unten: vorher pane_action scroll. Ohne pane: die von dir geöffnete, sonst die fokussierte oder einzige.",
-             ["pane": paneProperty], [], readOnly: true),
+             ["pane": paneProperty,
+              "full": ["type": "boolean", "description": "ganze Seite statt sichtbarem Ausschnitt (bis zu 4 Bilder untereinander)"]],
+             [], readOnly: true),
+        tool("web_act", "Web-Kachel bedienen",
+             "Bedient die Seite in einer Web-Kachel wie ein Nutzer und zeigt danach das Ergebnis (Bild, Schritt-Ergebnisse, neue Konsolenzeilen) — um eigene Mini-Apps und Formulare selbst durchzuklicken statt den Nutzer zu fragen. Schritte nacheinander, beim ersten Fehler Abbruch. Jeder Schritt: {\"do\": …} mit click {selector} · hover {selector} · type {selector?, text, append?} · press {key, selector?} (Enter schickt Formulare ab) · select {selector, value} · check {selector, value?} · wait {ms} · wait_for {selector, text?, ms?} · scroll {selector | y (Zahl oder \"bottom\")} · eval {js} (Ausdruck oder Funktionskörper mit return, darf await; Ergebnis als JSON). Die Ansicht des Nutzers bewegt sich mit. Nur für lokale Seiten und localhost.",
+             ["pane": paneProperty,
+              "steps": ["type": "array", "items": ["type": "object"] as JSON, "description": "Schritte, z. B. [{\"do\":\"type\",\"selector\":\"#name\",\"text\":\"Mats\"},{\"do\":\"click\",\"selector\":\"button[type=submit]\"}]"],
+              "look": ["type": "boolean", "description": "danach ein Bild (Default true)"],
+              "full": ["type": "boolean", "description": "Bild der ganzen Seite statt des Ausschnitts"]],
+             ["steps"]),
         tool("close_pane", "Kachel schließen",
              "Schließt eine Kachel (wie ⌘W). Kacheln, die du in dieser Session geöffnet hast, schließt du nach getaner Arbeit selbst. Fremde nur, wenn der Nutzer es ausdrücklich will (dann foreign: true). Arbeitende Sessions und laufende Programme bleiben offen.",
              ["pane": paneProperty, "foreign": ["type": "boolean", "description": "Kachel wurde nicht von dir geöffnet; nur auf ausdrücklichen Auftrag"]],
@@ -277,6 +289,7 @@ final class MCPServer {
         if name == "scratch_look" { return try scratchLook(a) }
         if name == "preview_look" { return try previewLook(a) }
         if name == "web_look" { return try webLook(a) }
+        if name == "web_act" { return try webAct(a) }
         return [["type": "text", "text": try call(name, a)]]
     }
 
@@ -549,17 +562,29 @@ final class MCPServer {
         throw ToolFailure("Mehrere Web-Kacheln offen (Kacheln \(webs.map { "\($0.index)" }.joined(separator: ", "))) — pane angeben.")
     }
 
-    /// Die Kachel antwortet sofort und schreibt Bild und `<png>.json`, sobald die Seite geladen ist und geruht hat.
     private func webLook(_ a: JSON) throws -> [JSON] {
         let pane = try webPane(a)
+        return try webResult(pane, command: { "look \($0)" + (a["full"] as? Bool == true ? " full" : "") })
+    }
+
+    private func webAct(_ a: JSON) throws -> [JSON] {
+        let pane = try webPane(a)
+        guard let steps = a["steps"] as? [Any], !steps.isEmpty else { throw ToolFailure("steps fehlt (Liste von Schritten)") }
+        var spec: JSON = ["steps": steps]
+        if let look = a["look"] as? Bool { spec["look"] = look }
+        if let full = a["full"] as? Bool { spec["full"] = full }
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: spec), as: UTF8.self)
+        return try webResult(pane, command: { "act \($0) \(json)" })
+    }
+
+    /// Die Kachel antwortet sofort und schreibt Bild(er) und `<png>.json`, sobald die Seite geladen ist und geruht hat.
+    private func webResult(_ pane: PaneInfo, command: (String) -> String) throws -> [JSON] {
         let file = (NSTemporaryDirectory() as NSString).appendingPathComponent("latexterm-web-\(UUID().uuidString).png")
         let metaFile = file + ".json"
-        defer {
-            try? FileManager.default.removeItem(atPath: file)
-            try? FileManager.default.removeItem(atPath: metaFile)
-        }
-        _ = try callPane(pane, "look \(file)")
-        let deadline = Date().addingTimeInterval(10)
+        var cleanup = [file, metaFile]
+        defer { cleanup.forEach { try? FileManager.default.removeItem(atPath: $0) } }
+        _ = try callPane(pane, command(file))
+        let deadline = Date().addingTimeInterval(40)
         var meta: JSON?
         while Date() < deadline {
             if let data = FileManager.default.contents(atPath: metaFile),
@@ -569,31 +594,60 @@ final class MCPServer {
             }
             Thread.sleep(forTimeInterval: 0.1)
         }
-        guard let meta else { throw ToolFailure("Web-Kachel \(pane.index) hat nach 10 s nichts geliefert (Seite hängt?).") }
+        guard let meta else { throw ToolFailure("Web-Kachel \(pane.index) hat nach 40 s nichts geliefert (Seite hängt?).") }
+        let images = meta["images"] as? [String] ?? []
+        cleanup += images
         var lines = ["Web-Kachel \(pane.index) (\(pane.id.prefix(8))): \(tilde(meta["file"] as? String) ?? "?")"
                      + ((meta["title"] as? String).map { " — „\($0)“" } ?? "")]
+        if meta["waiting"] as? Bool == true { lines.append("Server antwortet nicht — die Kachel versucht es alle 2 s.") }
+        if let steps = meta["act"] as? [JSON] {
+            lines.append("Schritte:")
+            for step in steps {
+                let ok = step["ok"] as? Bool == true
+                var line = "  \(ok ? "✓" : "✗") \(step["do"] as? String ?? "?")"
+                if let target = step["target"] as? String, !target.isEmpty { line += " \(target)" }
+                if let note = step["note"] as? String, !note.isEmpty { line += " — \(note)" }
+                lines.append(line)
+            }
+            if let navigated = meta["navigated"] as? String { lines.append("Seite gewechselt: \(navigated)") }
+            if let sends = meta["sends"] as? [String], !sends.isEmpty {
+                lines.append("Die Seite rief latexterm.send auf (bei web_act nicht zugestellt — beim echten Klick des Nutzers käme das bei dir an):")
+                lines += sends.map { "  „\($0.prefix(300))“" }
+            }
+        }
         if let page = meta["page"] as? JSON {
             let n = { (key: String) in (page[key] as? NSNumber)?.intValue ?? 0 }
-            var line = "Bild = sichtbarer Ausschnitt \(n("w"))×\(n("h")) CSS-px bei Scroll \(n("x")),\(n("y")); Seite \(n("sw"))×\(n("sh")) px"
+            var line: String
+            if meta["full"] as? Bool == true {
+                line = "Bild\(images.count > 1 ? "er (von oben nach unten)" : "") = ganze Seite \(n("sw"))×\(n("sh")) CSS-px"
+                if meta["truncated"] as? Bool == true { line += ", nach \(images.count) Bildern abgeschnitten" }
+            } else {
+                line = "Bild = sichtbarer Ausschnitt \(n("w"))×\(n("h")) CSS-px bei Scroll \(n("x")),\(n("y")); Seite \(n("sw"))×\(n("sh")) px"
+                if n("y") + n("h") + 4 < n("sh") { line += " — mehr: web_look full oder pane_action scroll" }
+            }
             if let zoom = meta["zoom"] as? Int, zoom != 100 { line += ", Zoom \(zoom) %" }
-            if n("y") + n("h") + 4 < n("sh") { line += " — weiter unten: pane_action scroll bottom / <px> / #id" }
             lines.append(line + ".")
         }
         if let problem = meta["problem"] as? String { lines.append("Problem: \(problem)") }
         if meta["loading"] as? Bool == true { lines.append("Seite lädt noch.") }
+        if let marks = meta["marks"] as? Int, marks > 0 { lines.append("Der Nutzer hat \(marks) Stelle(n) gemerkt, aber noch nicht gesendet.") }
         let log = meta["log"] as? [JSON] ?? []
+        let since = meta["logSince"] as? Bool == true
         if log.isEmpty {
-            lines.append("Konsole: leer.")
+            lines.append(since ? "Konsole: nichts Neues." : "Konsole: leer.")
         } else {
-            lines.append("Konsole (\(log.count), neueste zuletzt):")
+            let label = since ? "Konsole (neu seit den Schritten, " : "Konsole ("
+            lines.append(label + "\(log.count), neueste zuletzt):")
             lines += log.map { "  [\($0["level"] as? String ?? "?")] \($0["text"] as? String ?? "")" }
         }
         if let text = (meta["page"] as? JSON)?["text"] as? String, !text.isEmpty {
             lines.append("Seitentext:\n" + text)
         }
         var result: [JSON] = []
-        if let png = FileManager.default.contents(atPath: file), !png.isEmpty {
-            result.append(["type": "image", "data": png.base64EncodedString(), "mimeType": "image/png"])
+        for image in images {
+            if let png = FileManager.default.contents(atPath: image), !png.isEmpty {
+                result.append(["type": "image", "data": png.base64EncodedString(), "mimeType": "image/png"])
+            }
         }
         result.append(["type": "text", "text": lines.joined(separator: "\n")])
         return result

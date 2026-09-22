@@ -1,5 +1,29 @@
 # HISTORIE — LatexTerm
 
+## 2026-09-23 (spät) — Web-Kachel: Rückkanal, board, `web_act`, localhost
+
+**Anlass (Mats):** „bau alle drei Punkte perfekt“ — nach der Frage, was die Web-Kachel noch stärker macht.
+
+**Gebaut:** (1) Rückkanal wie die Vorschau: Seitenskript `WebPageKit` meldet Textauswahl und ⌥-Klick (Hover-Rahmen) auf
+ein Element; `PreviewMarkBar` wiederverwendet (⏎ merken, ⇧⌘⏎ senden, ⌥ = Kachel wählen), Stellen nummeriert über die Seite
+gezeichnet; gesendet werden Selektor, Quellzeile (`id=` oder Textanfang im HTML), Text, Notiz, Ausschnitt per
+`takeSnapshot(rect)` (CSS-px × pageZoom − Scroll). **board:** lokale Seiten (`latexterm-file:`) bekommen
+`latexterm.send(text, {submit})` — nur mit echter Nutzergeste (`navigator.userActivation`), Mengenbremse 1,5 s/12 pro
+Minute, Herkunftszeile, an die Eigentümer-Session (Claude: Briefkasten, sonst Einfügen), von Hand geöffnete Kacheln: einfügen.
+(2) `call act` + MCP `web_act`: Schritte click/hover/type/press/select/check/wait/wait_for/scroll/eval per
+`callAsyncJavaScript` (Welt der Seite), React-taugliches Setzen von `value`; Wächter, weil WebKit bei Seitenwechsel mitten im
+Skript nie antwortet. `web_look full`: `createPDF` → bis zu 4 Streifen. (3) `http(s)://localhost`/127.0.0.1 (auch kurz
+`localhost:5173`), Kachel wartet mit gelbem Chip und lädt alle 2 s neu, bis der Dev-Server da ist. Agenten-Teil in
+`WebContent+Agent.swift`.
+
+**Live geprüft:** `web_act` füllt Formular (type/select/check/Enter/wait_for/eval, alle ✓, neue Konsolenzeile), Link-Klick
+mit Seitenwechsel meldet sofort; `full` = 2 Streifen bis Seitenende; localhost vor dem Server geöffnet → wartet → lädt
+selbst; `latexterm.send` auf localhost nicht vorhanden. Von Mats: Board-Klick kam als Prompt an; Textstelle mit `div.box`,
+`index.html:10` und passendem Ausschnitt.
+
+**Lehre:** WebKit zählt Skripte der App (`callAsyncJavaScript`) als Nutzergeste — ein `web_act`-Klick auf einen Board-Knopf
+schickte der eigenen Session einen Prompt. Seitdem gehen Sends während `act` nur ins Ergebnis (`actSends`).
+
 ## 2026-09-23 — Web-Kachel „wie ein Browser“ + `web_look`
 
 **Anlass (Mats):** „die web kachel müssen wir noch perfektionieren“ — alle vier Pakete gewählt: Agent sieht die Seite,
