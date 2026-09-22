@@ -15,6 +15,69 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         WidgetRefresher.shared.start()   // Desktop-Widgets füttern (projekte widget), dann alle 5 min
     }
 
+    // MARK: Beenden mit laufender Windows-VM
+    //
+    // ⌘Q reißt eine laufende VMware-VM mit (`vmware-vmx` bekommt SIGTERM, Absender unklar; 21.09. und 22.09.2026
+    // nachgestellt — auch wenn Fusion die VM selbst gestartet hat). Statt Mats jedes Mal `/labor aus` abzuverlangen,
+    // hält die App die VM vor dem Beenden selbst an: `vm suspend` (Skill in der Werkstatt) friert sie auf der Platte
+    // ein, danach geht das Beenden weiter. Ohne laufende VM oder ohne das Werkzeug ändert sich nichts.
+    private let vmTool = NSHomeDirectory() + "/.claude/skills/vm/vm"
+    private var vmPanel: NSWindow?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard vmIsRunning(), FileManager.default.isExecutableFile(atPath: vmTool) else { return .terminateNow }
+        qlog.notice("Beenden: Windows-VM läuft — halte sie erst an")
+        showVMPanel()
+        let proc = Process()
+        proc.executableURL = URL(fileURLWithPath: vmTool)
+        proc.arguments = ["suspend"]
+        proc.environment = ProcessInfo.processInfo.environment.merging(
+            ["PATH": "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"]) { _, new in new }
+        proc.standardOutput = FileHandle.nullDevice
+        proc.standardError = FileHandle.nullDevice
+        var replied = false
+        let finish: (String) -> Void = { [weak self] why in
+            DispatchQueue.main.async {
+                guard !replied else { return }
+                replied = true
+                qlog.notice("Beenden: \(why, privacy: .public)")
+                self?.vmPanel?.orderOut(nil)
+                NSApp.reply(toApplicationShouldTerminate: true)
+            }
+        }
+        proc.terminationHandler = { p in finish(p.terminationStatus == 0 ? "VM angehalten" : "vm suspend rc=\(p.terminationStatus) — beende trotzdem") }
+        do { try proc.run() } catch { finish("vm suspend startete nicht (\(error.localizedDescription)) — beende trotzdem") }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 120) { finish("vm suspend nach 120 s nicht fertig — beende trotzdem") }
+        return .terminateLater
+    }
+
+    private func vmIsRunning() -> Bool {
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
+        p.arguments = ["-x", "vmware-vmx"]
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
+        do { try p.run() } catch { return false }
+        p.waitUntilExit()
+        return p.terminationStatus == 0
+    }
+
+    private func showVMPanel() {
+        let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 360, height: 84),
+                            styleMask: [.titled, .nonactivatingPanel], backing: .buffered, defer: false)
+        panel.title = "LatexTerm beenden"
+        panel.isFloatingPanel = true
+        let label = NSTextField(wrappingLabelWithString: "Windows-VM wird angehalten, damit sie den Neustart übersteht … (bis zu 30 s)")
+        label.frame = NSRect(x: 20, y: 40, width: 320, height: 34)
+        let spinner = NSProgressIndicator(frame: NSRect(x: 20, y: 12, width: 320, height: 16))
+        spinner.style = .bar; spinner.isIndeterminate = true; spinner.startAnimation(nil)
+        panel.contentView?.addSubview(label)
+        panel.contentView?.addSubview(spinner)
+        panel.center()
+        panel.orderFrontRegardless()
+        vmPanel = panel
+    }
+
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
         let items = QuickstartStore.shared.items

@@ -1017,3 +1017,10 @@ stille `return`-Pfade und `launch()` schluckte Anfragen auf schon gestarteten Ka
 Alert, `active` wird beim Fensterverlust gelöscht, Start auf laufender Kachel wandert in eine neue
 (`onLaunchElsewhere`), Logger `com.mats.LatexTerm` Kategorie `home`/`launch`. Lehre: nach einem
 Modal-Dialog nie still aussteigen — der User liest „nichts passiert“ als Bug.
+
+## 2026-09-22 — ⌘Q hält die Windows-VM vorher an
+⌘Q reißt eine laufende VMware-VM mit (`vmware-vmx` bekommt SIGTERM, die Fusion-App überlebt; Absender nicht
+ermittelbar — LatexTerm selbst schickt nur `kill(shellPid, SIGTERM)`, Unified Log ohne sudo leer). Statt der Regel
+„vor ⌘Q `/labor aus`": `applicationShouldTerminate` prüft `pgrep -x vmware-vmx`, zeigt ein kleines Panel und ruft
+`~/.claude/skills/vm/vm suspend` (Werkstatt), antwortet `.terminateLater` und beendet nach dem Anhalten (Fallback: rc≠0,
+Startfehler oder 120 s → trotzdem beenden). Ohne VM oder ohne Werkzeug unverändert. Logger-Kategorie `quickstart`.
