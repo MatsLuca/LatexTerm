@@ -631,7 +631,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     
     open func linefeed(source: Terminal) {
         // Preserve manual selection while output is streaming when mouse reporting is disabled.
-        if allowMouseReporting {
+        if allowMouseReporting && !selectsLocallyWhileReporting {
             selection.selectNone()
         }
     }
@@ -640,6 +640,28 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     /// terminal if it has requested the data.   This poses a problem for selection, so users
     /// need a way of toggling this behavior.
     public var allowMouseReporting: Bool = true
+
+    /// LatexTerm: Klick/Ziehen markiert immer lokal, auch wenn die App Maus-Tracking will — nur Rad/Trackpad
+    /// geht an die App. So scrollt `claude --tui fullscreen` mit dem Trackpad und Text bleibt markierbar.
+    /// ⌥ beim Klicken reicht Klicks doch an die App durch (Klick-Funktionen der TUI).
+    public var selectsLocallyWhileReporting: Bool = true
+
+    /// LatexTerm: Auswahl beim Loslassen (Ziehen, Doppel-/Dreifachklick) sofort in die Zwischenablage —
+    /// im Fullscreen-TUI verschwindet die Markierung beim nächsten Neuzeichnen, ⌘C käme oft zu spät.
+    public var copiesOnSelect: Bool = true
+
+    private func copySelectionIfWanted () {
+        guard copiesOnSelect, selection.active else { return }
+        let str = selection.getSelectedText()
+        guard !str.isEmpty else { return }
+        let clipboard = NSPasteboard.general
+        clipboard.clearContents()
+        clipboard.setString(str, forType: .string)
+    }
+
+    private func reportsButtons (_ event: NSEvent) -> Bool {
+        allowMouseReporting && (!selectsLocallyWhileReporting || event.modifierFlags.contains(.option))
+    }
 
     /// Controls how link tracking resolves hovered links:
     /// `.explicit` = OSC 8 only, `.implicit` = explicit + implicit fallback, `.none` = off.
@@ -2022,7 +2044,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
     }
     
     public override func mouseDown(with event: NSEvent) {
-        if allowMouseReporting && terminal.mouseMode.sendButtonPress() {
+        if reportsButtons(event) && terminal.mouseMode.sendButtonPress() {
             sharedMouseEvent(with: event)
             return
         }
@@ -2067,7 +2089,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
             terminalDelegate?.requestOpenLink(source: self, link: result.link, params: result.params)
             return
         }
-        if allowMouseReporting && terminal.mouseMode.sendButtonRelease() {
+        if reportsButtons(event) && terminal.mouseMode.sendButtonRelease() {
             sharedMouseEvent(with: event)
             return
         }
@@ -2077,6 +2099,9 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         //print ("Up at col=\(hit.col) row=\(hit.row) count=\(event.clickCount) selection.active=\(selection.active) didSelectionDrag=\(didSelectionDrag) ")
         #endif
         
+        if didSelectionDrag || event.clickCount >= 2 {
+            copySelectionIfWanted()
+        }
         didSelectionDrag = false
     }
     
@@ -2084,7 +2109,7 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         let displayBuffer = terminal.displayBuffer
         let mouseHit = calculateMouseHit(with: event)
         let hit = mouseHit.grid
-        if allowMouseReporting {
+        if reportsButtons(event) {
             if terminal.mouseMode.sendMotionEvent() {
                 let flags = encodeMouseEvent(with: event)
                 let screenRow = max (0, min (displayBuffer.rows - 1, hit.row - displayBuffer.yDisp))
@@ -2237,6 +2262,11 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
 
     public override func scrollWheel(with event: NSEvent) {
         if allowMouseReporting && terminal.mouseMode != .off {
+            // Die App verschiebt den Inhalt — eine lokale Auswahl zeigte danach auf fremden Text.
+            if selection.active {
+                selection.selectNone()
+                setNeedsDisplay(bounds)
+            }
             reportWheel(event)
             return
         }
