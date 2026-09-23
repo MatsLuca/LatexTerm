@@ -4,10 +4,12 @@ import { DemoVideo } from "./DemoVideo";
 import { COMP_H, COMP_W, LiveDemo } from "./LiveDemo";
 import { PolishedDemo } from "./PolishedDemo";
 import { FPS } from "./theme";
+import { ClipCompositions } from "./clips/ClipComposition";
 
 export const RemotionRoot: React.FC = () => {
   return (
     <>
+      <ClipCompositions />
       <Composition
         id="Polished"
         component={PolishedDemo}

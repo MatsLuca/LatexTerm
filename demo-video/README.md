@@ -1,54 +1,38 @@
 # demo-video
 
-Remotion sources for the README demo. Two compositions:
+The README clips (`docs/media/*.webp`) are **real screen recordings** of LatexTerm with real Claude
+sessions. Remotion only edits them: it drops the waiting while Claude thinks, moves the camera to what
+matters and adds a caption. Older compositions (`Polished`, `Live`, `Demo`) are the synthetic takes from July.
 
-- **`Live`** (the real one): a **hybrid cut of an actual screen recording** — a Claude
-  session inside LatexTerm orchestrates panes via the `latexterm` CLI, real agents do
-  real work, and Remotion adds the direction on top (camera zooms, freeze frames,
-  statement cards, cropping away statuslines/browser chrome).
-- **`Demo`**: an earlier fully-synthetic take — the terminal re-created in React with
-  real KaTeX. Kept as a reference for scripted/no-recording demos.
+## Pipeline
 
-## Commands
-
-```bash
-npm install
-npm run studio                                  # preview with timeline scrubbing
-npx remotion render Live out/live.mp4           # the hybrid cut
-# README GIF (gifski gives ~4x better size/quality than --codec=gif):
-ffmpeg -i out/live.mp4 -vf "fps=10,scale=756:-2" /tmp/f_%04d.png
-gifski --fps 10 --quality 65 -o out/live_readme.gif /tmp/f_*.png
+```
+rig/take.sh start NAME      record the demo window (rig/record, ScreenCaptureKit)
+                            + log pane states every 100 ms (rig/statelog.py)
+rig/mark.sh in:SCENE / out  stage directions into the same log
+rig/say.sh / input / sketch.py / wait.sh    act like a person: type, click, drag, draw, wait for Claude
+rig/take.sh stop
+rig/cut.py recordings/takes/NAME   → NAME.cuts.json: per scene the kept segments — `working` stretches
+                                     shrink to their start, pane births and the finished answer
+rig/sheet.sh TAKE FROM TO FPS OUT  contact sheet, for cut points inside a scene
+src/clips/specs.ts          one ClipSpec per clip: parts (take + scene/range), speed-ups, camera, captions
+npx remotion render clip-NAME out/clip-NAME.mp4
+rig/webp.sh NAME 1400 15 74 → docs/media/NAME.webp (animated WebP, loops on GitHub)
 ```
 
-## Re-recording the footage
+Proxies for Remotion: `ffmpeg -i recordings/takes/NAME.mov -c:v libx264 -crf 18 -g 15 -pix_fmt yuv420p
+public/takes/NAME.mp4` plus `NAME.cuts.json` next to it. `rig/record` and `rig/input` are built with
+`swiftc -O -o record record.swift` (same for `input`); they need Screen Recording and Accessibility for the
+terminal that runs them.
 
-`scripts/choreo.sh` re-runs the whole live take unattended: it locates the LatexTerm
-window (`scripts/winbounds.swift`), starts `screencapture -v` (150 s), opens three panes
-via the `latexterm` CLI (`yolo --model sonnet`), and two-stage-sends the showcase prompts
-("Create a landing page …", "Fix the failing tests", "Build a … snake game"). Demo
-folders live in `~/Documents/9_Temp/demo-{coffee,api,snake}`; `demo-api` needs its
-intentionally-failing test restored (`git checkout . && git clean -fd`) before a re-take.
-Output lands in `recordings/take1.mov`; transcode a 30 fps proxy + freeze stills into
-`public/` (see `src/LiveDemo.tsx` header comment for the coordinate space).
+## The stage
 
-## Where things live
+Recordings are public, so they run on a clean stage, not on anyone's real setup:
 
-- `src/LiveDemo.tsx` — the cut: shot list (source timestamps), camera targets (`CAM`),
-  statements. Comp is 1512×772 — the bottom 176pt of the 948pt-tall window (statuslines)
-  fall off at zoom 1.
-- `src/DemoVideo.tsx` + `src/components/` — the synthetic storyboard & its primitives.
-- `src/theme.ts` — colors/fonts, lifted from the app (`LatexTermApp.swift`).
-- `public/` — 30 fps proxy (`take1.mp4`) + freeze-frame stills; `recordings/` — raw takes
-  (git-ignore-worthy, ~150 MB each).
+- A separate Claude profile (`CLAUDE_CONFIG_DIR`, `claudeMdExcludes` for the real `~/.claude`), its own short
+  `CLAUDE.md` (short answers, formulas on their own `$$` line) and only the `latexterm` MCP server.
+- Demo projects outside any folder with its own `CLAUDE.md` (Claude loads ancestor `CLAUDE.md` files).
+- The demo runs in its own window (Window → Move Tab to New Window); `rig/newtab.sh` sets that up.
+- For Home, `projekte` points at a shim that runs the launcher with a demo `HOME` and `PROJEKTE_CONFIG`.
 
-## Notes
-
-- Rebranding (#31): names/strings appear in `LiveDemo.tsx`/`DemoVideo.tsx` title cards
-  and captions — one search-and-replace away.
-- The final README asset goes to `docs/demo.webp` (animated WebP — full 24-bit color,
-  unlike GIF's 256-color palette which bands/puddles on the desktop gradient). Encode:
-  `ffmpeg -i out/polished.mp4 -vf fps=25 f_%04d.png && img2webp -o docs/demo.webp -d 40 -lossy -q 88 -m 6 f_*.png`
-  (single-threaded, takes ~15 min — that's normal).
-- Footage quirks to keep in mind: the orchestrator pane (left) shows the session's German
-  status text; prompt zooms show the July-2026 "Fable 5 is back" banner; the Safari beat
-  is cropped below the bookmarks bar.
+Scenes are English; the app UI is German.

@@ -54,12 +54,14 @@ Please do not open a public issue with full exploit details before a fix is avai
   Anything that would widen the caller set (TCP, world-writable socket,
   privileged helper) must not be added without a confirmation UI.
 - **Web pane (by design, local only):** `latexterm new-pane --kind web --arg url=…` (or the Kachel
-  menu) shows a local HTML file in a `WKWebView`. Only `file:` paths are accepted; `http(s)` and
-  other schemes are refused, the page may read only its own folder, and a clicked external link
-  opens in the default browser instead of the pane. Reason: panes are opened by agents through the
-  control socket — a remote URL from a hook context would be a new channel to the outside. `send`
-  to a web pane only understands `reload` and `load <local path>`. Widening this to remote content
-  needs its own review.
+  menu) shows a local HTML file or a dev server on the local machine in a `WKWebView`. Accepted are
+  `file:` paths and `http(s)://` on `localhost`, `127.0.0.1`, `::1`, `0.0.0.0` and `*.localhost`; every
+  other host and scheme is refused. A local file may read only its own folder, and a clicked external
+  link opens in the default browser instead of the pane. Reason: panes are opened by agents through the
+  control socket — a remote URL from a hook context would be a new channel to the outside. A local
+  page can hand text to the agent session that owns the pane via `latexterm.send()` — only from a real
+  user gesture, rate-limited, never while an agent drives the page (`web_act`), and never from
+  `localhost` pages. Widening this to remote content needs its own review.
 - **MCP server `latexterm mcp` (by design):** a stdio child process of an agent session that speaks to
   the same control socket — it adds no new listener and no new caller class. It narrows rather than
   widens what the CLI can do: no `force` close, never typing into the caller's own pane, `run_in_pane`
