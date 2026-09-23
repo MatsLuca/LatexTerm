@@ -83,7 +83,7 @@ protocol PaneContentDelegate: AnyObject {
     /// Der Inhalt will selbst zugehen (wie ⌘W).
     func contentRequestsClose()
     /// Notification, wenn niemand hinsieht.
-    func contentRequestsAttention(title: String, body: String?)
+    func contentRequestsAttention(_ note: AttentionNote)
     /// Die Wunschform hat sich geändert (`layoutPreference`); das Layout ordnet höchstens einmal neu.
     func contentLayoutPreferenceChanged()
     /// Etwas Neues ist zu sehen, ohne dass der Nutzer es ausgelöst hat (Datei neu geladen, Agent hat

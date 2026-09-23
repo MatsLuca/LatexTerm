@@ -1499,12 +1499,12 @@ extension TerminalSplitView: PaneHost {
 
     /// Nur melden, wenn die Kachel gerade niemand ansieht — App im Hintergrund, Fenster
     /// hinten oder andere Kachel fokussiert (abschaltbar: „nur wenn unbeobachtet“).
-    func paneRequestsAttention(_ pane: any Pane, title: String, body: String?) {
+    func paneRequestsAttention(_ pane: any Pane, note: AttentionNote) {
 #if DEBUG
-        TerminalPane.statusLog("NOTIFY? title=\(title) appActive=\(NSApp.isActive) focused=\(isFocused(pane))")
+        TerminalPane.statusLog("NOTIFY? title=\(note.title) appActive=\(NSApp.isActive) focused=\(isFocused(pane))")
 #endif
         guard isUnobserved(pane) else { return }
-        SessionNotifier.shared.notify(paneID: pane.id, title: title, body: body)
+        SessionNotifier.shared.notify(paneID: pane.id, note: note)
     }
 
     func paneIsObserved(_ pane: any Pane) -> Bool { isObserved(pane) }

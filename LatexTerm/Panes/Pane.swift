@@ -106,9 +106,9 @@ protocol PaneHost: AnyObject {
     func paneRequestsJump(toPane index: Int)
     /// Akzent, Chip oder Titel haben sich geändert → Fenstertitel und Titelleiste nachziehen.
     func paneStyleChanged(_ pane: any Pane)
-    /// Die Kachel will Aufmerksamkeit (Titel und Text formuliert sie selbst); gemeldet wird nur,
-    /// wenn niemand hinsieht.
-    func paneRequestsAttention(_ pane: any Pane, title: String, body: String?)
+    /// Die Kachel will Aufmerksamkeit (Titel, Untertitel und Text formuliert sie selbst); gemeldet
+    /// wird nur, wenn niemand hinsieht.
+    func paneRequestsAttention(_ pane: any Pane, note: AttentionNote)
     /// Sieht gerade jemand diese Kachel an (App aktiv, Fenster vorn, Kachel fokussiert)?
     func paneIsObserved(_ pane: any Pane) -> Bool
     /// Die Wunschform hat sich geändert (Inhalt geladen: PDF hochkant, Bild im Querformat).

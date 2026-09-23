@@ -194,7 +194,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         }
     }
 
-    /// Ordnername der Kachel für Banner-Titel („Claude fertig · LatexTerm").
+    /// Ordnername der Kachel für den Banner-Untertitel („claude-werkstatt · 1:24").
     private var folderName: String {
         currentDirectory.map { ($0 as NSString).lastPathComponent }.flatMap { $0.isEmpty ? nil : $0 } ?? "Terminal"
     }
@@ -203,10 +203,11 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     /// Hook-Ereignis. Fehlende Teile füllt die Kachel selbst: eine Glocke in einer CC-Session
     /// heißt „Claude braucht Input", in einer nackten Shell nicht. Die Split-View meldet nur,
     /// wenn niemand hinsieht.
-    private func requestAttention(title: String?, body: String?) {
-        let fallback = sessionState != .none ? "\(agentName) braucht Input" : "Terminal-Glocke"
-        let detail = body ?? currentDirectory.map { ($0 as NSString).abbreviatingWithTildeInPath }
-        host?.paneRequestsAttention(self, title: title ?? fallback, body: detail)
+    /// Banner-Aufbau: Titel = was passiert ist, Untertitel = Ordner (+ Dauer), Text = worum es geht.
+    private func requestAttention(title: String?, duration: String? = nil, body: String?) {
+        let fallback = sessionState != .none ? "\(agentName) braucht dich" : "Terminal-Glocke"
+        let subtitle = [folderName, duration].compactMap { $0 }.joined(separator: " · ")
+        host?.paneRequestsAttention(self, note: AttentionNote(title: title ?? fallback, subtitle: subtitle, body: body))
     }
 
     private var usesClaudeIntegration = true
@@ -576,7 +577,13 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
                 let parts = text.components(separatedBy: ";")
                 guard parts.count >= 2, parts[0] == "notify" else { return }
                 let body = parts.count > 2 ? parts[2...].joined(separator: ";") : nil
-                self.requestAttention(title: parts[1], body: body)
+                // In einer Agenten-Session ist es Claudes eigener Kanal („Claude Code“ / englischer Text):
+                // Titel wie beim Hook, Text übersetzt. Andere Programme sprechen für sich.
+                if self.sessionState != .none {
+                    self.requestAttention(title: nil, body: AttentionNote.agentMessage(body))
+                } else {
+                    self.requestAttention(title: parts[1], body: body)
+                }
             }
         }
 
@@ -755,17 +762,16 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
             lastHookStatusAt = Date()
             sessionState = .awaitingInput
             statusDetail = hook.detail
-            requestAttention(title: "\(agentName) braucht dich · \(folderName)", body: hook.detail ?? turnPrompt)
+            requestAttention(title: "\(agentName) braucht dich", body: AttentionNote.agentMessage(hook.detail))
         case "done":
             lastHookStatusAt = Date()
             let seconds = hook.seconds.map(Double.init)
                 ?? turnStartedAt.map { Date().timeIntervalSince($0) } ?? 0
             let steps = hook.steps ?? turnSteps
-            let prompt = turnPrompt
             turnStartedAt = nil; turnSteps = 0; turnPrompt = nil
             sessionState = .none           // räumt statusDetail im didSet mit ab
             finishTurn(reason: hook.fields["r"] ?? "answer", seconds: seconds, steps: steps,
-                       prompt: prompt, answer: hook.fields["a"])
+                       answer: hook.fields["a"])
         case "ready":
             // SessionStart-Hook: Session steht, wartet auf die erste Eingabe. Hebt nur den
             // Home-Vorhang (launch) — kein Zustand, keine Pille, keine Notification. Erneuert
@@ -812,7 +818,9 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
 
     /// Turn-Ende: Nachklang-Pille je nach Grund, Banner nur wenn es sich lohnt — Abbruch (Ctrl+C)
     /// bleibt stumm, Fertig unter 2 s (Slash-Command, Einzeiler) auch. Fehler melden immer.
-    private func finishTurn(reason: String, seconds: Double, steps: Int, prompt: String?, answer: String?) {
+    /// Banner ohne Prompt-Zitat (war oft `<task-notification>` o. ä.) und ohne Schrittzahl: Titel, Ordner
+    /// mit Dauer, erster Satz der Antwort.
+    private func finishTurn(reason: String, seconds: Double, steps: Int, answer: String?) {
         let theme = ThemeStore.shared.theme
         let clock = Self.clock(seconds)
         let stepsPart = steps > 0 ? " · " + Self.stepsText(steps) : ""
@@ -822,19 +830,15 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
                             tone: theme.dim)
         case "error", "refusal":
             let label = reason == "error" ? "Fehler" : "abgelehnt"
+            let title = reason == "error" ? "\(agentName) meldet einen Fehler" : "\(agentName) hat abgelehnt"
             showTurnSummary(long: "⚠ \(label) · \(clock)\(stepsPart)", short: "⚠ \(label)", glyph: "⚠",
                             tone: theme.red)
-            let body = [prompt.map { "„\($0)“" }, answer].compactMap { $0 }.joined(separator: "\n")
-            requestAttention(title: "\(agentName): \(label) · \(folderName)", body: body.isEmpty ? nil : body)
+            requestAttention(title: title, duration: clock, body: answer)
         default:
             showTurnSummary(long: "✓ fertig · \(clock)\(stepsPart)", short: "✓ \(clock)", glyph: "✓",
                             tone: theme.green)
             guard seconds >= 2 else { return }
-            var lines: [String] = []
-            if let prompt { lines.append("„\(prompt)“") }
-            lines.append(clock + stepsPart)
-            if let answer { lines.append(answer) }
-            requestAttention(title: "\(agentName) fertig · \(folderName)", body: lines.joined(separator: "\n"))
+            requestAttention(title: "\(agentName) ist fertig", duration: clock, body: answer)
         }
     }
 
@@ -1183,7 +1187,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
 #if DEBUG
             Self.statusLog("COMMIT \(old) → \(sessionState)")
 #endif
-            if old == .working && sessionState == .awaitingInput { requestAttention(title: "\(agentName) braucht Input", body: nil) }
+            if old == .working && sessionState == .awaitingInput { requestAttention(title: "\(agentName) braucht dich", body: nil) }
         } else {
             // Scans sind output-getrieben — nach Claudes letztem Redraw kommt
             // keiner mehr von allein. Zum Bestätigen selbst nachlegen.

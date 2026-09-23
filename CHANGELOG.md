@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+- **Notifications (23.09.).** Banners read as title (what happened), subtitle (folder · duration) and one or two clean
+  sentences from the answer — no quoted prompt, no Markdown or code, no mid-word cuts; Claude's English permission
+  messages are translated. Build number bumped so Notification Center picks up the new app icon.
+
 ### Added
 - **Kachel-Layout (23.09.).** Panes are arranged by what they show instead of an equal-size grid: each pane kind
   states a preferred shape (a PDF page stays portrait, an image keeps its format, a terminal keeps ~80 columns), and

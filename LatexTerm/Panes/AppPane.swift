@@ -79,8 +79,8 @@ final class AppPane: Pane, PaneContentDelegate {
 
     func contentRequestsClose() { host?.paneRequestsClose(self) }
 
-    func contentRequestsAttention(title: String, body: String?) {
-        host?.paneRequestsAttention(self, title: title, body: body)
+    func contentRequestsAttention(_ note: AttentionNote) {
+        host?.paneRequestsAttention(self, note: note)
     }
 
     func contentLayoutPreferenceChanged() { host?.paneLayoutPreferenceChanged(self) }

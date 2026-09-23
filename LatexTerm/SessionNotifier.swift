@@ -23,7 +23,7 @@ final class SessionNotifier: NSObject, UNUserNotificationCenterDelegate {
         UNUserNotificationCenter.current().delegate = self
     }
 
-    func notify(paneID: UUID, title: String, body: String?) {
+    func notify(paneID: UUID, note: AttentionNote) {
         let cockpit = CockpitSettings.shared
         guard cockpit.notificationsEnabled else { return }
         if let last = lastPost[paneID], Date().timeIntervalSince(last) < cockpit.notificationCooldown {
@@ -35,9 +35,11 @@ final class SessionNotifier: NSObject, UNUserNotificationCenterDelegate {
         lastPost[paneID] = Date()
         let center = UNUserNotificationCenter.current()
         let post = {
+            let note = note.cleaned
             let content = UNMutableNotificationContent()
-            content.title = title
-            if let body { content.body = body }
+            content.title = note.title
+            if let subtitle = note.subtitle { content.subtitle = subtitle }
+            if let body = note.body { content.body = body }
             content.sound = .default
             content.threadIdentifier = paneID.uuidString   // Banner derselben Kachel stapeln sich
             center.add(UNNotificationRequest(identifier: paneID.uuidString,

@@ -19,6 +19,7 @@ run_test codex-launch LatexTerm/CodexLaunchReadiness.swift
 run_test home-session-scope LatexTerm/HomeSessionScope.swift
 run_test launcher-search-focus LatexTerm/LauncherSearchField.swift
 run_test launcher-palette-input LatexTerm/LauncherSearch.swift LatexTerm/LauncherSearchField.swift LatexTerm/LauncherPalette.swift LatexTerm/Theme/LineStyle.swift LatexTerm/Theme/LineControls.swift
+run_test attention-note LatexTerm/AttentionNote.swift
 run_test vm-quit LatexTerm/VMQuitGuard.swift
 run_test agent-session LatexTerm/AgentSession.swift
 run_test control-router LatexTerm/Control/ControlProtocol.swift LatexTerm/Control/PaneLayoutTree.swift LatexTerm/Control/ControlRouter.swift

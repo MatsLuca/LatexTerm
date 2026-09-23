@@ -47,7 +47,7 @@ def request_for(event, pane):
     elif name == "PostToolUse":
         text = "working;" + tool
     elif name == "Stop":
-        text = "done;r=answer;a=" + clean(event.get("last_assistant_message"), 120)
+        text = "done;r=answer;a=" + clean(event.get("last_assistant_message"), 190)
     elif name == "Interrupt":
         text = "done;r=aborted"
     elif name == "SessionEnd":
