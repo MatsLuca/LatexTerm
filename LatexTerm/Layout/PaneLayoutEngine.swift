@@ -290,6 +290,9 @@ enum AutoLayout {
 
     /// Breite der Nebenspalte (Anteil am Block) und Höhen der Begleiter darin: der Kandidat, bei dem
     /// die Begleiter ihrer Wunschform am nächsten kommen und niemand unter seine Mindestgröße fällt.
+    /// Ab zwei Begleitern zählt die Fläche mehr als die Form (Live-Test 23.09.: drei Begleiter drückten
+    /// die Spalte auf 25 %, weil ein hochkantes PDF in einem Drittel der Höhe nur schmal „passt“) —
+    /// die Spalte zieht dann kräftig Richtung 45 %, die Form zählt je Begleiter nur anteilig.
     /// Deterministisch: bei Gleichstand gewinnt der schmalere Anteil.
     static func chooseSplit(anchor: LayoutPreference, companions: [LayoutPreference],
                             width: Double, height: Double, gap: Double) -> (fraction: Double, heights: [Double]) {
@@ -308,13 +311,16 @@ enum AutoLayout {
             let ideal = wanted.map { $0 ?? fallback }
             let scale = available / ideal.reduce(0, +)
             let heights = ideal.map { $0 * scale }
-            var cost = 0.25 * abs(f - 0.45)
+            let pull = k >= 2 ? 4.0 : 0.25
+            let formWeight = k >= 2 ? 1.0 / Double(k) : 1
+            var cost = pull * abs(f - 0.45)
             for (pref, h) in zip(companions, heights) {
-                if let aspect = pref.aspect { cost += abs(log((columnWidth / h) / aspect)) }
+                if let aspect = pref.aspect { cost += formWeight * abs(log((columnWidth / h) / aspect)) }
                 cost += deficit(columnWidth, pref.minWidth) / 50 + deficit(h, pref.minHeight) / 50
             }
             cost += deficit(anchorWidth, anchor.minWidth) / 50
-            if let comfort = anchor.comfortWidth { cost += deficit(anchorWidth, comfort) / 400 }
+            // Bequemlichkeit der Session (80 Spalten) nur bei einem Begleiter; ab zwei gilt ihr Minimum.
+            if k < 2, let comfort = anchor.comfortWidth { cost += deficit(anchorWidth, comfort) / 400 }
             if best == nil || cost < best!.cost - 1e-9 { best = (cost, f, heights) }
         }
         guard let best else { return (0.45, Array(repeating: 1, count: k)) }

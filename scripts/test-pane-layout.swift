@@ -132,6 +132,19 @@ struct PaneLayoutTests {
         let column = slots.filter { $0.pane != claude }
         check(Set(column.map { $0.frame.minX }).count == 1, "Begleiter in einer Spalte")
         check(column.map(\.pane) == [preview, webID, pad], "Begleiter in Öffnungsreihenfolge")
+        // Live-Befund 23.09.: drei Begleiter dürfen die Spalte nicht schmaler machen als einer.
+        let narrow = LayoutPreference(aspect: nil, minWidth: 740, minHeight: 200, comfortWidth: 980)
+        let one = AutoLayout.build([LayoutItem(id: claude, companionOf: nil, preference: narrow),
+                                    LayoutItem(id: preview, companionOf: claude, preference: pdf)], width: 1512, height: 880, gap: 8)!
+        let three = AutoLayout.build([LayoutItem(id: claude, companionOf: nil, preference: narrow),
+                                      LayoutItem(id: preview, companionOf: claude, preference: pdf),
+                                      LayoutItem(id: webID, companionOf: claude, preference: web),
+                                      LayoutItem(id: pad, companionOf: claude, preference: .flexible)], width: 1512, height: 880, gap: 8)!
+        let small = CGRect(x: 0, y: 0, width: 1512, height: 880)
+        let w1 = LayoutGeometry.rect(of: preview, in: one, bounds: small)!.width
+        let w3 = LayoutGeometry.rect(of: preview, in: three, bounds: small)!.width
+        check(w3 >= w1 && w3 >= 1512 * 0.38 && LayoutGeometry.rect(of: claude, in: three, bounds: small)!.width >= 740,
+              "drei Begleiter: Spalte \(w3) (einer: \(w1)), Session ≥ Minimum")
 
         // Deterministisch.
         check(AutoLayout.build(items, width: 1728, height: 1079, gap: 8) == root, "deterministisch")

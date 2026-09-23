@@ -580,6 +580,9 @@ final class TerminalSplitView: NSView {
 
     private func removePane(_ pane: any Pane) {
         guard let idx = panes.firstIndex(where: { $0 === pane }) else { return }
+        // Nur wer die geschlossene Kachel fokussiert hatte, bekommt den Nachbarn — schließt ein Agent eine
+        // andere Kachel, bleibt die Tastatur, wo Mats gerade tippt (Live-Befund 23.09.).
+        let hadFocus = isFocused(pane) || panes.first(where: { isFocused($0) }) == nil
         // Auch wenn eine ANDERE (verdeckte) Kachel stirbt: das Grid darunter ändert
         // sich — Zoom beenden, damit der Nutzer den neuen Zustand sieht.
         setZoomedPane(nil)
@@ -597,7 +600,7 @@ final class TerminalSplitView: NSView {
         guard !panes.isEmpty else { window?.close(); return }
         updateFocusBorders()
         relayout(animated: true)
-        window?.makeFirstResponder(panes[min(idx, panes.count - 1)].focusTarget)
+        if hadFocus { window?.makeFirstResponder(panes[min(idx, panes.count - 1)].focusTarget) }
     }
 
     /// Rahmen-Regeln: Fokus-Abstufung nur im sichtbaren Grid (≥2 Kacheln, kein
