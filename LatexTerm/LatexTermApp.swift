@@ -345,12 +345,6 @@ struct LatexTermApp: App {
                     .keyboardShortcut(.return, modifiers: .command)
                 // Kachel-Layout: gezogene Trennlinien und Agenten-Anordnung verwerfen.
                 Button("Automatisch anordnen") { paneCommand(.rearrange) }
-                // ⌘1–9 springen seit Stufe 2 zur Kachel n; Auffüllen bleibt hier.
-                Menu("Auffüllen auf") {
-                    ForEach(2...6, id: \.self) { n in
-                        Button("\(n) Kacheln") { paneCommand(.fill(n)) }
-                    }
-                }
                 Button("Suchen…") { paneCommand(.find) }
                     .keyboardShortcut("f", modifiers: .command)
                 Divider()

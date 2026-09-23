@@ -145,7 +145,6 @@ final class TerminalSplitView: NSView {
             case .zoom: self.paneRequestsZoom(pane)
             case .find: _ = pane.handle(.find)
             case .rearrange: self.rearrangeAutomatically()
-            case .fill(let count): self.ensurePaneCount(count)
             }
         }
 
@@ -599,11 +598,6 @@ final class TerminalSplitView: NSView {
             self.reveal(pane)
             self.window?.makeFirstResponder(pane.focusTarget)
         }
-    }
-
-    /// Menü „Kacheln auffüllen“: auf `n` Kacheln auffüllen – nur erweitern, nie schließen.
-    func ensurePaneCount(_ n: Int) {
-        while panes.count < n { addPane() }
     }
 
     /// ⌘1…9: zur Kachel `n` in Lesereihenfolge springen (verdeckte Reiter kommen nach vorn).

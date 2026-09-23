@@ -281,8 +281,6 @@ enum PaneCommand: Equatable {
     case split, close, zoom, find
     /// Anordnung zurück an die Automatik (Kachel-Layout, 23.09.2026).
     case rearrange
-    /// Auf so viele Kacheln auffüllen (bis 23.09. auf ⌘1–9, jetzt Menü).
-    case fill(Int)
 }
 
 extension Notification.Name {
