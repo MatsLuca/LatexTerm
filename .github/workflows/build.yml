@@ -10,12 +10,12 @@ on:
 jobs:
   build:
     name: Build (macOS, Release, unsigned)
-    runs-on: macos-15
+    runs-on: macos-26
     steps:
       - uses: actions/checkout@v4
 
-      - name: Select latest Xcode
-        run: sudo xcode-select -switch /Applications/Xcode.app && xcodebuild -version
+      - name: Xcode version
+        run: xcodebuild -version
 
       - name: Install Metal Toolchain
         run: xcodebuild -downloadComponent MetalToolchain || echo "Metal toolchain already present or not required"

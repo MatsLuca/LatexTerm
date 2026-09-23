@@ -178,8 +178,8 @@ final class ScratchpadContent: PaneContent {
     }
 
     private static func rect(_ r: NSRect) -> [String: Double] {
-        ["x": (r.minX * 10).rounded() / 10, "y": (r.minY * 10).rounded() / 10,
-         "w": (r.width * 10).rounded() / 10, "h": (r.height * 10).rounded() / 10]
+        func tenth(_ v: CGFloat) -> Double { (Double(v) * 10).rounded() / 10 }
+        return ["x": tenth(r.minX), "y": tenth(r.minY), "w": tenth(r.width), "h": tenth(r.height)]
     }
 
     private static func rectOrNull(_ r: NSRect?) -> Any {
