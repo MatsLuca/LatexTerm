@@ -5,8 +5,8 @@ import AppKit
 final class ScratchpadView: NSView {
     let canvas = ScratchpadCanvas()
     private let toolbar = ScratchpadToolbar()
-    private let note = NSTextField(labelWithString: "")
-    private var noteTimer: Timer?
+    /// Kurzer Hinweis — derselbe Baustein wie in Vorschau/Web (LineToast).
+    private let note = PreviewPill()
     /// ➤ in der Werkzeugleiste (true = mit ⌥: Ziel immer auswählen).
     var onSend: ((Bool) -> Void)?
 
@@ -21,11 +21,6 @@ final class ScratchpadView: NSView {
         toolbar.canvas = canvas
         toolbar.onSend = { [weak self] choose in self?.onSend?(choose) }
         canvas.onStateChange = { [weak toolbar] in toolbar?.needsDisplay = true }
-        note.wantsLayer = true
-        note.layer?.cornerRadius = 6
-        note.alignment = .center
-        note.font = NSFont.systemFont(ofSize: 12, weight: .medium)
-        note.isHidden = true
         addSubview(note)
     }
 
@@ -34,23 +29,7 @@ final class ScratchpadView: NSView {
 
     /// Kurzer Hinweis unten mittig (Senden ging/ging nicht), blendet sich selbst aus.
     func showNote(_ text: String) {
-        noteTimer?.invalidate()
-        note.stringValue = "  \(text)  "
-        note.sizeToFit()
-        layoutNote()
-        note.alphaValue = 1
-        note.isHidden = false
-        noteTimer = Timer.scheduledTimer(withTimeInterval: 2.4, repeats: false) { [weak self] _ in
-            guard let self else { return }
-            NSAnimationContext.runAnimationGroup({ $0.duration = 0.3; self.note.animator().alphaValue = 0 },
-                                                 completionHandler: { [weak self] in self?.note.isHidden = true })
-        }
-    }
-
-    private func layoutNote() {
-        let size = NSSize(width: min(note.fittingSize.width + 8, bounds.width - 16), height: 24)
-        note.frame = NSRect(x: (bounds.width - size.width) / 2, y: bounds.height - size.height - 12,
-                            width: size.width, height: size.height)
+        note.flash(text, hold: 2.4)
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) not used") }
@@ -58,8 +37,7 @@ final class ScratchpadView: NSView {
     func apply(_ theme: TerminalTheme) {
         canvas.apply(theme)
         toolbar.apply(theme)
-        note.textColor = theme.foreground.withAlphaComponent(1)
-        note.layer?.backgroundColor = theme.badgeBackground.withAlphaComponent(0.95).cgColor
+        note.applyTheme(theme)
     }
 
     override func setFrameSize(_ newSize: NSSize) {
@@ -69,7 +47,7 @@ final class ScratchpadView: NSView {
         toolbar.frame = toolbar.vertical
             ? NSRect(x: margin, y: margin, width: thickness, height: length)
             : NSRect(x: margin, y: margin, width: length, height: thickness)
-        if !note.isHidden { layoutNote() }
+        note.layoutIn(bounds)
     }
 }
 
@@ -713,7 +691,7 @@ final class ScratchpadToolbar: NSView {
     override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
 
     func apply(_ theme: TerminalTheme) {
-        background = theme.badgeBackground
+        background = theme.background.withAlphaComponent(LineStyle.groundAlpha)
         foreground = theme.foreground.withAlphaComponent(1)
         dim = theme.dim
         faint = theme.faint
@@ -812,19 +790,25 @@ final class ScratchpadToolbar: NSView {
 
     override func draw(_ dirtyRect: NSRect) {
         guard let canvas else { return }
-        let pill = NSBezierPath(roundedRect: bounds.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
-        background.setFill(); pill.fill()
-        faint.setStroke(); pill.lineWidth = 1; pill.stroke()
+        // Schwebe-Grund (Stil „Linie“): Fläche ohne Rand; gewähltes Werkzeug = Strich an der Außenkante.
+        let ground = NSBezierPath(roundedRect: bounds, xRadius: LineStyle.groundRadius, yRadius: LineStyle.groundRadius)
+        background.setFill(); ground.fill()
 
         for (index, (item, rect)) in zip(Self.items, frames).enumerated() {
-            let highlight = NSBezierPath(roundedRect: rect.insetBy(dx: 2, dy: 2), xRadius: 6, yRadius: 6)
+            let highlight = NSBezierPath(roundedRect: rect.insetBy(dx: 2, dy: 2), xRadius: LineStyle.hoverRadius, yRadius: LineStyle.hoverRadius)
             if hovered == index, !isDivider(item) {
-                foreground.withAlphaComponent(0.08).setFill(); highlight.fill()
+                foreground.withAlphaComponent(LineStyle.hover).setFill(); highlight.fill()
             }
             switch item {
             case .tool(let tool):
                 let selected = canvas.tool == tool
-                if selected { foreground.withAlphaComponent(0.16).setFill(); highlight.fill() }
+                if selected {
+                    let mark = vertical
+                        ? NSRect(x: rect.minX - 2, y: rect.minY + 5, width: LineStyle.underline, height: rect.height - 10)
+                        : NSRect(x: rect.minX + 5, y: rect.maxY, width: rect.width - 10, height: LineStyle.underline)
+                    ThemeStore.shared.accentColor.setFill()
+                    NSBezierPath(roundedRect: mark, xRadius: 1, yRadius: 1).fill()
+                }
                 drawSymbol(symbol(for: tool), in: rect, color: selected ? foreground : dim)
             case .color(let i):
                 let dot = NSBezierPath(ovalIn: centered(14, in: rect))

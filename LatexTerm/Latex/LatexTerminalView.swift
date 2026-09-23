@@ -62,6 +62,55 @@ final class LatexTerminalView: LocalProcessTerminalView {
     /// Siehe Accessibility-Block weiter unten.
     private var lastAXInsertedValue: String = ""
 
+    /// ⌘F-Suchleiste im Stil „Linie“ (23.09.2026) — derselbe Baustein wie in Vorschau/Web, statt der AppKit-Leiste
+    /// des SwiftTerm-Forks (Vibrancy, Checkboxen). Sucht live beim Tippen, ⏎/⇧⏎ springen, Esc schließt.
+    private lazy var lineFind: PreviewFindBar = {
+        let bar = PreviewFindBar(placeholder: "Im Terminal suchen")
+        bar.addToggle("Aa", tooltip: "Groß-/Kleinschreibung beachten") { [weak self] on in self?.findOptions.caseSensitive = on; self?.refind() }
+        bar.addToggle(".*", tooltip: "Regulärer Ausdruck") { [weak self] on in self?.findOptions.regex = on; self?.refind() }
+        bar.addToggle("Wort", tooltip: "Nur ganze Wörter") { [weak self] on in self?.findOptions.wholeWord = on; self?.refind() }
+        bar.onChange = { [weak self] _ in self?.refind() }
+        bar.onSearch = { [weak self] text, backwards in self?.runFind(text, backwards: backwards) }
+        bar.onClose = { [weak self] in self?.hideLineFind() }
+        bar.applyTheme(ThemeStore.shared.theme)
+        addSubview(bar)
+        return bar
+    }()
+    private var findOptions = SearchOptions()
+
+    /// ⌘F: Leiste zeigen, mit Auswahl vorbelegt.
+    func showLineFind() {
+        let selected = getSelection() ?? ""
+        lineFind.show(text: selected.contains("\n") ? "" : selected)
+        lineFind.applyTheme(ThemeStore.shared.theme)
+        window?.makeFirstResponder(lineFind.field)
+        refind()
+    }
+
+    private func hideLineFind() {
+        lineFind.hide()
+        clearSearch()
+        window?.makeFirstResponder(self)
+    }
+
+    private func refind() {
+        let text = lineFind.field.stringValue
+        clearSearch()
+        guard !text.isEmpty else { lineFind.setCount(""); return }
+        lineFind.setCount(findPrevious(text, options: findOptions) ? "" : "keine Treffer")
+    }
+
+    private func runFind(_ text: String, backwards: Bool) {
+        guard !text.isEmpty else { return }
+        let found = backwards ? findPrevious(text, options: findOptions) : findNext(text, options: findOptions)
+        lineFind.setCount(found ? "" : "keine Treffer")
+    }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        if !lineFind.isHidden { lineFind.layoutIn(bounds) }
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         notifyUpdateChanges = true
@@ -202,7 +251,7 @@ final class LatexTerminalView: LocalProcessTerminalView {
             // unsichtbare Leiste. Die Leiste (Fork: TerminalFindBarView) übernimmt Enter/Esc.
             let fr = window?.firstResponder
             let focused = (fr === self) || ((fr as? NSView)?.isDescendant(of: self) ?? false)
-            if focused { showFindInterface(); return true }
+            if focused { showLineFind(); return true }
             return super.performKeyEquivalent(with: event)
         }
         // ⌘⇧+/−/0 gehören dem Zeilenabstand-Menü. Shift ist nur beim `=`-Zeichen

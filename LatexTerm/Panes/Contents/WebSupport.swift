@@ -199,7 +199,7 @@ enum WebPageKit {
               b.className = '__lt-mark';
               b.textContent = m.n;
               b.style.cssText = 'position:absolute;pointer-events:none;z-index:2147483647;left:' + Math.max(0, r.x - 19) + 'px;top:' + r.y
-                + 'px;min-width:15px;height:15px;font:bold 10px -apple-system,sans-serif;line-height:15px;text-align:center;color:#000;border-radius:3px;background:' + a;
+                + 'px;min-width:15px;height:15px;padding:0 3px;box-sizing:border-box;font:bold 10px "JetBrains Mono NL",ui-monospace,monospace;line-height:15px;text-align:center;color:#000;border-radius:3px;background:' + a;
               document.documentElement.appendChild(b);
             }
           });

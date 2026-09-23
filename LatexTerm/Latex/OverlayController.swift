@@ -559,6 +559,7 @@ final class OverlayController {
             "fontPx": fontPx,
             "cellH": cell.height,
             "fg": Self.css(fg),
+            "err": Self.css(ThemeStore.shared.theme.red),
             "userScale": scale,
             "sans": settings.formulaSans
         ])

@@ -6,11 +6,15 @@ enum AppFonts {
 }
 final class ThemeStore {
     static let shared = ThemeStore()
+    static let didChange = Notification.Name("ThemeStoreDidChange")
     let theme = TerminalTheme()
+    let accentColor = NSColor.controlAccentColor
 }
 struct TerminalTheme {
     let background = NSColor.windowBackgroundColor, foreground = NSColor.labelColor
     let dim = NSColor.secondaryLabelColor, faint = NSColor.tertiaryLabelColor
+    let red = NSColor.systemRed, green = NSColor.systemGreen, yellow = NSColor.systemYellow
+    let blue = NSColor.systemBlue, violet = NSColor.systemPurple, cyan = NSColor.systemTeal
 }
 extension NSColor {
     func lightened(by amount: CGFloat) -> NSColor { blended(withFraction: amount, of: .white) ?? self }

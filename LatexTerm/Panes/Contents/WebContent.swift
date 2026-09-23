@@ -621,7 +621,7 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
         let esc = { (s: String) in s.replacingOccurrences(of: "&", with: "&amp;").replacingOccurrences(of: "<", with: "&lt;") }
         let html = """
         <meta charset="utf-8"><body style="margin:0;height:100vh;display:grid;place-items:center;background:\(Self.css(theme.background));\
-        color:\(Self.css(theme.foreground));font:13px -apple-system,sans-serif;text-align:center">\
+        color:\(Self.css(theme.foreground));font:13px 'JetBrains Mono NL',ui-monospace,monospace;text-align:center">\
         <div><div style="font-size:15px;margin-bottom:6px">\(esc(title))</div>\
         <div style="opacity:.6">\(esc(detail))<br>\(esc(pageLabel))</div></div>
         """

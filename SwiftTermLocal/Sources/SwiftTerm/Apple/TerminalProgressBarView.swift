@@ -28,6 +28,12 @@ final class TerminalProgressBarView: ProgressBarBaseView {
     private var state: Terminal.ProgressReportState = .remove
     private var progress: UInt8?
 
+    /// Farbe im Normalzustand; nil = System-Akzent. LatexTerm setzt die Kachelfarbe, sonst lief der
+    /// Balken in jeder Kachel in System-Blau (UI-Inventar 23.09.2026).
+    var accentColor: ProgressBarColor? {
+        didSet { if state != .remove { apply(state: state, progress: progress) } }
+    }
+
     override init(frame: CGRect) {
         super.init(frame: frame)
         commonInit()
@@ -151,6 +157,7 @@ final class TerminalProgressBarView: ProgressBarBaseView {
         case .pause:
             return .systemOrange
         default:
+            if let accentColor { return accentColor }
             #if os(macOS)
             return .controlAccentColor
             #else

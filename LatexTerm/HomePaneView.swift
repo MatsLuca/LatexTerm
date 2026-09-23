@@ -537,16 +537,17 @@ final class HomePaneView: NSView {
         return NSColor(srgbHex: info.name.flatMap { palette[$0] } ?? info.color)
     }
     private static func paneBadge(_ state: String) -> LauncherPalette.Badge {
+        let color = Tone.pane(state).color
         switch state {
-        case "awaitingInput": return .init(text: "wartet auf dich", color: orange)
-        case "working": return .init(text: "arbeitet", color: green)
-        case "ready": return .init(text: "bereit", color: cyan)
-        default: return .init(text: "Shell", color: faint)
+        case "awaitingInput": return .init(text: "wartet auf dich", color: color)
+        case "working": return .init(text: "arbeitet", color: color)
+        case "ready": return .init(text: "bereit", color: color)
+        default: return .init(text: "Shell", color: color)
         }
     }
     private static func taskBadge(_ w: ProjekteData.Wiedervorlage) -> LauncherPalette.Badge {
-        if w.daysLeft < 0 { return .init(text: "\(-w.daysLeft) d überfällig", color: red) }
-        if w.daysLeft == 0 { return .init(text: "heute", color: yellow) }
+        if w.daysLeft < 0 { return .init(text: "\(-w.daysLeft) d überfällig", color: Tone.error.color) }
+        if w.daysLeft == 0 { return .init(text: "heute", color: Tone.due.color) }
         if w.daysLeft == 1 { return .init(text: "morgen", color: fg.withAlphaComponent(0.7)) }
         return .init(text: "in \(w.daysLeft) d", color: faint)
     }
@@ -852,10 +853,11 @@ final class HomePaneView: NSView {
     // MARK: Views
 
     private let tree = HomeOutline()
-    private let navigation = NSSegmentedControl(labels: ["Projekte", "Aufgaben", "Pins"], trackingMode: .selectOne, target: nil, action: nil)
-    private let searchButton = NSButton(title: "Suchen …   ⌘K", target: nil, action: nil)
+    // Stil „Linie“ (23.09.2026, UI-Inventar B1/B2): Reiter + randloser Knopf statt NSSegmentedControl/`.rounded`.
+    private let navigation = LineTabsView(titles: ["Projekte", "Aufgaben", "Pins"])
+    private let searchButton = LineButton(title: "⌕ Suchen …", hint: "⌘K")
 
-    @objc private func navigationChanged() {
+    private func navigationChanged() {
         switch navigation.selectedSegment {
         case 1: menuToday()
         case 2: if !pinMode { togglePinMode() }
@@ -865,13 +867,12 @@ final class HomePaneView: NSView {
             window?.makeFirstResponder(tree)
         }
     }
-    @objc private func searchClicked() { openSearch() }
     private let treeScroll = NSScrollView()
     private let title = NSTextField(labelWithString: "")
     private let subtitle = NSTextField(labelWithString: "")
     private let list = HomeTable()
     private let listScroll = NSScrollView()
-    private let agentPicker = NSSegmentedControl(labels: ["Claude", "Codex"], trackingMode: .selectOne, target: nil, action: nil)
+    private let agentPicker = LineTabsView(titles: ["Claude", "Codex"])
     private var agentPath: String {
         if let p = (tree.item(atRow: tree.selectedRow) as? PinProjectItem)?.p { return p.path }
         if let p = (tree.item(atRow: tree.selectedRow) as? PinItem)?.p { return p.path }
@@ -883,7 +884,7 @@ final class HomePaneView: NSView {
         let saved = UserDefaults.standard.dictionary(forKey: "LatexTerm.homeAgents") as? [String: String] ?? [:]
         return saved[agentPath] ?? data?.defaultAgent ?? "claude"
     }
-    @objc private func agentChanged() {
+    private func agentChanged() {
         guard !isLaunching else { return }
         var saved = UserDefaults.standard.dictionary(forKey: "LatexTerm.homeAgents") as? [String: String] ?? [:]
         saved[agentPath] = agentPicker.selectedSegment == 1 ? "codex" : "claude"
@@ -967,9 +968,8 @@ final class HomePaneView: NSView {
     /// Theme-Wechsel zur Laufzeit (Grund + Tastenhilfe); Palette folgt in Runde 28.
     func applyTheme(_ theme: TerminalTheme) {
         layer?.backgroundColor = theme.background.cgColor
-        keyHelp.layer?.backgroundColor = theme.keyHelpBackground.cgColor
-        keyHelp.layer?.borderColor = theme.faint.withAlphaComponent(0.10).cgColor
-        title.textColor = theme.cyan
+        keyHelp.layer?.backgroundColor = theme.keyHelpBackground.withAlphaComponent(LineStyle.groundAlpha).cgColor
+        title.textColor = theme.foreground.withAlphaComponent(LineStyle.textFocused)
         subtitle.textColor = theme.dim
         divider.layer?.backgroundColor = theme.foreground.withAlphaComponent(0.08).cgColor
         tree.reloadData()
@@ -1058,7 +1058,7 @@ final class HomePaneView: NSView {
 
     private func buildUI() {
         title.font = Self.mono(2, .bold)
-        title.textColor = Self.cyan
+        title.textColor = Self.fg.withAlphaComponent(LineStyle.textFocused)   // Stil „Linie“: eine Akzentfarbe, Titel neutral
         title.lineBreakMode = .byTruncatingTail
         subtitle.font = Self.mono(-1)
         subtitle.textColor = Self.dim
@@ -1147,24 +1147,16 @@ final class HomePaneView: NSView {
         notices.orientation = .vertical
         notices.alignment = .leading
         notices.spacing = 4
-        navigation.target = self
-        navigation.action = #selector(navigationChanged)
-        navigation.segmentStyle = .rounded
-        navigation.segmentDistribution = .fillEqually
+        navigation.onChange = { [weak self] _ in self?.navigationChanged() }
         navigation.font = Self.mono(-3, .medium)
         navigation.setAccessibilityLabel("Launcher-Bereich")
         navigation.setToolTip("Wiedervorlagen, Inbox und laufende Kacheln", forSegment: 1)
-        searchButton.target = self
-        searchButton.action = #selector(searchClicked)
-        searchButton.bezelStyle = .rounded
-        searchButton.font = Self.mono(-2)
+        searchButton.onClick = { [weak self] in self?.openSearch() }
+        searchButton.font = Self.mono(-3, .medium)
+        searchButton.toolTip = "Sessions, Projekte, Aktionen, Ordner — / fragt die KI"
         searchButton.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
-        agentPicker.target = self
-        agentPicker.action = #selector(agentChanged)
-        agentPicker.segmentStyle = .rounded
-        agentPicker.font = Self.mono(-2, .medium)
-        agentPicker.setWidth(86, forSegment: 0)
-        agentPicker.setWidth(86, forSegment: 1)
+        agentPicker.onChange = { [weak self] _ in self?.agentChanged() }
+        agentPicker.font = Self.mono(-3, .medium)
         agentPicker.setAccessibilityLabel("Agent auswählen")
         agentPicker.toolTip = "Agent für dieses Projekt — Auswahl wird gemerkt"
         for v in [navigation, searchButton, notices, treeScroll, divider, title, subtitle, limitsLabel, agentPicker, listScroll] {
@@ -1178,7 +1170,7 @@ final class HomePaneView: NSView {
             searchButton.trailingAnchor.constraint(equalTo: treeScroll.trailingAnchor),
             navigation.topAnchor.constraint(equalTo: searchButton.bottomAnchor, constant: 10),
             navigation.leadingAnchor.constraint(equalTo: searchButton.leadingAnchor),
-            navigation.trailingAnchor.constraint(equalTo: searchButton.trailingAnchor),
+            navigation.trailingAnchor.constraint(lessThanOrEqualTo: searchButton.trailingAnchor),
             notices.topAnchor.constraint(equalTo: navigation.bottomAnchor, constant: 12),
             notices.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 14),
             notices.trailingAnchor.constraint(lessThanOrEqualTo: divider.leadingAnchor, constant: -8),
@@ -1282,11 +1274,6 @@ final class HomePaneView: NSView {
         if l.percent >= 85 || l.severity == "critical" { return red }
         return fg.withAlphaComponent(0.85)
     }
-    /// Mini-Balken wie in der Statusline (█░), 4 Zellen.
-    private static func limitBar(_ pct: Int) -> String {
-        let full = max(0, min(4, Int((Double(pct) / 100 * 4).rounded())))
-        return String(repeating: "█", count: full) + String(repeating: "░", count: 4 - full)
-    }
 
     private func renderLimits() {
         let agent = selectedAgent == "codex" ? "Codex" : "Claude"
@@ -1310,9 +1297,10 @@ final class HomePaneView: NSView {
             if out.length > 0 { out.append(NSAttributedString(string: "   ", attributes: dimA)) }
             out.append(NSAttributedString(string: l.label + " ", attributes: dimA))
             let c = Self.limitColor(l)
-            out.append(NSAttributedString(string: Self.limitBar(l.percent) + " ", attributes: [
-                .font: Self.mono(-2), .foregroundColor: c.withAlphaComponent(c == Self.red ? 1 : 0.7)]))
-            out.append(NSAttributedString(string: "\(l.percent)%", attributes: [
+            // Stil „Linie“ (LineProgress): 2-pt-Strich statt █░-Text, Bahn 10 %, Füllung neutral bzw. rot ab 85 %.
+            out.append(LineStyle.progressAttachment(fraction: Double(l.percent) / 100, width: 32,
+                                                    color: c == Self.red ? c : Self.fg.withAlphaComponent(0.6), font: Self.mono(-1)))
+            out.append(NSAttributedString(string: " \(l.percent)%", attributes: [
                 .font: Self.mono(-1, .bold), .foregroundColor: c]))
             if let rest = Self.until(l.resetsAt) {
                 out.append(NSAttributedString(string: " ↻" + rest, attributes: [
@@ -1515,29 +1503,29 @@ final class HomePaneView: NSView {
         notices.arrangedSubviews.forEach { $0.removeFromSuperview() }
         navigation.selectedSegment = todayMode ? 1 : (pinMode ? 2 : 0)
         let dueCount = (data?.wiedervorlagen ?? []).filter { $0.daysLeft <= 0 }.count
-        navigation.setLabel(dueCount > 0 ? "Aufgaben \(dueCount)" : "Aufgaben", forSegment: 1)
+        navigation.setCount(dueCount > 0 ? dueCount : nil, forSegment: 1)
         let waiting = livePanes.filter { $0.state == "awaitingInput" }
         for pane in waiting.prefix(2) {
             let name = pane.label + " · " + pane.id.prefix(4)
-            notices.addArrangedSubview(noticeButton(glyph: "●", color: Self.orange, text: "\(name) wartet auf dich", hint: "→ zur Kachel") { [weak self] in
+            notices.addArrangedSubview(noticeButton(glyph: "●", color: Tone.waiting.color, text: "\(name) wartet auf dich", hint: "→ zur Kachel") { [weak self] in
                 self?.onFocusPane?(pane.id)
             })
         }
         // Sync-Zustand: schweigt im Normalfall. Hängender Klon → Shell dort öffnen; Rest nur Info.
         if let sy = data?.sync {
             for b in sy.behind {
-                notices.addArrangedSubview(noticeButton(glyph: "⬇", color: Self.yellow, text: "\(b.name) hängt \(b.count) Commit\(b.count == 1 ? "" : "s") zurück",
+                notices.addArrangedSubview(noticeButton(glyph: "⬇", color: Tone.due.color, text: "\(b.name) hängt \(b.count) Commit\(b.count == 1 ? "" : "s") zurück",
                                                         hint: "lokale Änderungen offen — selbst pullen · → Shell") { [weak self] in
                     self?.onLaunch?(LaunchRequest(path: b.path, command: nil, label: "Shell · \(b.name)", followUp: nil))
                 })
             }
             if let v = sy.pluginNew {
-                notices.addArrangedSubview(noticeButton(glyph: "🆕", color: Self.blue, text: "mats-tools aktualisiert (\(v.prefix(7)))", hint: "nächste Session hat es") {})
+                notices.addArrangedSubview(noticeButton(glyph: "↑", color: Tone.start.color, text: "mats-tools aktualisiert (\(v.prefix(7)))", hint: "nächste Session hat es") {})
             }
             if sy.stale {
                 let d = sy.age.map { $0 / 86400 }
                 let text = d.map { "Sync seit \($0) Tag\($0 == 1 ? "" : "en") nicht durchgekommen" } ?? "Sync noch nie gelaufen"
-                notices.addArrangedSubview(noticeButton(glyph: "⚠", color: Self.orange, text: text, hint: sy.lastResult ?? "offline?") {})
+                notices.addArrangedSubview(noticeButton(glyph: "⚠", color: Tone.error.color, text: text, hint: sy.lastResult ?? "offline?") {})
             }
         }
         notices.isHidden = notices.arrangedSubviews.isEmpty
@@ -1901,20 +1889,48 @@ final class HomePaneView: NSView {
     /// Eigener Session-Titel (`projekte rename <id> [Titel]`); leer = zurück zum automatischen Titel.
     private func renameSession(_ s: ProjekteData.Session) {
         guard !isUpdating else { return }
-        let alert = NSAlert()
-        alert.messageText = "\(s.agent == "codex" ? "Codex" : "Claude")-Session umbenennen"
-        alert.informativeText = s.agent == "codex" ? "Der Titel wird direkt in Codex gespeichert. Bitte einen Namen eingeben." : "Leer lassen = wieder der automatische Titel."
-        alert.addButton(withTitle: "Umbenennen")
-        alert.addButton(withTitle: "Abbrechen")
-        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 340, height: 22))
-        field.stringValue = s.title ?? ""
-        field.placeholderString = "Titel"
-        alert.accessoryView = field
-        alert.window.initialFirstResponder = field
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        let name = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard s.agent != "codex" || !name.isEmpty else { NSSound.beep(); return }
-        runProjekte(["rename", s.id, name, "--agent", s.agent ?? "claude"])
+        let codex = s.agent == "codex"
+        let form = HomeInlineForm(
+            title: "\(codex ? "Codex" : "Claude")-Session umbenennen",
+            hint: codex ? "Der Titel wird direkt in Codex gespeichert. Bitte einen Namen eingeben." : "Leer lassen = wieder der automatische Titel.",
+            fields: [.init(key: "title", label: "Titel", placeholder: "Titel", value: s.title ?? "")],
+            submitTitle: "Umbenennen")
+        form.onSubmit = { [weak self] values, _ in
+            let name = values["title"] ?? ""
+            if codex && name.isEmpty { return "Codex braucht einen Namen." }
+            self?.closeInlineForm()
+            self?.runProjekte(["rename", s.id, name, "--agent", s.agent ?? "claude"])
+            return nil
+        }
+        showInlineForm(form)
+    }
+
+    // MARK: Eingabe im Home (statt NSAlert, 23.09.2026)
+
+    private var inlineForm: HomeInlineForm?
+
+    /// Legt das Formular über die Aktionsspalte (Titel bis unten); Baum bleibt sichtbar.
+    private func showInlineForm(_ form: HomeInlineForm) {
+        closeInlineForm(refocus: false)
+        form.onCancel = form.onCancel ?? { [weak self] in self?.closeInlineForm() }
+        form.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(form)
+        NSLayoutConstraint.activate([
+            form.topAnchor.constraint(equalTo: title.topAnchor),
+            form.leadingAnchor.constraint(equalTo: title.leadingAnchor),
+            form.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -18),
+            form.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -14),
+        ])
+        inlineForm = form
+        layoutSubtreeIfNeeded()
+        form.focusFirst()
+    }
+
+    private func closeInlineForm(refocus: Bool = true) {
+        guard let form = inlineForm else { return }
+        form.removeFromSuperview()
+        inlineForm = nil
+        if refocus { focusList() }
     }
 
     /// `projekte <args…>` über die Login-Shell (PATH), Argumente unverändert durchgereicht; danach neu laden.
@@ -2020,11 +2036,9 @@ final class HomePaneView: NSView {
     ]
 
     private func buildKeyHelp() {
-        keyHelp.wantsLayer = true
-        keyHelp.layer?.backgroundColor = ThemeStore.shared.theme.keyHelpBackground.cgColor
-        keyHelp.layer?.cornerRadius = 10
-        keyHelp.layer?.borderWidth = 1
-        keyHelp.layer?.borderColor = Self.fg.withAlphaComponent(0.10).cgColor
+        // Schwebe-Grund ohne Rand (Stil „Linie“, UI-Inventar B9).
+        LineStyle.applyGround(to: keyHelp, theme: ThemeStore.shared.theme)
+        keyHelp.layer?.backgroundColor = ThemeStore.shared.theme.keyHelpBackground.withAlphaComponent(LineStyle.groundAlpha).cgColor
         keyHelp.isHidden = true
         let text = NSTextField(labelWithAttributedString: Self.keyHelpText())
         text.translatesAutoresizingMaskIntoConstraints = false
@@ -2078,7 +2092,7 @@ final class HomePaneView: NSView {
             a.append(NSAttributedString(string: " \(t)   ", attributes: [.font: mono(-2), .foregroundColor: faint]))
         }
         add("▣", cyan, "Projekt"); add("▤", violet, "Bereich"); add("◇", yellow, "ohne CLAUDE.md")
-        add("●", green, "läuft"); add("●", orange, "wartet")
+        add("●", Tone.running.color, "läuft"); add("●", Tone.waiting.color, "wartet")
         return a
     }
 
@@ -2145,70 +2159,44 @@ final class HomePaneView: NSView {
     /// kommen aus dem Werkstatt-Template (`newProject.command` / `.placeCommand`).
     @objc private func newProject() {
         guard let selected = selectedNode, let rootPath = data?.root ?? root?.path else { return }
-        let alert = NSAlert()
-        alert.messageText = "Neues Projekt · Claude"
-        alert.informativeText = "Claude übernimmt mit /neues-projekt: Interview, CLAUDE.md, Git."
-        alert.addButton(withTitle: "Anlegen")
-        alert.addButton(withTitle: "Abbrechen")
-
-        let box = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 150))
-        func label(_ t: String, y: CGFloat) {
-            let l = NSTextField(labelWithString: t); l.frame = NSRect(x: 0, y: y + 3, width: 60, height: 18); l.alignment = .right
-            box.addSubview(l)
-        }
-        let nameField = NSTextField(frame: NSRect(x: 68, y: 124, width: 344, height: 22))
-        nameField.placeholderString = "Ordnername"
-        let aliasField = NSTextField(frame: NSRect(x: 68, y: 96, width: 120, height: 22))
-        aliasField.placeholderString = "optional"
-        let purposeField = NSTextField(frame: NSRect(x: 68, y: 68, width: 344, height: 22))
-        purposeField.placeholderString = "ein Satz, optional — spart die erste Interviewfrage"
-        label("Name", y: 124); label("Alias", y: 96); label("Zweck", y: 68); label("Ort", y: 36)
-
         var place = selected.path
-        let known = NSButton(radioButtonWithTitle: "", target: nil, action: nil)
-        known.frame = NSRect(x: 68, y: 36, width: 18, height: 20)
-        let placeLabel = NSTextField(labelWithString: "")
-        placeLabel.frame = NSRect(x: 88, y: 39, width: 240, height: 18)
-        placeLabel.lineBreakMode = .byTruncatingHead
-        placeLabel.textColor = .secondaryLabelColor
-        func showPlace() { placeLabel.stringValue = place == rootPath ? "Documents (Wurzel)" : Self.rootRelative(place) }
+        let change = LineButton(title: "Ändern …")
+        let form = HomeInlineForm(
+            title: "Neues Projekt · Claude",
+            hint: "Claude übernimmt mit /neues-projekt: Interview, CLAUDE.md, Git.",
+            fields: [.init(key: "name", label: "Name", placeholder: "Ordnername"),
+                     .init(key: "alias", label: "Alias", placeholder: "optional"),
+                     .init(key: "purpose", label: "Zweck", placeholder: "ein Satz, optional — spart die erste Interviewfrage")],
+            choices: ["bekannter Ort", "noch offen — mit Claude klären"],
+            submitTitle: "Anlegen", extra: change)
+        func showPlace() {
+            form.setChoiceDetail(form.selectedChoice == 1 ? "Start in der Wurzel, Claude ordnet ein"
+                                 : (place == rootPath ? "Documents (Wurzel)" : Self.rootRelative(place)))
+        }
         showPlace()
-        let change = NSButton(title: "Ändern…", target: nil, action: nil)
-        change.frame = NSRect(x: 330, y: 33, width: 82, height: 26)
-        change.bezelStyle = .rounded
-        change.controlSize = .small
-        let open = NSButton(radioButtonWithTitle: "noch offen — mit Claude klären, wo es hingehört", target: nil, action: nil)
-        open.frame = NSRect(x: 68, y: 8, width: 344, height: 20)
-        known.state = .on
-
-        // Radios ohne Target/Action gruppieren sich nicht von selbst — Handler über einen Helfer.
-        let sink = RadioSink(); sink.onKnown = { known.state = .on; open.state = .off }
-        sink.onOpen = { open.state = .on; known.state = .off }
-        sink.onChange = {
+        form.onChoice = { _ in showPlace() }
+        change.onClick = { [weak form] in
             let panel = NSOpenPanel()
             panel.canChooseDirectories = true; panel.canChooseFiles = false; panel.canCreateDirectories = true
             panel.directoryURL = URL(fileURLWithPath: place)
             panel.prompt = "Hier anlegen"
             panel.message = "Ordner, unter dem das neue Projekt liegen soll"
-            if panel.runModal() == .OK, let u = panel.url { place = u.path; showPlace(); sink.onKnown?() }
+            if panel.runModal() == .OK, let u = panel.url { place = u.path; form?.selectedChoice = 0; showPlace() }
+            form?.focusFirst()
         }
-        known.target = sink; known.action = #selector(RadioSink.known)
-        open.target = sink; open.action = #selector(RadioSink.open)
-        change.target = sink; change.action = #selector(RadioSink.change)
-        for v in [nameField, aliasField, purposeField, known, placeLabel, change, open] { box.addSubview(v) }
-        alert.accessoryView = box
-        alert.window.initialFirstResponder = nameField
-        nameField.nextKeyView = aliasField; aliasField.nextKeyView = purposeField; purposeField.nextKeyView = nameField
-        guard alert.runModal() == .alertFirstButtonReturn else { return }
-        withExtendedLifetime(sink) {}
+        form.onSubmit = { [weak self] values, choice in
+            guard let self else { return nil }
+            let name = (values["name"] ?? "").replacingOccurrences(of: " ", with: "_")
+            if name.isEmpty { return "Der Name fehlt." }
+            if name.contains("/") { return "Der Name darf keinen Schrägstrich enthalten." }
+            return self.createProject(name: name, alias: values["alias"] ?? "", purpose: values["purpose"] ?? "",
+                                      place: place, open: choice == 1, rootPath: rootPath)
+        }
+        showInlineForm(form)
+    }
 
-        let name = nameField.stringValue.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: " ", with: "_")
-        guard !name.isEmpty, !name.contains("/") else {
-            Self.complain("Kein Projekt angelegt", name.isEmpty ? "Der Name fehlt." : "Der Name darf keinen Schrägstrich enthalten.")
-            return
-        }
-        let alias = aliasField.stringValue.trimmingCharacters(in: .whitespaces)
-        let purpose = purposeField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Anlegen bzw. Einordnen starten; Rückgabe = Fehlertext fürs Formular (nil = gestartet, Formular zu).
+    private func createProject(name: String, alias: String, purpose: String, place: String, open: Bool, rootPath: String) -> String? {
         let t = templates.newProject
         func fill(_ s: String) -> String {
             s.replacingOccurrences(of: "{purpose}", with: Self.plain(purpose))
@@ -2216,21 +2204,19 @@ final class HomePaneView: NSView {
              .replacingOccurrences(of: "{alias}", with: alias)
         }
 
-        if open.state == .on {
+        if open {
             // Ort offen: nichts anlegen, Claude erörtert es in der Wurzel.
             guard let pc = t.placeCommand else {
-                Self.complain("Kein Projekt angelegt", "Das Launcher-Template kennt kein placeCommand — `projekte` neu laden (⌘R).")
-                return
+                return "Das Launcher-Template kennt kein placeCommand — `projekte` neu laden (⌘R)."
             }
             let cmd = "cd \(Self.q(rootPath)) && " + fill(pc)
             Self.log.notice("newProject einordnen: \(cmd, privacy: .public)")
+            closeInlineForm(refocus: false)
             onLaunch?(LaunchRequest(path: rootPath, command: cmd, label: "\(name) · einordnen", followUp: nil))
-            return
+            return nil
         }
         let dir = (place as NSString).appendingPathComponent(name)
-        if FileManager.default.fileExists(atPath: dir) {
-            let a = NSAlert(); a.messageText = "Gibt es schon"; a.informativeText = dir; a.runModal(); return
-        }
+        if FileManager.default.fileExists(atPath: dir) { return "Gibt es schon: \(Self.rootRelative(dir))" }
         var cmd = "mkdir -p \(Self.q(dir)) && cd \(Self.q(dir))"
         if !alias.isEmpty, alias.range(of: "^[A-Za-z0-9_.-]+$", options: .regularExpression) != nil,
            let ac = t.aliasCommand {
@@ -2238,8 +2224,10 @@ final class HomePaneView: NSView {
         }
         if let c = t.command { cmd += " && " + fill(c) }
         Self.log.notice("newProject anlegen: \(cmd, privacy: .public)")
-        guard let onLaunch else { Self.complain("Kein Projekt angelegt", "Die Kachel hat keinen Startweg (onLaunch fehlt)."); return }
+        guard let onLaunch else { return "Die Kachel hat keinen Startweg (onLaunch fehlt)." }
+        closeInlineForm(refocus: false)
         onLaunch(colored(LaunchRequest(path: place, command: cmd, label: "\(name) · \(t.label)", followUp: nil), session: nil))
+        return nil
     }
 
     static let log = Logger(subsystem: "com.mats.LatexTerm", category: "home")
@@ -2252,13 +2240,6 @@ final class HomePaneView: NSView {
     /// und Zeilenumbrüche raus, sonst bricht das Quoting des Templates.
     private static func plain(_ s: String) -> String {
         s.replacingOccurrences(of: "'", with: "’").replacingOccurrences(of: "\n", with: " ")
-    }
-
-    private final class RadioSink: NSObject {
-        var onKnown: (() -> Void)?; var onOpen: (() -> Void)?; var onChange: (() -> Void)?
-        @objc func known() { onKnown?() }
-        @objc func open() { onOpen?() }
-        @objc func change() { onChange?() }
     }
 
     private static func q(_ s: String) -> String { "'" + s.replacingOccurrences(of: "'", with: "'\\''") + "'" }
@@ -2395,14 +2376,14 @@ extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
         if let pp = (item as? PinProjectItem)?.p {
             let glyph: String, gc: NSColor
             switch pp.level {
-            case "projekt", "unter-projekt": glyph = "▣"; gc = pp.accent?.nsColor ?? Self.cyan
-            case "router", "bereich": glyph = "▤"; gc = Self.violet
-            case "ohne-claude-md": glyph = "◇"; gc = Self.yellow
+            case "projekt", "unter-projekt": glyph = "▣"; gc = pp.accent?.nsColor ?? Tone.start.color
+            case "router", "bereich": glyph = "▤"; gc = Tone.area.color
+            case "ohne-claude-md": glyph = "◇"; gc = Tone.due.color
             default: glyph = "·"; gc = Self.faint
             }
             var dot: NSColor? = nil
             if let st = running.first(where: { $0.key == pp.path || $0.key.hasPrefix(pp.path + "/") })?.value {
-                dot = st == "awaitingInput" ? Self.orange : Self.green
+                dot = Tone.pane(st).color
             }
             cell.set(glyph: glyph, glyphColor: gc, text: pp.name + (pp.aliases.first.map { "  \($0)" } ?? ""), color: Self.fg, dot: dot)
             cell.toolTip = Self.rootRelative(pp.path)
@@ -2411,7 +2392,7 @@ extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
         if let pi = item as? PinItem {
             let s = pi.p
             let badge = Self.contextBadge(s.context)
-            cell.set(glyph: "★", glyphColor: Self.yellow, text: "\(s.project)  \(s.title ?? "(ohne Titel)")", color: Self.fg,
+            cell.set(glyph: "★", glyphColor: Tone.due.color, text: "\(s.project)  \(s.title ?? "(ohne Titel)")", color: Self.fg,
                      dot: badge.map { $0.1 == Self.faint ? nil : $0.1 } ?? nil)
             cell.toolTip = (s.context.map(Self.contextLine) ?? "") + " · " + Self.age(s.lastAt)
             return cell
@@ -2420,9 +2401,9 @@ extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
         let p = byPath[n.path]
         let glyph: String, glyphColor: NSColor, color: NSColor
         switch p?.level {
-        case "projekt", "unter-projekt": glyph = "▣"; glyphColor = p?.accent?.nsColor ?? Self.cyan; color = Self.fg
-        case "router", "bereich":        glyph = "▤"; glyphColor = Self.violet; color = Self.fg.withAlphaComponent(0.75)
-        case "ohne-claude-md":           glyph = "◇"; glyphColor = Self.yellow; color = Self.fg
+        case "projekt", "unter-projekt": glyph = "▣"; glyphColor = p?.accent?.nsColor ?? Tone.start.color; color = Self.fg
+        case "router", "bereich":        glyph = "▤"; glyphColor = Tone.area.color; color = Self.fg.withAlphaComponent(0.75)
+        case "ohne-claude-md":           glyph = "◇"; glyphColor = Tone.due.color; color = Self.fg
         default:                         glyph = "·"; glyphColor = Self.faint;  color = Self.dim
         }
         var label = filter.isEmpty ? n.name : String(n.path.dropFirst((root?.path.count ?? 0) + 1))
@@ -2430,7 +2411,7 @@ extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
         if onlyProjects, filter.isEmpty, n === root { label += "   nur Projekte" }
         var dot: NSColor? = nil
         if let st = running.first(where: { $0.key == n.path || $0.key.hasPrefix(n.path + "/") })?.value {
-            dot = st == "awaitingInput" ? Self.orange : Self.green
+            dot = Tone.pane(st).color
         }
         cell.set(glyph: glyph, glyphColor: glyphColor, text: label, color: color, dot: dot)
         var tip: String
@@ -2449,7 +2430,7 @@ extension HomePaneView: NSOutlineViewDataSource, NSOutlineViewDelegate {
     func outlineView(_ outlineView: NSOutlineView, rowViewForItem item: Any) -> NSTableRowView? {
         let v = HomeRowBackground(); v.accent = accent; return v
     }
-    func outlineViewSelectionDidChange(_ notification: Notification) { todayMode = false; renderActions() }
+    func outlineViewSelectionDidChange(_ notification: Notification) { closeInlineForm(refocus: false); todayMode = false; renderActions() }
 }
 
 // MARK: - Aktionen (NSTableView)
@@ -2470,7 +2451,7 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
         case .header(let t):
             cell.set(glyph: "", text: t, detail: "", meta: "", header: true, accent: Self.faint)
         case .browse(_, let name):
-            cell.set(glyph: "▣", text: name, detail: "Ordner öffnen", meta: "", header: false, accent: Self.blue)
+            cell.set(glyph: "▣", text: name, detail: "Ordner öffnen", meta: "", header: false, accent: Tone.shell.color)
         case .resume(let s, _, let t, let age, let project):
             let r = templates.resume
             let star = (s.pinned ?? false) ? "★ " : ""
@@ -2479,10 +2460,10 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
             var meta = agent + " · " + age
             var metaColor: NSColor? = nil
             if let (badge, color) = Self.contextBadge(s.context) { meta = agent + " · " + badge + "  " + age; metaColor = color }
-            cell.set(glyph: r.glyph, text: star + (project.map { "\(label) · \($0)" } ?? label), detail: t, meta: meta, header: false, accent: Self.green, metaColor: metaColor)
+            cell.set(glyph: r.glyph, text: star + (project.map { "\(label) · \($0)" } ?? label), detail: t, meta: meta, header: false, accent: Tone.running.color, metaColor: metaColor)
             cell.toolTip = s.lastPrompt.map { "Zuletzt: „\($0)“" + (s.context.map { "\n" + Self.contextLine($0) } ?? "") }
         case .run(let t, _):
-            let color: NSColor = t.command == nil ? Self.blue : (t.glyph == "+" ? Self.cyan : Self.violet)
+            let color: NSColor = (t.command == nil ? Tone.shell : (t.glyph == "+" ? Tone.start : Tone.area)).color
             let agent = t.agent == "codex" ? "Codex" : "Claude"
             let meta = agent + (t.lastAt.map { " · " + Self.age($0) } ?? "")
             let live = t.sessionID.flatMap { liveSession($0, agent: t.agent ?? "claude") }
@@ -2491,23 +2472,23 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
             let t = templates.compact!
             let live = liveSession(s.id, agent: s.agent ?? "claude")
             cell.set(glyph: t.glyph, text: live == nil ? t.label : "Zur Kachel · dort kompakten", detail: s.context.map(Self.contextLine) ?? (t.hint ?? ""), meta: "Claude", header: false,
-                     accent: s.context?.advice == "critical" ? Self.red : Self.yellow)
+                     accent: (s.context?.advice == "critical" ? Tone.error : Tone.due).color)
         case .togglePin(_, let pinned):
             let t = (pinned ? templates.unpin : templates.pin)!
-            cell.set(glyph: t.glyph, text: t.label, detail: pinned ? "im Pin-Screen (⇧⇥)" : "wichtig — in den Pin-Screen (⇧⇥)", meta: "", header: false, accent: Self.yellow)
+            cell.set(glyph: t.glyph, text: t.label, detail: pinned ? "im Pin-Screen (⇧⇥)" : "wichtig — in den Pin-Screen (⇧⇥)", meta: "", header: false, accent: Tone.due.color)
         case .more(let n, let expanded):
             cell.set(glyph: expanded ? "▾" : "▸", text: "Mehr", detail: (n == 0 ? "" : "\(n) ältere Sessions · ") + (selectedAgent == "codex" ? "suchen · anpinnen · umbenennen" : "Wartung · anpinnen · umbenennen"),
                      meta: "", header: false, accent: Self.faint)
         case .togglePinProject(_, let name, let pinned):
             let t = (pinned ? templates.unpinProject : templates.pinProject)!
-            cell.set(glyph: t.glyph, text: t.label, detail: pinned ? "\(name) — im Pin-Screen (⇧⇥)" : "\(name) — oben im Pin-Screen (⇧⇥), ⌘⇧P", meta: "", header: false, accent: Self.yellow)
+            cell.set(glyph: t.glyph, text: t.label, detail: pinned ? "\(name) — im Pin-Screen (⇧⇥)" : "\(name) — oben im Pin-Screen (⇧⇥), ⌘⇧P", meta: "", header: false, accent: Tone.due.color)
         case .rename(let s):
             let t = templates.rename!
-            cell.set(glyph: t.glyph, text: t.label, detail: s.title ?? (t.hint ?? ""), meta: s.titleSource == "manual" ? "✎" : "", header: false, accent: Self.blue)
+            cell.set(glyph: t.glyph, text: t.label, detail: s.title ?? (t.hint ?? ""), meta: s.titleSource == "manual" ? "✎" : "", header: false, accent: Tone.shell.color)
         case .jump(_, let st, let name):
             let waiting = st == "awaitingInput"
             cell.set(glyph: "→", text: "Zur Kachel", detail: name + (waiting ? " — wartet auf dich" : (st == "working" ? " — arbeitet" : "")),
-                     meta: "", header: false, accent: waiting ? Self.orange : Self.green)
+                     meta: "", header: false, accent: waiting ? Tone.waiting.color : Tone.running.color)
         case .wiedervorlage(let w, _):
             let detail: String
             switch w.daysLeft {
@@ -2516,7 +2497,7 @@ extension HomePaneView: NSTableViewDataSource, NSTableViewDelegate {
             case 1: detail = "morgen fällig"
             default: detail = "in \(w.daysLeft) Tagen fällig"
             }
-            cell.set(glyph: "⏰", text: w.title, detail: detail, meta: (selectedAgent == "codex" ? "Codex · " : "Claude · ") + w.due, header: false, accent: Self.yellow)
+            cell.set(glyph: "⏰", text: w.title, detail: detail, meta: (selectedAgent == "codex" ? "Codex · " : "Claude · ") + w.due, header: false, accent: Tone.due.color)
         }
         cell.setPrimary(isPrimary(row))
         return cell
@@ -2545,30 +2526,44 @@ final class NoticeButton: NSButton {
     required init?(coder: NSCoder) { fatalError() }
     override var acceptsFirstResponder: Bool { false }
     @objc private func fire() { onClick?() }
+
+    // Hover = leise Fläche (Stil „Linie“) — zeigt, dass die Zeile klickbar ist.
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect], owner: self))
+    }
+    override func mouseEntered(with event: NSEvent) {
+        wantsLayer = true
+        layer?.cornerRadius = LineStyle.hoverRadius
+        layer?.backgroundColor = LineStyle.fg.withAlphaComponent(LineStyle.hover).cgColor
+    }
+    override func mouseExited(with event: NSEvent) { layer?.backgroundColor = nil }
 }
 
 /// Baumzeile: Glyph · Name · (●)
 final class TreeCell: NSView {
     private let glyph = NSTextField(labelWithString: "")
     private let name = NSTextField(labelWithString: "")
-    private let dot = NSTextField(labelWithString: "●")
+    private let dot = LineDotView()
     override init(frame: NSRect) {
         super.init(frame: frame)
-        for f in [glyph, name, dot] {
+        for f in [glyph, name] {
             f.translatesAutoresizingMaskIntoConstraints = false
             f.lineBreakMode = .byTruncatingTail
             addSubview(f)
         }
+        dot.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(dot)
         glyph.font = HomePaneView.mono(-1)
         name.font = HomePaneView.mono()
-        dot.font = HomePaneView.mono(-3)
         NSLayoutConstraint.activate([
             glyph.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
             glyph.centerYAnchor.constraint(equalTo: centerYAnchor),
             glyph.widthAnchor.constraint(equalToConstant: 16),
             name.leadingAnchor.constraint(equalTo: glyph.trailingAnchor, constant: 4),
             name.centerYAnchor.constraint(equalTo: centerYAnchor),
-            dot.leadingAnchor.constraint(equalTo: name.trailingAnchor, constant: 6),
+            dot.leadingAnchor.constraint(equalTo: name.trailingAnchor, constant: 8),
             dot.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -6),
             dot.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
@@ -2577,7 +2572,9 @@ final class TreeCell: NSView {
     func set(glyph g: String, glyphColor: NSColor, text: String, color: NSColor, dot d: NSColor?) {
         glyph.stringValue = g; glyph.textColor = glyphColor
         name.stringValue = text; name.textColor = color
-        dot.isHidden = d == nil; dot.textColor = d ?? .clear
+        dot.color = d
+        // Wartet = schneller Puls wie am Chip; läuft = ruhig.
+        dot.pulse = d == nil ? nil : (d == Tone.waiting.color ? 0.5 : (d == Tone.running.color ? 0.9 : nil))
     }
 }
 
@@ -2643,7 +2640,7 @@ final class ActionCell: NSView {
     }
 }
 
-/// Auswahl als weiche, abgerundete Fläche in der Akzentfarbe statt des System-Blaus.
+/// Auswahl im Stil „Linie“ (`LineStyle.drawRowSelection`): leise Fläche + Strich links, gleiche Zeichnung wie ⌘K.
 final class HomeRowBackground: NSTableRowView {
     var accent: NSColor = .controlAccentColor
     var isPrimary = false
@@ -2651,19 +2648,14 @@ final class HomeRowBackground: NSTableRowView {
     override func drawBackground(in dirtyRect: NSRect) {
         super.drawBackground(in: dirtyRect)
         guard isPrimary, !isSelected else { return }
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: 6, yRadius: 6)
-        HomePaneView.fg.withAlphaComponent(0.045).setFill()
+        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 2), xRadius: LineStyle.hoverRadius, yRadius: LineStyle.hoverRadius)
+        HomePaneView.fg.withAlphaComponent(0.04).setFill()
         path.fill()
     }
     override func drawSelection(in dirtyRect: NSRect) {
         guard selectionHighlightStyle != .none else { return }
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 2, dy: 1), xRadius: 6, yRadius: 6)
-        accent.withAlphaComponent(isEmphasized ? 0.22 : 0.10).setFill()
-        path.fill()
-        if isEmphasized {   // Akzentbalken nur in der fokussierten Spalte: „hier wirkt ⏎"
-            let bar = NSBezierPath(roundedRect: NSRect(x: 2, y: 5, width: 3, height: bounds.height - 10), xRadius: 1.5, yRadius: 1.5)
-            accent.setFill(); bar.fill()
-        }
+        // Strich voll nur in der fokussierten Spalte: „hier wirkt ⏎".
+        LineStyle.drawRowSelection(in: bounds, tint: accent, emphasized: isEmphasized)
     }
     override var isEmphasized: Bool { get { window?.firstResponder.map { ($0 as? NSView)?.isDescendant(of: self.superview ?? self) ?? false } ?? false } set {} }
 }

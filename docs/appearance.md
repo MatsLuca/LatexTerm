@@ -9,7 +9,7 @@ Allgemein (home tree, Ghostty import), Darstellung, Kacheln (accent, focus), Cla
 
 - **Themes** are Ghostty theme files. `Dark+` and `Ember` (the old warm black) are built in; if Ghostty is
   installed, all of its ~460 themes appear in the picker. Every surface follows the theme — panes, home
-  pane, launch ring, status pills, formula overlays.
+  pane, launch curtain (border progress), status chips, formula overlays.
 - **Font**: any installed monospace family or the bundled JetBrains Mono NL (no ligatures on purpose —
   the renderer is cell-exact and formula overlays sit on cell coordinates).
 - **Import from Ghostty**: one button reads `~/.config/ghostty/config` (theme, font, size, padding,

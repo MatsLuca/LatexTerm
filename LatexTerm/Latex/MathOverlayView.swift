@@ -108,7 +108,7 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
     .f .m .katex-display{margin:0;}
     .fallback{font-family:ui-monospace,Menlo,monospace;opacity:.65;font-style:italic;}
     /* KaTeX-Fehler: roher Text bleibt sichtbar, aber rot wellig unterstrichen. */
-    .f .m.err{opacity:.85;text-decoration:underline wavy #E85E3E;text-decoration-skip-ink:none;text-underline-offset:2px;}
+    .f .m.err{opacity:.85;text-decoration:underline wavy var(--err,#E85E3E);text-decoration-skip-ink:none;text-underline-offset:2px;}
     </style></head><body>
     <div id="root"></div>
     <script>
@@ -149,6 +149,7 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
     function setConfig(c){
       Object.assign(cfg,c);
       root.style.fontSize=cfg.fontPx+'px';
+      if(cfg.err) document.documentElement.style.setProperty('--err',cfg.err);
       for(var k in els){ styleEl(els[k]); }
     }
 
@@ -301,13 +302,8 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         super.init(frame: .zero)
 
         wantsLayer = true
-        layer?.cornerRadius = 10
-        layer?.borderWidth = 1
         layer?.masksToBounds = false
-        layer?.shadowColor = NSColor.black.cgColor
-        layer?.shadowOpacity = 0.45
-        layer?.shadowRadius = 14
-        layer?.shadowOffset = CGSize(width: 0, height: 4)
+        LineStyle.applyCard(to: self, background: nil)   // gleiche Karte wie ⌘K (Stil „Linie“, OverlayCard)
 
         ucc.add(WeakScriptMessageHandler(self), name: "size")
         web.setValue(false, forKey: "drawsBackground")
@@ -349,13 +345,14 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
 
     required init?(coder: NSCoder) { fatalError() }
 
+    /// Randloser Linie-Knopf (Mono, Hover-Fläche) statt System-Bezel.
     private static func makeButton(_ title: String, target: AnyObject, action: Selector,
                                    toolTip: String? = nil) -> NSButton {
-        let b = NSButton(title: title, target: target, action: action)
-        b.bezelStyle = .rounded
-        b.controlSize = .small
-        b.font = .systemFont(ofSize: 11)
-        b.toolTip = toolTip
+        let b = PreviewButton(symbol: nil, title: title, tooltip: toolTip ?? "") { [weak target] in
+            _ = target?.perform(action, with: nil)
+        }
+        b.font = LineStyle.font(11)
+        b.tint(ThemeStore.shared.theme.foreground.withAlphaComponent(0.8))
         return b
     }
 
@@ -379,8 +376,7 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         lastShowForeground = foreground
         if editing { exitEditMode() }   // neue Formel → Editier-Modus der alten verwerfen
 
-        layer?.backgroundColor = background.cgColor
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+        LineStyle.applyCard(to: self, background: background)
 
         // Gleiche Formel wie zuletzt gerendert → KaTeX nicht neu evaluieren (sonst flutet
         // der pro-Pixel-Hover die WebView). Nur sicherstellen, dass das Popover sichtbar
@@ -398,7 +394,7 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
         let escaped = Self.jsString(latex)
         let js: String
         if let error {
-            js = "renderError(\(escaped), \(Self.jsString(error)));"
+            js = "document.documentElement.style.setProperty('--err',\(Self.jsString(Self.css(ThemeStore.shared.theme.red))));renderError(\(escaped), \(Self.jsString(error)));"
         } else {
             let big = max(30, fontPx * 2.4)
             js = "render(\(escaped), \(big), \(Self.jsString(Self.css(foreground))), \(FormulaSettings.shared.formulaSans));"
@@ -687,7 +683,7 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
     /* KaTeX-Fehleransicht: rohe Quelle + Meldung gestapelt, Meldung rot. */
     #m.err{white-space:normal;width:320px;font-family:ui-monospace,Menlo,monospace;}
     #m.err .src{font-size:14px;color:#C8C2C2;opacity:.7;margin-bottom:8px;word-break:break-word;}
-    #m.err .msg{font-size:13px;line-height:1.4;color:#E85E3E;word-break:break-word;}
+    #m.err .msg{font-size:13px;line-height:1.4;color:var(--err,#E85E3E);word-break:break-word;}
     </style></head><body>
     <div id="m"></div>
     <script>

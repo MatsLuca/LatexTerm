@@ -73,15 +73,14 @@ final class PaneDropOverlayView: NSView {
         if origin.y + height > bounds.maxY - 4 { origin.y = cursor.y - 12 - height }
         let box = NSRect(x: origin.x, y: origin.y, width: width, height: height)
 
-        let path = NSBezierPath(roundedRect: box, xRadius: 6, yRadius: 6)
+        // Schwebe-Grund ohne Rand, 6-pt-Punkt (Stil „Linie“).
+        let path = NSBezierPath(roundedRect: box, xRadius: LineStyle.hoverRadius, yRadius: LineStyle.hoverRadius)
         theme.background.withAlphaComponent(0.96).setFill()
         path.fill()
-        path.lineWidth = 1
-        accent.withAlphaComponent(note == nil ? 0.8 : 0.4).setStroke()
-        path.stroke()
 
+        let d = LineStyle.dotSize
         accent.withAlphaComponent(note == nil ? 1 : 0.5).setFill()
-        NSBezierPath(ovalIn: NSRect(x: box.minX + 8, y: box.midY - 4, width: 8, height: 8)).fill()
+        NSBezierPath(ovalIn: NSRect(x: box.minX + 9, y: box.midY - d / 2, width: d, height: d)).fill()
 
         let style = NSMutableParagraphStyle()
         style.lineBreakMode = .byTruncatingTail

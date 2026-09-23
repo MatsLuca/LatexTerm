@@ -28,7 +28,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Agents can open a pane *in the background* (`placement: hintergrund`): it arrives as a hidden tab behind their side
   column and takes no space — never inside tabs you arranged by hand.
 
+### Changed
+- **One visual language for all app chrome (23.09.).** Everything outside the terminal now follows the "line" style of
+  the title bar and tabs: dot · number · text in mono, the active item marked by a 2-pt line, a quiet hover surface, no
+  capsules or borders. Home area and agent switches, ⌘K filters, the preview sidebar and the find bars are tab strips;
+  selection in Home, ⌘K and the table of contents is a soft surface with a line on the left; floating toolbars (preview,
+  web, scratchpad) sit on one borderless ground; short notices are one toast with a coloured dot everywhere; numbered
+  marks look the same in PDF, web and image panes; ⌘K and the formula popover share one card. Colours with meaning
+  (waiting, running, due, error, …) come from one table on top of the theme — "waiting" is yellow everywhere now.
+- **⌘F in the terminal** uses the same find bar as preview and web, with toggles for case, regex and whole word, and
+  searches as you type.
+- **Rename session and New project** are edited inline in Home instead of in a modal dialog.
+- **Launch curtain:** instead of a ring, the pane's own border draws itself clockwise as progress and turns into the
+  normal focus border when the session is ready.
+
 ### Fixed
+- The terminal progress bar (OSC 9;4) now uses the pane's colour instead of the system accent; formula errors use the
+  theme's red.
 - **Einzeilige `$$…$$`-Formel winzig (23.09., README-Dreh).** KaTeX' Display-Rand (1em oben/unten) zählte beim Einpassen mit; ohne leere Nachbarzeilen schrumpfte die Formel auf ~40 %. Der Rand ist im Overlay jetzt 0 (die Box zentriert selbst) — dieselbe Formel passt mit ~90 % in eine Zeile.
 
 ## [0.2.0] - 2026-09-23

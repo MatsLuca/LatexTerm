@@ -797,10 +797,12 @@ final class PreviewContent: NSObject, PaneContent {
             // Im linken Seitenrand auf Höhe der ersten Zeile — nie über dem Text (verdeckte sonst den Wortanfang, 23.09.).
             let box = page.bounds(for: .cropBox)
             let top = (mark.lines.first ?? mark.rect).maxY
-            let badge = PDFAnnotation(bounds: NSRect(x: box.minX + 14, y: top - 13, width: 15, height: 14),
+            // Geometrie wie Web und Bild (`LineStyle.mark*`, Stil „Linie“ 23.09.).
+            let side = LineStyle.markSize
+            let badge = PDFAnnotation(bounds: NSRect(x: box.minX + 14, y: top - side + 1, width: side, height: side),
                                       forType: .freeText, withProperties: nil)
             badge.contents = "\(number)"
-            badge.font = .boldSystemFont(ofSize: 9)
+            badge.font = LineStyle.markFont()
             badge.fontColor = .black
             badge.color = color
             badge.alignment = .center

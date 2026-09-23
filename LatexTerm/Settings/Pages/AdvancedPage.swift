@@ -47,7 +47,7 @@ struct AdvancedPage: View {
                 }
                 LabeledContent("Status") {
                     HStack(spacing: 6) {
-                        Circle().fill(socketActive ? Color.green : Color.secondary).frame(width: 8, height: 8)
+                        Circle().fill(socketActive ? Color(nsColor: ThemeStore.shared.theme.green) : Color.secondary).frame(width: 6, height: 6)
                         Text(socketActive ? "aktiv" : "kein Socket")
                     }
                 }

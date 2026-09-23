@@ -76,9 +76,9 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
     private let card = NSView()
     private let icon = NSImageView()
     private let field = LauncherSearchField()
-    private let chips = NSStackView()
-    private var chipButtons: [NSButton] = []
-    private let escButton = NSButton(title: "esc", target: nil, action: nil)
+    // Stil „Linie“ (23.09.2026, UI-Inventar B2): Filter als Reiter, esc als randloser Knopf.
+    private let chips = LineTabsView(titles: Filter.allCases.map(\.label))
+    private let escButton = LineButton(title: "esc")
     private let sendPill = NSTextField(labelWithString: "⏎ senden")
     private let rule = NSView()
     private let table = PaletteTable()
@@ -114,16 +114,7 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
         scrim.translatesAutoresizingMaskIntoConstraints = false
         addSubview(scrim)
 
-        card.wantsLayer = true
-        card.layer?.backgroundColor = theme.background.lightened(by: 0.05).cgColor
-        card.layer?.cornerRadius = 18
-        card.layer?.cornerCurve = .continuous
-        card.layer?.borderWidth = 1
-        card.layer?.borderColor = theme.foreground.withAlphaComponent(0.14).cgColor
-        card.layer?.shadowColor = NSColor.black.cgColor
-        card.layer?.shadowOpacity = 0.55
-        card.layer?.shadowRadius = 30
-        card.layer?.shadowOffset = CGSize(width: 0, height: -12)
+        LineStyle.applyCard(to: card, background: nil)   // gleiche Karte wie das Formel-Popover (OverlayCard)
         card.translatesAutoresizingMaskIntoConstraints = false
         addSubview(card)
 
@@ -136,38 +127,16 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
         field.delegate = self
         field.setAccessibilityLabel("Launcher durchsuchen oder KI fragen")
 
-        chips.orientation = .horizontal
-        chips.spacing = 4
-        for f in Filter.allCases {
-            let b = NSButton(title: f.label, target: self, action: #selector(chipClicked(_:)))
-            b.isBordered = false
-            b.wantsLayer = true
-            b.layer?.cornerRadius = 7
-            b.font = AppFonts.mono(size: 11, weight: .medium)
-            b.setButtonType(.momentaryChange)
-            b.tag = Filter.allCases.firstIndex(of: f)!
-            b.setAccessibilityLabel("Filter \(f.label)")
-            chipButtons.append(b)
-            chips.addArrangedSubview(b)
-        }
+        chips.accent = Tone.start.color
+        chips.setAccessibilityLabel("Filter")
+        chips.onChange = { [weak self] i in self?.setFilter(Filter.allCases[i]) }
 
-        escButton.isBordered = false
-        escButton.wantsLayer = true
-        escButton.layer?.cornerRadius = 6
-        escButton.layer?.borderWidth = 1
-        escButton.layer?.borderColor = theme.foreground.withAlphaComponent(0.18).cgColor
-        escButton.font = AppFonts.mono(size: 10, weight: .medium)
-        escButton.contentTintColor = theme.dim
-        escButton.attributedTitle = NSAttributedString(string: "esc", attributes: [.foregroundColor: theme.dim, .font: AppFonts.mono(size: 10, weight: .medium)])
-        escButton.target = self
-        escButton.action = #selector(dismiss)
+        escButton.font = LineStyle.font(11)
+        escButton.onClick = { [weak self] in self?.dismiss() }
         escButton.setAccessibilityLabel("Suche schließen")
 
-        sendPill.font = AppFonts.mono(size: 11, weight: .semibold)
-        sendPill.textColor = HomePaneView.orange
-        sendPill.wantsLayer = true
-        sendPill.layer?.cornerRadius = 7
-        sendPill.layer?.backgroundColor = HomePaneView.orange.withAlphaComponent(0.14).cgColor
+        sendPill.font = LineStyle.font(11, .semibold)
+        sendPill.textColor = Tone.claude.color
         sendPill.alignment = .center
         sendPill.isHidden = true
 
@@ -235,8 +204,6 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
             sendPill.heightAnchor.constraint(equalToConstant: 22),
             escButton.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
             escButton.centerYAnchor.constraint(equalTo: icon.centerYAnchor),
-            escButton.widthAnchor.constraint(equalToConstant: 34),
-            escButton.heightAnchor.constraint(equalToConstant: 20),
 
             rule.topAnchor.constraint(equalTo: card.topAnchor, constant: Self.searchHeight),
             rule.leadingAnchor.constraint(equalTo: card.leadingAnchor), rule.trailingAnchor.constraint(equalTo: card.trailingAnchor),
@@ -254,7 +221,6 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
             status.centerYAnchor.constraint(equalTo: hints.centerYAnchor),
             status.leadingAnchor.constraint(greaterThanOrEqualTo: hints.trailingAnchor, constant: 16)
         ])
-        for b in chipButtons { b.heightAnchor.constraint(equalToConstant: 22).isActive = true }
         styleChips()
     }
 
@@ -285,7 +251,7 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
         let top = max(24, min(72, bounds.height * 0.10)) + slide
         if cardTop.constant != top { cardTop.constant = top }
         // Schatten muss die Ecken kennen, sonst zeichnet Core Animation ein Rechteck.
-        card.layer?.shadowPath = CGPath(roundedRect: card.bounds, cornerWidth: 18, cornerHeight: 18, transform: nil)
+        card.layer?.shadowPath = CGPath(roundedRect: card.bounds, cornerWidth: LineStyle.cardRadius, cornerHeight: LineStyle.cardRadius, transform: nil)
         fitCardHeight()
     }
 
@@ -353,7 +319,7 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
     private func update() {
         let prompt = isPrompt
         icon.image = NSImage(systemSymbolName: prompt ? "sparkles" : "magnifyingglass", accessibilityDescription: prompt ? "KI" : "Suche")
-        icon.contentTintColor = prompt ? HomePaneView.orange : theme.dim
+        icon.contentTintColor = prompt ? Tone.claude.color : theme.dim
         chips.isHidden = prompt
         sendPill.isHidden = !prompt
         fieldToChips.isActive = !prompt
@@ -495,7 +461,6 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
 
     // MARK: Filter
 
-    @objc private func chipClicked(_ sender: NSButton) { setFilter(Filter.allCases[sender.tag]) }
     private func cycleFilter(_ delta: Int) {
         guard !isPrompt else { return }
         let all = Filter.allCases
@@ -506,12 +471,7 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
         filter = f; styleChips(); update(); focus()
     }
     private func styleChips() {
-        for (i, b) in chipButtons.enumerated() {
-            let on = Filter.allCases[i] == filter
-            let color = on ? theme.background : theme.dim
-            b.attributedTitle = NSAttributedString(string: Filter.allCases[i].label, attributes: [.foregroundColor: color, .font: AppFonts.mono(size: 11, weight: on ? .semibold : .medium)])
-            b.layer?.backgroundColor = on ? HomePaneView.cyan.withAlphaComponent(0.85).cgColor : theme.foreground.withAlphaComponent(0.05).cgColor
-        }
+        chips.selectedSegment = Filter.allCases.firstIndex(of: filter) ?? 0
     }
 
     // MARK: Auswahl & Aktionen
@@ -632,7 +592,7 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
     func tableView(_ tableView: NSTableView, shouldSelectRow row: Int) -> Bool { rows[row].entry != nil }
     func tableView(_ tableView: NSTableView, rowViewForRow row: Int) -> NSTableRowView? {
         let v = PaletteRow()
-        v.tint = rows[row].entry?.accent ?? (rows[row].entry?.kind == .launch ? HomePaneView.orange : HomePaneView.cyan)
+        v.tint = rows[row].entry?.accent ?? (rows[row].entry?.kind == .launch ? Tone.claude.color : HomePaneView.cyan)
         return v
     }
     func tableView(_ tableView: NSTableView, viewFor tableColumn: NSTableColumn?, row: Int) -> NSView? {
@@ -671,11 +631,8 @@ private final class PaletteRow: NSTableRowView {
     var tint: NSColor = HomePaneView.cyan
     override func drawBackground(in dirtyRect: NSRect) {}
     override func drawSelection(in dirtyRect: NSRect) {
-        let path = NSBezierPath(roundedRect: bounds.insetBy(dx: 4, dy: 1), xRadius: 10, yRadius: 10)
-        tint.withAlphaComponent(0.12).setFill(); path.fill()
-        // Akzentbalken links — die Projektfarbe der Kachel, die gleich aufgeht.
-        let bar = NSBezierPath(roundedRect: NSRect(x: 6, y: bounds.midY - 10, width: 3, height: 20), xRadius: 1.5, yRadius: 1.5)
-        tint.setFill(); bar.fill()
+        // Wie im Home (`LineStyle.drawRowSelection`); Strich in der Farbe dessen, was gleich aufgeht.
+        LineStyle.drawRowSelection(in: bounds, tint: tint, emphasized: true, inset: 4)
     }
 }
 
@@ -714,18 +671,16 @@ private final class PaletteEntryCell: NSView {
         }
         let tint: NSColor
         switch (e.kind, e.agent) {
-        case (.session, "codex"): tint = HomePaneView.cyan
-        case (.session, _): tint = HomePaneView.orange
-        case (.launch, _): tint = HomePaneView.orange
-        case (.task, _): tint = e.badge?.color ?? HomePaneView.yellow
-        case (.pane, _): tint = e.badge?.color ?? HomePaneView.green
+        case (.session, "codex"): tint = Tone.start.color
+        case (.session, _): tint = Tone.claude.color
+        case (.launch, _): tint = Tone.claude.color
+        case (.task, _): tint = e.badge?.color ?? Tone.due.color
+        case (.pane, _): tint = e.badge?.color ?? Tone.running.color
         case (.project, _), (.folder, _): tint = e.accent ?? theme.dim
         default: tint = theme.dim
         }
+        // Symbol ohne getönten Kasten (Stil „Linie“); der Platz bleibt, damit die Titel bündig stehen.
         let box = NSView()
-        box.wantsLayer = true
-        box.layer?.cornerRadius = 8
-        box.layer?.backgroundColor = tint.withAlphaComponent(0.13).cgColor
         let icon = NSImageView()
         icon.image = NSImage(systemSymbolName: symbol, accessibilityDescription: nil)
         icon.symbolConfiguration = .init(pointSize: 13, weight: .medium)
@@ -746,16 +701,9 @@ private final class PaletteEntryCell: NSView {
         subtitle.maximumNumberOfLines = 2
         for f in [title, subtitle] { f.setContentCompressionResistancePriority(.defaultLow, for: .horizontal) }
 
-        let badge = NSTextField(labelWithString: e.badge?.text ?? "")
-        badge.font = AppFonts.mono(size: 10.5, weight: .medium)
-        badge.textColor = e.badge?.color ?? theme.faint
-        badge.wantsLayer = true
-        badge.layer?.cornerRadius = 6
-        badge.layer?.backgroundColor = (e.badge?.color ?? theme.faint).withAlphaComponent(0.12).cgColor
-        badge.alignment = .center
+        // Punkt · Text statt getönter Kapsel.
+        let badge = LineBadgeView(text: e.badge?.text ?? "", color: e.badge?.color ?? theme.faint, font: AppFonts.mono(size: 11, weight: .medium))
         badge.isHidden = e.badge == nil
-        badge.setContentCompressionResistancePriority(.required, for: .horizontal)
-        badge.setContentHuggingPriority(.required, for: .horizontal)
 
         for v in [box, icon, title, subtitle, badge] { v.translatesAutoresizingMaskIntoConstraints = false }
         addSubview(box); addSubview(icon); addSubview(title); addSubview(subtitle); addSubview(badge)
@@ -773,14 +721,7 @@ private final class PaletteEntryCell: NSView {
             subtitle.trailingAnchor.constraint(lessThanOrEqualTo: badge.leadingAnchor, constant: -10),
             badge.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -14),
             badge.centerYAnchor.constraint(equalTo: centerYAnchor),
-            badge.heightAnchor.constraint(equalToConstant: 20),
-            badge.widthAnchor.constraint(greaterThanOrEqualToConstant: 28)
         ])
-        // Pillenpolster: 6 pt links/rechts über das Textmaß hinaus.
-        if e.badge != nil {
-            let w = (e.badge!.text as NSString).size(withAttributes: [.font: badge.font!]).width + 14
-            badge.widthAnchor.constraint(equalToConstant: ceil(w)).isActive = true
-        }
         toolTip = e.subtitle.isEmpty ? e.title : e.title + "\n" + e.subtitle
         setAccessibilityLabel(e.title + (e.subtitle.isEmpty ? "" : ", " + e.subtitle))
     }
@@ -790,12 +731,18 @@ private final class PaletteEntryCell: NSView {
 private final class PaletteAnswerCell: NSView {
     init(text: String, theme: TerminalTheme) {
         super.init(frame: .zero)
+        // Textblock mit Strich links statt gerahmter Kapsel (Stil „Linie“).
         let box = NSView()
-        box.wantsLayer = true
-        box.layer?.cornerRadius = 10
-        box.layer?.backgroundColor = HomePaneView.orange.withAlphaComponent(0.06).cgColor
-        box.layer?.borderWidth = 1
-        box.layer?.borderColor = HomePaneView.orange.withAlphaComponent(0.25).cgColor
+        let bar = NSView()
+        bar.wantsLayer = true
+        bar.layer?.cornerRadius = 1
+        bar.layer?.backgroundColor = Tone.claude.color.cgColor
+        bar.translatesAutoresizingMaskIntoConstraints = false
+        box.addSubview(bar)
+        NSLayoutConstraint.activate([
+            bar.leadingAnchor.constraint(equalTo: box.leadingAnchor), bar.widthAnchor.constraint(equalToConstant: LineStyle.underline),
+            bar.topAnchor.constraint(equalTo: box.topAnchor, constant: 8), bar.bottomAnchor.constraint(equalTo: box.bottomAnchor, constant: -8)
+        ])
         let label = NSTextField(wrappingLabelWithString: text)
         label.font = AppFonts.mono(size: 13)
         label.textColor = theme.foreground
@@ -816,11 +763,11 @@ private final class PaletteAnswerCell: NSView {
 private final class PaletteStatusCell: NSView {
     init(entry e: LauncherPalette.Entry, theme: TerminalTheme) {
         super.init(frame: .zero)
-        let spinner = NSProgressIndicator()
-        spinner.style = .spinning
-        spinner.controlSize = .small
-        spinner.isIndeterminate = true
-        spinner.startAnimation(nil)
+        // Warten ohne Maß = pulsierender Punkt wie „arbeitet“ am Chip, statt System-Spinner.
+        let spinner = LineDotView()
+        spinner.diameter = 8
+        spinner.color = Tone.start.color
+        spinner.pulse = 0.9
         let title = NSTextField(labelWithString: e.title)
         title.font = AppFonts.mono(size: 14, weight: .medium)
         title.textColor = theme.foreground

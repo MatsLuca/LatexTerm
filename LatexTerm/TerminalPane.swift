@@ -121,7 +121,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
                 chip.short = short.isEmpty ? "arbeitet" : short
                 chip.glyph = "◐"
             case .awaitingInput:
-                chip.tone = theme.yellow
+                chip.tone = Tone.waiting.color
                 chip.pulsing = true
                 chip.urgent = true
                 var line = "braucht dich"
@@ -842,6 +842,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     private func applyAccent() {
         container.ownAccent = paneAccent
         view.caretColor = ThemeStore.shared.cursorThemeColor ? ThemeStore.shared.theme.cursor : effectiveAccent
+        view.progressBarColor = effectiveAccent
         updateStatusBadge()   // Pille trägt die Akzentfarbe mit (#25 v2)
         host?.paneStyleChanged(self)
     }
@@ -1371,7 +1372,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     /// ⌘F: Suchleiste (#9) — nur mit sichtbarem Terminal, Home hat keine.
     func handle(_ command: PaneCommand) -> Bool {
         guard command == .find, !isHome else { return false }
-        view.showFindInterface()
+        view.showLineFind()
         return true
     }
 

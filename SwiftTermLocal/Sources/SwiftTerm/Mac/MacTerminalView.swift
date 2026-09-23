@@ -497,6 +497,12 @@ open class TerminalView: NSView, NSTextInputClient, NSUserInterfaceValidations, 
         set { caretView.caretColor = newValue }
     }
 
+    /// Farbe des OSC-9;4-Fortschrittsbalkens im Normalzustand; nil = System-Akzent (LatexTerm: Kachelfarbe).
+    public var progressBarColor: NSColor? {
+        get { progressBarView?.accentColor }
+        set { progressBarView?.accentColor = newValue }
+    }
+
     /// Controls the color for the text in the caret when using a block cursor, if not set
     /// the cursor will render with the foreground color
     public var caretTextColor: NSColor? {

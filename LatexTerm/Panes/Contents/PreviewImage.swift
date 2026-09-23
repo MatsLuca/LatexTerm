@@ -191,10 +191,16 @@ final class ImageCanvas: NSView {
             let path = NSBezierPath(rect: rect)
             path.lineWidth = line
             path.stroke()
-            let font = NSFont.boldSystemFont(ofSize: 11 / max(scale, 0.05))
-            let label = NSAttributedString(string: " \(index + 1) ", attributes: [.font: font, .foregroundColor: NSColor.black,
-                                                                                   .backgroundColor: accent])
-            label.draw(at: NSPoint(x: rect.minX, y: rect.minY - label.size().height))
+            // Nummer wie in PDF/Web (`LineStyle.mark*`): 15-pt-Kästchen, Radius 3, links neben der Stelle; bildschirmfest.
+            let k = 1 / max(scale, 0.05)
+            let label = NSAttributedString(string: "\(index + 1)", attributes: [.font: LineStyle.markFont(size: 10 * k), .foregroundColor: NSColor.black])
+            let side = LineStyle.markSize * k
+            let width = max(side, label.size().width + 6 * k)
+            let badge = NSRect(x: rect.minX - width - 4 * k, y: rect.minY, width: width, height: side)
+            accent.setFill()
+            NSBezierPath(roundedRect: badge, xRadius: 3 * k, yRadius: 3 * k).fill()
+            let size = label.size()
+            label.draw(at: NSPoint(x: badge.midX - size.width / 2, y: badge.midY - size.height / 2))
         }
         if let pending {
             accent.withAlphaComponent(0.1).setFill()
