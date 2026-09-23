@@ -103,6 +103,9 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
     .f{position:absolute;overflow:hidden;}
     .f .m{position:absolute;left:2px;top:0;transform-origin:left top;white-space:nowrap;}
     .katex{white-space:nowrap;}
+    /* KaTeX' Display-Rand (1em oben/unten) zählte beim Einpassen mit: eine einzeilige $$…$$ ohne
+       leere Nachbarzeilen schrumpfte auf ~40 % (README-Dreh 23.09.). fit() zentriert selbst. */
+    .f .m .katex-display{margin:0;}
     .fallback{font-family:ui-monospace,Menlo,monospace;opacity:.65;font-style:italic;}
     /* KaTeX-Fehler: roher Text bleibt sichtbar, aber rot wellig unterstrichen. */
     .f .m.err{opacity:.85;text-decoration:underline wavy #E85E3E;text-decoration-skip-ink:none;text-underline-offset:2px;}
