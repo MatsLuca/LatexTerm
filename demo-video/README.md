@@ -17,13 +17,14 @@ rig/cut.py recordings/takes/NAME   → NAME.cuts.json: per scene the kept segmen
 rig/sheet.sh TAKE FROM TO FPS OUT  contact sheet, for cut points inside a scene
 src/clips/specs.ts          one ClipSpec per clip: parts (take + scene/range), speed-ups, camera, captions
 npx remotion render clip-NAME out/clip-NAME.mp4
-rig/webp.sh NAME 1400 15 74 → docs/media/NAME.webp (animated WebP, loops on GitHub)
+rig/final.sh NAME           → docs/media/NAME.webp: PNG sequence → mixed-mode animated WebP, 15 fps
 ```
 
-Proxies for Remotion: `ffmpeg -i recordings/takes/NAME.mov -c:v libx264 -crf 18 -g 15 -pix_fmt yuv420p
-public/takes/NAME.mp4` plus `NAME.cuts.json` next to it. `rig/record` and `rig/input` are built with
-`swiftc -O -o record record.swift` (same for `input`); they need Screen Recording and Accessibility for the
-terminal that runs them.
+Proxies for Remotion (the recording itself, only remuxed — no second lossy step):
+`ffmpeg -i recordings/takes/NAME.mov -c copy -movflags +faststart public/takes/NAME.mp4`, plus
+`NAME.cuts.json` next to it. `public/takes/` and `out/` are throw-away; `recordings/` keeps the raw takes.
+`rig/record` and `rig/input` are built with `swiftc -O -o record record.swift` (same for `input`); they need
+Screen Recording and Accessibility for the terminal that runs them. Release: `rig/final.sh CLIP`.
 
 ## The stage
 
