@@ -47,10 +47,11 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
     /// und kehrt erst danach zurück.
     var onDrag: ((String, NSEvent) -> Void)?
 
-    private static let font = AppFonts.mono(size: 11, weight: .semibold)
-    private static let tabHeight: CGFloat = 22
+    private static let font = AppFonts.mono(size: 11, weight: .medium)
+    private static let numberFont = AppFonts.mono(size: 11, weight: .bold)
+    private static let tabHeight: CGFloat = 24
     private static let maxTabWidth: CGFloat = 220
-    private static let spacing: CGFloat = 4
+    private static let spacing: CGFloat = 6
     /// Luft zwischen Reiter und Kachel darunter.
     private static let bottomInset: CGFloat = 4
     private static let closeSize: CGFloat = 14
@@ -58,7 +59,7 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
     private var hovered: Int? { didSet { if hovered != oldValue { layoutBadges(); needsDisplay = true } } }
     /// Je Reiter ein Punkt rechts (verborgen ohne Abzeichen oder solange dort das × steht).
     private var badgeViews: [PaneTabBadgeView] = []
-    private static let badgeSize: CGFloat = 8
+    private static let badgeSize: CGFloat = 6
     private var hoveredClose = false { didSet { if hoveredClose != oldValue { needsDisplay = true } } }
     private var pressed: (index: Int, onClose: Bool)?
     /// Wo gedrückt wurde (eigene Koordinaten) — ab `dragThreshold` Weg ist es ein Zug.
@@ -93,15 +94,53 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
 
     // MARK: Geometrie
 
-    /// Rahmen der Reiter: gleich breit, höchstens `maxTabWidth`, zusammen nie breiter als die Leiste.
+    /// Innenabstand links/rechts, Punkt, Lücke Punkt–Text, Platz fürs Abzeichen rechts.
+    private static let padding: CGFloat = 8
+    private static let dotSize: CGFloat = 6
+    private static let dotGap: CGFloat = 7
+
+    /// Rahmen der Reiter (Richtung „Linie“, 23.09.): so breit wie ihr Text, höchstens `maxTabWidth`. Reicht die
+    /// Leiste nicht, werden erst die breitesten gekürzt (gemeinsame Obergrenze), kurze behalten ihren Titel.
     private func tabRects() -> [NSRect] {
         guard !tabs.isEmpty else { return [] }
-        let n = CGFloat(tabs.count)
-        let width = max(0, min(Self.maxTabWidth, (bounds.width - Self.spacing * (n - 1)) / n)).rounded(.down)
-        let y = max(0, bounds.height - Self.bottomInset - Self.tabHeight)
-        return tabs.indices.map { i in
-            NSRect(x: CGFloat(i) * (width + Self.spacing), y: y, width: width, height: min(Self.tabHeight, bounds.height))
+        let natural = tabs.map { min(Self.maxTabWidth, naturalWidth(of: $0)) }
+        let available = max(0, bounds.width - Self.spacing * CGFloat(tabs.count - 1))
+        var cap = Self.maxTabWidth
+        if natural.reduce(0, +) > available {
+            // Wasserstand: Obergrenze so, dass Σ min(w, cap) = available.
+            var rest = available
+            var open = natural.sorted()
+            while let smallest = open.first, smallest * CGFloat(open.count) <= rest {
+                rest -= smallest
+                open.removeFirst()
+            }
+            cap = open.isEmpty ? Self.maxTabWidth : (rest / CGFloat(open.count)).rounded(.down)
         }
+        let y = max(0, bounds.height - Self.bottomInset - Self.tabHeight)
+        var x: CGFloat = 0
+        return natural.map { width in
+            let w = min(width, cap).rounded(.down)
+            defer { x += w + Self.spacing }
+            return NSRect(x: x, y: y, width: w, height: min(Self.tabHeight, bounds.height))
+        }
+    }
+
+    private func label(for tab: Tab) -> NSMutableAttributedString {
+        let theme = ThemeStore.shared.theme
+        let text = NSMutableAttributedString()
+        if let number = tab.number {
+            text.append(NSAttributedString(string: "\(number) ", attributes: [
+                .font: Self.numberFont, .foregroundColor: theme.foreground.withAlphaComponent(tab.front ? 0.6 : 0.3)]))
+        }
+        text.append(NSAttributedString(string: tab.title, attributes: [
+            .font: Self.font, .foregroundColor: theme.foreground.withAlphaComponent(tab.front ? 0.95 : 0.5)]))
+        return text
+    }
+
+    private func naturalWidth(of tab: Tab) -> CGFloat {
+        let text = label(for: tab).size().width.rounded(.up)
+        let badge: CGFloat = tab.badge == nil ? 0 : Self.badgeSize + 7
+        return Self.padding + Self.dotSize + Self.dotGap + text + badge + Self.padding
     }
 
     /// Einfügestelle für einen gezogenen Reiter bei `point` (0 … Anzahl): vor dem ersten Reiter, dessen Mitte
@@ -122,18 +161,24 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
         return NSRect(x: x - 1.5, y: first.minY - 2, width: 3, height: first.height + 4)
     }
 
+    /// Punkt links im Reiter; beim Hover steht an seiner Stelle das ×.
+    private func dotRect(in tab: NSRect) -> NSRect {
+        NSRect(x: tab.minX + Self.padding, y: tab.midY - Self.dotSize / 2, width: Self.dotSize, height: Self.dotSize)
+    }
+
     private func closeRect(in tab: NSRect) -> NSRect {
-        NSRect(x: tab.maxX - Self.closeSize - 5, y: tab.midY - Self.closeSize / 2, width: Self.closeSize, height: Self.closeSize)
+        let dot = dotRect(in: tab)
+        return NSRect(x: dot.midX - Self.closeSize / 2, y: tab.midY - Self.closeSize / 2, width: Self.closeSize, height: Self.closeSize)
     }
 
     /// Platz des Abzeichens rechts im Reiter (dort, wo beim Hover das × erscheint).
     private func badgeRect(in tab: NSRect) -> NSRect {
-        NSRect(x: tab.maxX - Self.badgeSize - 9, y: tab.midY - Self.badgeSize / 2, width: Self.badgeSize, height: Self.badgeSize)
+        NSRect(x: tab.maxX - Self.badgeSize - Self.padding, y: tab.midY - Self.badgeSize / 2, width: Self.badgeSize, height: Self.badgeSize)
     }
 
-    /// Abzeichen sichtbar: vorhanden, Reiter breit genug, kein × an der Stelle.
+    /// Abzeichen sichtbar: vorhanden und Reiter breit genug.
     private func showsBadge(_ index: Int, _ rect: NSRect) -> Bool {
-        tabs.indices.contains(index) && tabs[index].badge != nil && rect.width >= 60 && !showsClose(index, rect)
+        tabs.indices.contains(index) && tabs[index].badge != nil && rect.width >= 50
     }
 
     private func layoutBadges() {
@@ -148,8 +193,8 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
         }
     }
 
-    /// × nur auf dem Reiter unter der Maus und nur, wenn der Reiter breit genug ist.
-    private func showsClose(_ index: Int, _ rect: NSRect) -> Bool { hovered == index && rect.width >= 70 }
+    /// × nur auf dem Reiter unter der Maus (anstelle des Punkts).
+    private func showsClose(_ index: Int, _ rect: NSRect) -> Bool { hovered == index && rect.width >= 30 }
 
     private func hit(_ point: NSPoint) -> (index: Int, onClose: Bool)? {
         for (i, rect) in tabRects().enumerated() where rect.contains(point) {
@@ -160,40 +205,38 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
 
     // MARK: Zeichnen
 
+    /// Richtung „Linie“ (Mats, 23.09.): keine Flächen, keine Ränder. Vorderer Reiter = heller Text + Strich in
+    /// Kachelfarbe unten (voll bei Fokus), alle stehen auf einer Haarlinie; Hover = leise Fläche.
     override func draw(_ dirtyRect: NSRect) {
         let theme = ThemeStore.shared.theme
-        for (i, rect) in tabRects().enumerated() {
+        let rects = tabRects()
+        if let first = rects.first {
+            theme.foreground.withAlphaComponent(0.08).setFill()
+            NSRect(x: 0, y: first.maxY - 1, width: bounds.width, height: 1).fill()
+        }
+        for (i, rect) in rects.enumerated() {
             let tab = tabs[i]
-            let path = NSBezierPath(roundedRect: rect.insetBy(dx: 0.5, dy: 0.5), xRadius: 6, yRadius: 6)
-            if tab.front {
-                theme.background.withAlphaComponent(1).setFill()
-                path.fill()
-                tab.accent.withAlphaComponent(tab.focused ? 0.85 : 0.5).setStroke()
-                path.lineWidth = tab.focused ? 1.5 : 1
-                path.stroke()
-            } else if hovered == i {
-                theme.foreground.withAlphaComponent(0.08).setFill()
-                path.fill()
+            if hovered == i && !tab.front {
+                theme.foreground.withAlphaComponent(0.06).setFill()
+                NSBezierPath(roundedRect: rect.insetBy(dx: 0, dy: 2), xRadius: 5, yRadius: 5).fill()
             }
-
-            // Punkt in Kachelfarbe, dann der Titel (abgeschnitten), rechts ggf. ×.
-            let dot = NSRect(x: rect.minX + 8, y: rect.midY - 4, width: 8, height: 8)
-            tab.accent.withAlphaComponent(tab.front ? 1 : 0.55).setFill()
-            NSBezierPath(ovalIn: dot).fill()
+            if tab.front {
+                tab.accent.withAlphaComponent(tab.focused ? 1 : 0.45).setFill()
+                NSBezierPath(roundedRect: NSRect(x: rect.minX + 2, y: rect.maxY - 2, width: rect.width - 4, height: 2),
+                             xRadius: 1, yRadius: 1).fill()
+            }
 
             let close = showsClose(i, rect)
-            let textX = dot.maxX + 6
-            let textRight = close ? closeRect(in: rect).minX - 4
-                : showsBadge(i, rect) ? badgeRect(in: rect).minX - 6 : rect.maxX - 8
+            if !close {
+                tab.accent.setFill()
+                NSBezierPath(ovalIn: dotRect(in: rect)).fill()
+            }
+
+            let textX = dotRect(in: rect).maxX + Self.dotGap
+            let textRight = showsBadge(i, rect) ? badgeRect(in: rect).minX - 7 : rect.maxX - Self.padding
             let style = NSMutableParagraphStyle()
             style.lineBreakMode = .byTruncatingTail
-            let text = NSMutableAttributedString()
-            if let number = tab.number {
-                text.append(NSAttributedString(string: "\(number)  ", attributes: [
-                    .font: Self.font, .foregroundColor: theme.foreground.withAlphaComponent(tab.front ? 0.5 : 0.35)]))
-            }
-            text.append(NSAttributedString(string: tab.title, attributes: [
-                .font: Self.font, .foregroundColor: theme.foreground.withAlphaComponent(tab.front ? 0.95 : 0.55)]))
+            let text = label(for: tab)
             text.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: text.length))
             let lineHeight = ceil(Self.font.ascender - Self.font.descender)
             let textRect = NSRect(x: textX, y: rect.midY - lineHeight / 2, width: max(0, textRight - textX), height: lineHeight)

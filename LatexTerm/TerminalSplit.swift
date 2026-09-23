@@ -186,6 +186,7 @@ final class TerminalSplitView: NSView {
         if let quickstartObserver { NotificationCenter.default.removeObserver(quickstartObserver) }
         if let paneCommandObserver { NotificationCenter.default.removeObserver(paneCommandObserver) }
         if let windowCloseObserver { NotificationCenter.default.removeObserver(windowCloseObserver) }
+        if let commandDragMonitor { NSEvent.removeMonitor(commandDragMonitor) }
     }
 
     /// Quickstart ausführen: eine noch unberührte Home-Kachel (Kaltstart: die einzige) wird
@@ -397,6 +398,7 @@ final class TerminalSplitView: NSView {
         super.viewDidMoveToWindow()
         firstResponderObservation = nil
         guard let window = window else { return }
+        if commandDragMonitor == nil { installCommandDrag() }
 
         // Wiederhergestelltes Fenster: Fokus/Zoom nach den Fokus-Sprüngen der angelegten Kacheln.
         if let layout = pendingRestoreLayout {
@@ -763,13 +765,15 @@ final class TerminalSplitView: NSView {
                 let shown = mode == .off ? nil : text
                 guard showDots || shown != nil else { continue }
                 let long = level == .allLong || (level == .focusedLong && focused)
+                let number = ordered.firstIndex { $0 === pane }.map { $0 + 1 }.flatMap { $0 <= 9 ? $0 : nil }
                 specs.append((pane, PaneChipView.Spec(
-                    color: pane.effectiveAccent, tone: chip.tone, focused: focused, text: shown,
+                    color: pane.effectiveAccent, tone: chip.tone, focused: focused,
+                    number: showDots ? number : nil, text: shown,
                     pulsing: chip.pulsing, urgent: chip.urgent, tooltip: chip.tooltip,
                     maxWidth: long ? 360 : 160)))
             }
             let width = specs.reduce(CGFloat(0)) { $0 + PaneChipView.width(for: $1.spec) }
-                + 6 * CGFloat(max(0, specs.count - 1))
+                + 4 * CGFloat(max(0, specs.count - 1))
             if width <= available || level == .glyph { break }
         }
 
@@ -821,7 +825,7 @@ final class TerminalSplitView: NSView {
     @discardableResult
     private static func layoutHUD(_ wrapper: NSView) -> Bool {
         let elements = wrapper.subviews
-        let spacing: CGFloat = 6
+        let spacing: CGFloat = 4
         let contentWidth = elements.reduce(0) { $0 + $1.frame.width }
             + spacing * CGFloat(max(0, elements.count - 1))
         let contentHeight = elements.map(\.frame.height).max() ?? 20
@@ -836,20 +840,20 @@ final class TerminalSplitView: NSView {
         return unchanged
     }
 
+    /// Zoom-Hinweis in der Sprache der Chips: nur Text, Strich in Kachelfarbe darunter.
     private static func makeZoomPill(accent: NSColor) -> NSView {
-        let label = NSTextField(labelWithString: "⤢ Zoom   ⌘⏎")
-        label.font = AppFonts.mono(size: 11, weight: .semibold)
-        label.textColor = accent
+        let label = NSTextField(labelWithString: "⤢ Zoom  ⌘⏎")
+        label.font = AppFonts.mono(size: 11, weight: .medium)
+        label.textColor = ThemeStore.shared.theme.foreground.withAlphaComponent(0.7)
         label.sizeToFit()
-        let pill = NSView(frame: NSRect(x: 0, y: 0,
-                                        width: label.frame.width + 16,
-                                        height: label.frame.height + 6))
+        let pill = NSView(frame: NSRect(x: 0, y: 0, width: label.frame.width + 10, height: 22))
         pill.wantsLayer = true
-        pill.layer?.backgroundColor = accent.withAlphaComponent(0.16).cgColor
-        pill.layer?.borderColor = accent.withAlphaComponent(0.55).cgColor
-        pill.layer?.borderWidth = 1
-        pill.layer?.cornerRadius = pill.frame.height / 2
-        label.frame.origin = NSPoint(x: 8, y: 3)
+        let line = CALayer()
+        line.backgroundColor = accent.cgColor
+        line.cornerRadius = 1
+        line.frame = CGRect(x: 3, y: 0, width: pill.frame.width - 6, height: 2)
+        pill.layer?.addSublayer(line)
+        label.frame.origin = NSPoint(x: 5, y: ((22 - label.frame.height) / 2).rounded())
         pill.addSubview(label)
         return pill
     }
@@ -1229,7 +1233,43 @@ final class TerminalSplitView: NSView {
 
     // MARK: Kachel ziehen (Mats, Stufe 2 Scheibe B)
 
-    /// Kachel am Reiter oder Titelleisten-Chip gezogen: bis zum Loslassen zeigt die Anzeige, wo sie landen
+    /// ⌘-Zug an der Kachel selbst (Mats, 23.09.): ⌘ halten und irgendwo in einer Kachel ziehen = Kachel ziehen, wie
+    /// am Chip oder Reiter. Der Zug beginnt erst nach ein paar Punkten Weg — ein ⌘-Klick ohne Bewegung (Link öffnen
+    /// im Terminal/Web) geht unverändert an die Kachel.
+    private var commandDragMonitor: Any?
+    private static let commandDragThreshold: CGFloat = 5
+
+    private func installCommandDrag() {
+        commandDragMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
+            guard let self, let window = self.window, event.window === window,
+                  event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
+                  self.zoomedPane == nil, self.panes.count > 1, self.paneDrag == nil, self.dragOrigin == nil,
+                  let pane = self.panes.first(where: { pane in
+                      !pane.container.isHidden && pane.container.window === window
+                          && pane.container.bounds.contains(pane.container.convert(event.locationInWindow, from: nil))
+                  }) else { return event }
+            return self.trackCommandDrag(pane, from: event) ? nil : event
+        }
+    }
+
+    /// true = als Kachel-Zug geführt (Klick verschluckt); false = war ein Klick, das Loslassen liegt wieder vorn
+    /// in der Schlange und der Aufrufer reicht den Mausdruck normal weiter.
+    private func trackCommandDrag(_ pane: any Pane, from down: NSEvent) -> Bool {
+        guard let window else { return false }
+        let start = down.locationInWindow
+        while let next = window.nextEvent(matching: [.leftMouseDragged, .leftMouseUp]) {
+            if next.type == .leftMouseUp {
+                window.postEvent(next, atStart: true)
+                return false
+            }
+            let point = next.locationInWindow
+            guard hypot(point.x - start.x, point.y - start.y) >= Self.commandDragThreshold else { continue }
+            return dragPane(pane.id.uuidString, with: next)
+        }
+        return false
+    }
+
+    /// Kachel am Reiter, Titelleisten-Chip oder per ⌘-Zug gezogen: bis zum Loslassen zeigt die Anzeige, wo sie landen
     /// würde; beim Loslassen wird genau das umgesetzt, Esc bricht ab. Der Zug läuft als eigene
     /// Ereignisschleife (`trackEvents`) und kehrt erst danach zurück — so hängt er nicht an der Quelle
     /// (Chips werden bei jeder Statusänderung neu aufgebaut, Reiterleisten beim Umordnen). Gerechnet wird bei
@@ -1772,6 +1812,8 @@ private final class PaneChipView: NSView {
         var color: NSColor
         var tone: NSColor
         var focused: Bool
+        /// Kachelnummer (= ⌘n, wie im Reiter); nil ab 10.
+        var number: Int?
         var text: String?
         var pulsing: Bool
         var urgent: Bool
@@ -1779,14 +1821,25 @@ private final class PaneChipView: NSView {
         var maxWidth: CGFloat
     }
 
-    private static let height: CGFloat = 20
-    private static let font = AppFonts.mono(size: 11, weight: .semibold)
+    // Richtung „Linie“ (Mats, 23.09.2026): keine Kapsel, kein Rand, keine getönte Fläche. Punkt · Nummer · Text,
+    // Fokus = Strich in Kachelfarbe unten (wie der vordere Reiter), Hover = leise Fläche.
+    private static let height: CGFloat = 22
+    private static let font = AppFonts.mono(size: 11, weight: .medium)
+    private static let numberFont = AppFonts.mono(size: 11, weight: .bold)
+    private static let padding: CGFloat = 5
+    private static let dotSize: CGFloat = 6
+    private static let gap: CGFloat = 5
+
+    private static func textWidth(_ string: String, _ font: NSFont) -> CGFloat {
+        (string as NSString).size(withAttributes: [.font: font]).width.rounded(.up)
+    }
 
     /// Breite, die `apply(spec)` ergeben wird — zum Vorab-Messen, welche Textstufe in die Leiste passt.
     static func width(for spec: Spec) -> CGFloat {
-        guard let text = spec.text else { return 18 }
-        let measured = (text as NSString).size(withAttributes: [.font: font]).width.rounded(.up)
-        return 6 + 12 + 6 + min(measured, spec.maxWidth) + 9
+        var width = padding + dotSize + padding
+        if let number = spec.number { width += gap + textWidth("\(number)", numberFont) }
+        if let text = spec.text { width += gap + 1 + min(textWidth(text, font), spec.maxWidth) }
+        return width
     }
 
     private let onClick: () -> Void
@@ -1798,8 +1851,11 @@ private final class PaneChipView: NSView {
     private var dragRefused = false
     private static let dragThreshold: CGFloat = 4
     private let circle = CALayer()
+    private let underline = CALayer()
+    private let numberLabel = NSTextField(labelWithString: "")
     private let label = NSTextField(labelWithString: "")
     private var spec: Spec?
+    private var hovered = false { didSet { if hovered != oldValue { updateHover() } } }
 
     /// Ohne das frisst der Fenster-Drag den Klick: `isMovableByWindowBackground`
     /// + nicht-opaker View ⇒ AppKit deutet mouseDown als „Fenster anfassen".
@@ -1807,18 +1863,38 @@ private final class PaneChipView: NSView {
 
     init(onClick: @escaping () -> Void) {
         self.onClick = onClick
-        super.init(frame: NSRect(x: 0, y: 0, width: 18, height: Self.height))
+        super.init(frame: NSRect(x: 0, y: 0, width: 16, height: Self.height))
         wantsLayer = true
-        circle.cornerRadius = 6
+        layer?.cornerRadius = 5
+        circle.cornerRadius = Self.dotSize / 2
         layer?.addSublayer(circle)
+        underline.cornerRadius = 1
+        layer?.addSublayer(underline)
+        for field in [numberLabel, label] {
+            field.lineBreakMode = .byTruncatingTail
+            field.maximumNumberOfLines = 1
+            field.isHidden = true
+            addSubview(field)
+        }
+        numberLabel.font = Self.numberFont
         label.font = Self.font
-        label.lineBreakMode = .byTruncatingTail
-        label.maximumNumberOfLines = 1
-        label.isHidden = true
-        addSubview(label)
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                       owner: self, userInfo: nil))
+    }
+
+    override func mouseEntered(with event: NSEvent) { hovered = true }
+    override func mouseExited(with event: NSEvent) { hovered = false }
+
+    private func updateHover() {
+        layer?.backgroundColor = hovered ? ThemeStore.shared.theme.foreground.withAlphaComponent(0.07).cgColor : nil
+    }
 
     override func mouseDown(with event: NSEvent) {
         pressedAt = event.locationInWindow
@@ -1853,43 +1929,51 @@ private final class PaneChipView: NSView {
         let old = self.spec
         self.spec = spec
         toolTip = spec.tooltip
-
-        let dotColor = spec.urgent ? spec.tone : spec.color
-        circle.backgroundColor = dotColor.withAlphaComponent(spec.focused ? 1.0 : 0.55).cgColor
-        circle.borderWidth = spec.focused ? 1.5 : 0
-        circle.borderColor = ThemeStore.shared.theme.foreground.withAlphaComponent(0.8).cgColor
-
+        let fg = ThemeStore.shared.theme.foreground
         let height = Self.height
+
+        // Punkt: Tonfarbe, solange es etwas zu sagen gibt, sonst Kachelfarbe — immer voll deckend (55 % wurde braun).
+        circle.backgroundColor = (spec.urgent || spec.text != nil ? spec.tone : spec.color).cgColor
+        circle.frame = CGRect(x: Self.padding, y: ((height - Self.dotSize) / 2).rounded(), width: Self.dotSize, height: Self.dotSize)
+        var x = circle.frame.maxX
+
+        if let number = spec.number {
+            numberLabel.isHidden = false
+            numberLabel.stringValue = "\(number)"
+            numberLabel.textColor = fg.withAlphaComponent(spec.focused ? 0.75 : 0.4)
+            numberLabel.sizeToFit()
+            numberLabel.frame.origin = NSPoint(x: x + Self.gap, y: ((height - numberLabel.frame.height) / 2).rounded())
+            x = numberLabel.frame.maxX
+        } else {
+            numberLabel.isHidden = true
+        }
+
         if let text = spec.text {
             label.isHidden = false
-            label.textColor = spec.tone
-            if text != old?.text || spec.maxWidth != old?.maxWidth {
+            label.textColor = spec.urgent ? spec.tone : fg.withAlphaComponent(spec.focused ? 0.92 : 0.5)
+            if text != old?.text || spec.maxWidth != old?.maxWidth || label.stringValue.isEmpty {
                 label.stringValue = text
                 label.sizeToFit()
                 label.frame.size.width = min(label.frame.width, spec.maxWidth)
             }
-            setFrameSize(NSSize(width: 6 + 12 + 6 + label.frame.width + 9, height: height))
-            circle.frame = CGRect(x: 6, y: 4, width: 12, height: 12)
-            label.frame.origin = NSPoint(x: 24, y: ((height - label.frame.height) / 2).rounded())
-            layer?.cornerRadius = height / 2
-            layer?.borderWidth = 1
-            layer?.backgroundColor = spec.tone.withAlphaComponent(0.10).cgColor
-            layer?.borderColor = spec.tone.withAlphaComponent(0.45).cgColor
+            label.frame.origin = NSPoint(x: x + Self.gap + 1, y: ((height - label.frame.height) / 2).rounded())
+            x = label.frame.maxX
         } else {
             label.isHidden = true
-            setFrameSize(NSSize(width: 18, height: height))
-            circle.frame = CGRect(x: 3, y: 4, width: 12, height: 12)
-            layer?.borderWidth = 0
-            layer?.backgroundColor = nil
-            layer?.borderColor = nil
         }
+        setFrameSize(NSSize(width: x + Self.padding, height: height))
+
+        underline.isHidden = !spec.focused
+        underline.backgroundColor = spec.color.cgColor
+        underline.frame = CGRect(x: 3, y: 0, width: frame.width - 6, height: 2)
+        updateHover()
 
         if spec.pulsing {
             if circle.animation(forKey: "sessionPulse") == nil || old?.urgent != spec.urgent {
                 circle.removeAnimation(forKey: "sessionPulse")
                 let pulse = CABasicAnimation(keyPath: "opacity")
                 pulse.fromValue = 1.0
-                pulse.toValue = 0.35
+                pulse.toValue = 0.3
                 pulse.duration = spec.urgent ? 0.5 : 0.9
                 pulse.autoreverses = true
                 pulse.repeatCount = .infinity
