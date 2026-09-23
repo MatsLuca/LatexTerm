@@ -20,6 +20,11 @@ struct TerminalTheme: Equatable {
     let cursorText: NSColor
     let selectionBackground: NSColor
     let selectionForeground: NSColor
+    /// Rollen, die nicht aus der ANSI-Reihe kommen sollen (`error`, `waiting`, `claude`) — aus
+    /// Kommentarzeilen `# latexterm.<rolle> = #rrggbb` der Theme-Datei (Ghostty überliest sie).
+    /// Zweck: Claude Code im Theme `dark-ansi` legt Claude-Farbe und Fehler beide auf ANSI 9; das
+    /// Werkstatt-Theme gibt 9 dem Claude-Orange und hält das Fehler-Rot hier (claude-werkstatt/farben).
+    var roles: [String: NSColor] = [:]
 
     // MARK: Abgeleitete Flächen
 
@@ -34,9 +39,9 @@ struct TerminalTheme: Equatable {
 
     // Semantische Farben der eigenen UIs (Home-Kachel, Hinweise, Badges): die hellen ANSI-Farben
     // des Themes, damit Baum und Terminal-Inhalt aus derselben Palette kommen.
-    var red: NSColor { ansi[9] }
+    var red: NSColor { roles["error"] ?? ansi[9] }
     var green: NSColor { ansi[10] }
-    var yellow: NSColor { ansi[11] }
+    var yellow: NSColor { roles["waiting"] ?? ansi[11] }
     var blue: NSColor { ansi[12] }
     var violet: NSColor { ansi[13] }
     var cyan: NSColor { ansi[14] }
@@ -92,8 +97,14 @@ struct TerminalTheme: Equatable {
         guard let text = try? String(contentsOf: url, encoding: .utf8) else { return nil }
         var pairs: [(String, String)] = []
         for raw in text.split(whereSeparator: \.isNewline) {
-            let line = raw.trimmingCharacters(in: .whitespaces)
-            guard !line.isEmpty, !line.hasPrefix("#"), let eq = line.firstIndex(of: "=") else { continue }
+            var line = raw.trimmingCharacters(in: .whitespaces)
+            // `# latexterm.<rolle> = …` → Schlüssel `latexterm.<rolle>`; übrige Kommentare überspringen
+            if line.hasPrefix("#") {
+                let rest = line.dropFirst().trimmingCharacters(in: .whitespaces)
+                guard rest.hasPrefix("latexterm.") else { continue }
+                line = rest
+            }
+            guard !line.isEmpty, let eq = line.firstIndex(of: "=") else { continue }
             let key = line[..<eq].trimmingCharacters(in: .whitespaces)
             let value = line[line.index(after: eq)...].trimmingCharacters(in: .whitespaces)
             pairs.append((key, value))
@@ -106,7 +117,12 @@ struct TerminalTheme: Equatable {
     init?(ghosttyPairs pairs: [(String, String)], name: String) {
         var bg: NSColor?, fg: NSColor?, cursor: NSColor?, cursorText: NSColor?, selBg: NSColor?, selFg: NSColor?
         var palette = TerminalTheme.darkPlus.ansi
+        var roles: [String: NSColor] = [:]
         for (key, value) in pairs {
+            if key.hasPrefix("latexterm.") {
+                if let c = NSColor(ghostty: value) { roles[String(key.dropFirst("latexterm.".count))] = c }
+                continue
+            }
             switch key {
             case "background": bg = NSColor(ghostty: value)
             case "foreground": fg = NSColor(ghostty: value)
@@ -129,6 +145,7 @@ struct TerminalTheme: Equatable {
                   cursor: cursor ?? foreground, cursorText: cursorText ?? background,
                   selectionBackground: selBg ?? background.lightened(by: 0.12),
                   selectionForeground: selFg ?? foreground)
+        self.roles = roles
     }
 
     init(name: String, background: NSColor, foreground: NSColor, ansi: [NSColor],

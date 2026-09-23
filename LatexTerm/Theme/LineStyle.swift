@@ -62,7 +62,7 @@ enum Tone {
         case .error: return t.red
         case .shell: return t.blue
         case .area: return t.violet
-        case .claude: return HomePaneView.orange
+        case .claude: return t.roles["claude"] ?? HomePaneView.orange
         case .muted: return t.faint
         }
     }

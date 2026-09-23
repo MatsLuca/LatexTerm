@@ -102,6 +102,8 @@ struct PaneInfo: Codable {
     var companionOf: String? = nil
     /// Kachel-Layout Stufe 2: liegt als hinterer Reiter verdeckt; nil = sichtbar.
     var hidden: Bool? = nil
+    /// Kachelfarbe (`#RRGGBB`, wie Titelstrich/Cursor) — z. B. für die Claude-Statuszeile (`accent=kachel`).
+    var accent: String? = nil
 }
 
 /// Selbstbeschreibung einer Kachelart für Agenten (Capability `pane-kind-info`, 22.09.2026):

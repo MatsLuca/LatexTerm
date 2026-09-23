@@ -1720,7 +1720,8 @@ extension TerminalSplitView: ControlCommandHandler {
                         foreground: terminal?.foregroundProcessName,
                         openedBy: pane.openedBy,
                         companionOf: companionOf[pane.id]?.uuidString,
-                        hidden: hiddenTabIDs.contains(pane.id.uuidString) ? true : nil)
+                        hidden: hiddenTabIDs.contains(pane.id.uuidString) ? true : nil,
+                        accent: pane.effectiveAccent.srgbHexString)
     }
 
     /// Steuerkanal `layout` (Kachel-Layout): Stand zeigen oder eine Absicht anwenden. Ein Agent ordnet

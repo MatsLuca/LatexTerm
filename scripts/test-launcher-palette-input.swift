@@ -15,6 +15,7 @@ struct TerminalTheme {
     let dim = NSColor.secondaryLabelColor, faint = NSColor.tertiaryLabelColor
     let red = NSColor.systemRed, green = NSColor.systemGreen, yellow = NSColor.systemYellow
     let blue = NSColor.systemBlue, violet = NSColor.systemPurple, cyan = NSColor.systemTeal
+    let roles: [String: NSColor] = [:]
 }
 extension NSColor {
     func lightened(by amount: CGFloat) -> NSColor { blended(withFraction: amount, of: .white) ?? self }
