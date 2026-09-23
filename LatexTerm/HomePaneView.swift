@@ -1379,6 +1379,13 @@ final class HomePaneView: NSView {
                 } else { self.selectInitial() }
                 self.runPendingResume()
             case .failure(let err):
+                // Eine wartende Session („Weiter“ nach ⌥⌘R) nicht an einem einzelnen Fehlstart verlieren: bis zu
+                // dreimal nachladen (23.09.: mehrere Bretter luden gleichzeitig, `projekte` stolperte über seinen Cache).
+                if self.pendingResume != nil, self.resumeRetries < 3 {
+                    self.resumeRetries += 1
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.reload() }
+                    return
+                }
                 self.data = nil
                 self.title.stringValue = "projekte nicht erreichbar"
                 self.subtitle.stringValue = err.message
@@ -1607,6 +1614,8 @@ final class HomePaneView: NSView {
         var accentName: String?
     }
     private var pendingResume: PendingResume?
+    /// Nachladeversuche für eine wartende Session, wenn `projekte` scheitert.
+    private var resumeRetries = 0
     /// Farbname der Kachel vor dem Neustart — nur während `run` gesetzt, `colored` liest ihn.
     private var restoredAccentName: String?
     var hasPendingResume: Bool { pendingResume != nil }

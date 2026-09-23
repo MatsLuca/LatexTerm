@@ -31,6 +31,9 @@ final class BoardHostView: NSView {
     private let strip = BoardStripView(frame: .zero)
     private var stripAccessory: NSTitlebarAccessoryViewController?
     private var commandObserver: NSObjectProtocol?
+    /// ⌃⇥ / ⌃⇧⇥ = nächstes/voriges Brett. Als Monitor vor allem anderen: die Kachel-Hülle sah die Taste nie, AppKit gibt
+    /// ⌃⇥ direkt ans Terminal (Live-Befund 23.09.).
+    private var keyMonitor: Any?
     private var closeObserver: NSObjectProtocol?
     private var windowClosed = false
     private var stripRefreshQueued = false
@@ -77,6 +80,12 @@ final class BoardHostView: NSView {
             guard let self, self.window?.isKeyWindow == true, let command = note.object as? BoardCommand else { return }
             self.perform(command)
         }
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self, event.keyCode == 48, let window = self.window, event.window === window, window.isKeyWindow,
+                  event.modifierFlags.intersection([.command, .option, .control]) == .control else { return event }
+            self.perform(event.modifierFlags.contains(.shift) ? .previous : .next)
+            return nil
+        }
         Self.live.append(Weak(self))
     }
 
@@ -85,6 +94,7 @@ final class BoardHostView: NSView {
     deinit {
         if let commandObserver { NotificationCenter.default.removeObserver(commandObserver) }
         if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
+        if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
     }
 
     override var isFlipped: Bool { true }

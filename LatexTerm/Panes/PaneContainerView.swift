@@ -74,12 +74,6 @@ final class PaneContainerView: NSView {
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         guard let pane, let host = pane.host,
               (window?.firstResponder as? NSView)?.isDescendant(of: self) == true else { return false }
-        // ⌃⇥ / ⌃⇧⇥ = nächstes/voriges Brett (wie Tabs in macOS) — vor dem Inhalt, sonst ginge es an die Shell.
-        if event.keyCode == 48, event.modifierFlags.intersection([.command, .option, .control]) == .control {
-            let back = event.modifierFlags.contains(.shift)
-            NotificationCenter.default.post(name: .latexTermBoardCommand, object: back ? BoardCommand.previous : BoardCommand.next)
-            return true
-        }
         let shortcut = Self.shortcut(for: event)
         switch shortcut {
         case .split: host.paneRequestsSplit(pane); return true
