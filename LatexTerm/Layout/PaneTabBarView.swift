@@ -4,8 +4,26 @@ import AppKit
 /// Platz über der vorderen Kachel, zeichnet die Reiter selbst (keine Subviews, kein Layout-Zustand)
 /// und meldet Klicks an die Split-View: Reiter = nach vorn holen und fokussieren, × = Kachel schließen.
 /// Ein Reiter lässt sich wegziehen (Scheibe B): ab ein paar Punkten Weg übernimmt die Split-View den Zug.
+/// Verdeckte Reiter tragen ein Abzeichen (Scheibe C), wenn dahinter etwas passiert: Agent wartet (gelb, pulsiert
+/// schnell), arbeitet (pulsiert ruhig), ist fertig/gescheitert (Tonfarbe) oder der Inhalt ist neu (Kachelfarbe).
 /// Welche Kacheln hier liegen und welche vorn ist, kommt aus dem Layout-Baum (`LayoutTabBar`).
 final class PaneTabBarView: NSView, NSViewToolTipOwner {
+    /// Was hinter einem verdeckten Reiter los ist — die Farbe bringt die Split-View mit (Theme/Kachel).
+    enum Badge: Equatable {
+        case attention(NSColor)
+        case working(NSColor)
+        case outcome(NSColor)
+        case news(NSColor)
+
+        var color: NSColor {
+            switch self { case .attention(let c), .working(let c), .outcome(let c), .news(let c): return c }
+        }
+        /// Pulsdauer (halbe Periode); nil = ruhig.
+        var pulse: Double? {
+            switch self { case .attention: return 0.5; case .working: return 0.9; default: return nil }
+        }
+    }
+
     struct Tab: Equatable {
         var id: String
         /// Kachelnummer in Lesereihenfolge (= ⌘n), gedimmt vor dem Titel.
@@ -15,10 +33,13 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
         var front: Bool
         /// Vorne und hat den Tastaturfokus.
         var focused: Bool
+        /// Abzeichen (nur verdeckte Reiter) und sein Text für den Tooltip.
+        var badge: Badge? = nil
+        var badgeText: String? = nil
     }
 
     var tabs: [Tab] = [] {
-        didSet { if tabs != oldValue { rebuildToolTips(); needsDisplay = true } }
+        didSet { if tabs != oldValue { rebuildToolTips(); layoutBadges(); needsDisplay = true } }
     }
     var onSelect: ((String) -> Void)?
     var onClose: ((String) -> Void)?
@@ -34,7 +55,10 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
     private static let bottomInset: CGFloat = 4
     private static let closeSize: CGFloat = 14
 
-    private var hovered: Int? { didSet { if hovered != oldValue { needsDisplay = true } } }
+    private var hovered: Int? { didSet { if hovered != oldValue { layoutBadges(); needsDisplay = true } } }
+    /// Je Reiter ein Punkt rechts (verborgen ohne Abzeichen oder solange dort das × steht).
+    private var badgeViews: [PaneTabBadgeView] = []
+    private static let badgeSize: CGFloat = 8
     private var hoveredClose = false { didSet { if hoveredClose != oldValue { needsDisplay = true } } }
     private var pressed: (index: Int, onClose: Bool)?
     /// Wo gedrückt wurde (eigene Koordinaten) — ab `dragThreshold` Weg ist es ein Zug.
@@ -64,6 +88,7 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
         rebuildToolTips()
+        layoutBadges()
     }
 
     // MARK: Geometrie
@@ -101,6 +126,28 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
         NSRect(x: tab.maxX - Self.closeSize - 5, y: tab.midY - Self.closeSize / 2, width: Self.closeSize, height: Self.closeSize)
     }
 
+    /// Platz des Abzeichens rechts im Reiter (dort, wo beim Hover das × erscheint).
+    private func badgeRect(in tab: NSRect) -> NSRect {
+        NSRect(x: tab.maxX - Self.badgeSize - 9, y: tab.midY - Self.badgeSize / 2, width: Self.badgeSize, height: Self.badgeSize)
+    }
+
+    /// Abzeichen sichtbar: vorhanden, Reiter breit genug, kein × an der Stelle.
+    private func showsBadge(_ index: Int, _ rect: NSRect) -> Bool {
+        tabs.indices.contains(index) && tabs[index].badge != nil && rect.width >= 60 && !showsClose(index, rect)
+    }
+
+    private func layoutBadges() {
+        let rects = tabRects()
+        while badgeViews.count < tabs.count { let view = PaneTabBadgeView(); addSubview(view); badgeViews.append(view) }
+        while badgeViews.count > tabs.count { badgeViews.removeLast().removeFromSuperview() }
+        for (i, view) in badgeViews.enumerated() {
+            guard i < rects.count, showsBadge(i, rects[i]), let badge = tabs[i].badge else { view.isHidden = true; continue }
+            view.frame = badgeRect(in: rects[i])
+            view.apply(badge)
+            view.isHidden = false
+        }
+    }
+
     /// × nur auf dem Reiter unter der Maus und nur, wenn der Reiter breit genug ist.
     private func showsClose(_ index: Int, _ rect: NSRect) -> Bool { hovered == index && rect.width >= 70 }
 
@@ -136,7 +183,8 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
 
             let close = showsClose(i, rect)
             let textX = dot.maxX + 6
-            let textRight = close ? closeRect(in: rect).minX - 4 : rect.maxX - 8
+            let textRight = close ? closeRect(in: rect).minX - 4
+                : showsBadge(i, rect) ? badgeRect(in: rect).minX - 6 : rect.maxX - 8
             let style = NSMutableParagraphStyle()
             style.lineBreakMode = .byTruncatingTail
             let text = NSMutableAttributedString()
@@ -229,6 +277,55 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
     func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint, userData data: UnsafeMutableRawPointer?) -> String {
         guard let data else { return "" }
         let index = Int(bitPattern: data) - 1
-        return tabs.indices.contains(index) ? tabs[index].title : ""
+        guard tabs.indices.contains(index) else { return "" }
+        return [tabs[index].title, tabs[index].badgeText].compactMap { $0 }.joined(separator: " — ")
+    }
+}
+
+/// Punkt eines Reiter-Abzeichens; pulsiert bei wartendem bzw. arbeitendem Agenten. Nimmt keine Klicks.
+private final class PaneTabBadgeView: NSView {
+    private let dot = CALayer()
+    private var current: PaneTabBarView.Badge?
+
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.addSublayer(dot)
+    }
+
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func hitTest(_ point: NSPoint) -> NSView? { nil }
+
+    override func setFrameSize(_ newSize: NSSize) {
+        super.setFrameSize(newSize)
+        dot.frame = bounds
+        dot.cornerRadius = min(bounds.width, bounds.height) / 2
+    }
+
+    func apply(_ badge: PaneTabBarView.Badge) {
+        guard badge != current else { return }
+        let pulseChanged = badge.pulse != current?.pulse
+        current = badge
+        dot.backgroundColor = badge.color.cgColor
+        // Neu: nur ein Ring in Kachelfarbe — leiser als ein Agent, der etwas will.
+        if case .news = badge {
+            dot.backgroundColor = badge.color.withAlphaComponent(0.25).cgColor
+            dot.borderColor = badge.color.cgColor
+            dot.borderWidth = 1.5
+        } else {
+            dot.borderWidth = 0
+        }
+        guard pulseChanged else { return }
+        dot.removeAnimation(forKey: "badgePulse")
+        guard let duration = badge.pulse else { return }
+        let pulse = CABasicAnimation(keyPath: "opacity")
+        pulse.fromValue = 1.0
+        pulse.toValue = 0.3
+        pulse.duration = duration
+        pulse.autoreverses = true
+        pulse.repeatCount = .infinity
+        pulse.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+        dot.add(pulse, forKey: "badgePulse")
     }
 }

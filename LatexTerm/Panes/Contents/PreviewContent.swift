@@ -267,6 +267,7 @@ final class PreviewContent: NSObject, PaneContent {
         updateContentAspect()
         if announce { root.pill.flash(note ?? ("↻ neu geladen · " + Self.clock.string(from: Date())), hold: note == nil ? 1.3 : 3) }
         delegate?.contentStyleChanged()
+        if announce { delegate?.contentHasNews() }
         updateToolbar()
     }
 
@@ -305,6 +306,7 @@ final class PreviewContent: NSObject, PaneContent {
         if (wasNewest && newest != file) || !items.contains(file) {
             show(item: newest)
             root.pill.flash("neu: " + newest.lastPathComponent, hold: 2)
+            delegate?.contentHasNews()
         } else {
             delegate?.contentStyleChanged()
             updateToolbar()

@@ -81,6 +81,16 @@ Aufbau: Claude + drei Begleiter + eine zweite Terminal-Kachel (⌘T), dazu ein R
 | Z12 | nach Z3/Z4: Agent `panes`, dann `layout automatisch` bzw. Kachel aus Mats' Reitern lösen | ✋ an der neuen Teilung / an den Reitern; beides abgelehnt ohne `auf_auftrag` | C |
 | Z13 | ⌥⌘R nach Z3–Z6 | gleiche Anordnung, Reiter samt Reihenfolge und vorderem | A |
 
+### Abzeichen am Reiter (Stufe 2, Scheibe C)
+
+| # | Aktion | Erwartet | Wer |
+|---|---|---|---|
+| C1 | Claude-Session als verdeckter Reiter, Prompt per `ask_session`, arbeitet | Punkt rechts im Reiter pulsiert ruhig in Kachelfarbe | A |
+| C2 | derselbe Agent fertig bzw. fragt nach | grüner (Fehler: roter) Punkt bzw. gelb, schnell pulsierend; Tooltip nennt es | A |
+| C3 | verdeckte Vorschau: Datei neu schreiben; verdecktes Web: HTML ändern; verdecktes Scratchpad: Agent zeichnet | Ring in Kachelfarbe | A |
+| C4 | Reiter anklicken | Abzeichen weg; wieder verdecken → bleibt weg | A |
+| C5 | Maus über den Reiter mit Abzeichen | × erscheint an seiner Stelle, Titel wird nicht abgeschnitten dahinter | A |
+
 ## Steuerkanal
 
 | # | Befehl | Erwartet | Wer |

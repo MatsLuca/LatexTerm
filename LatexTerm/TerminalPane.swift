@@ -135,6 +135,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
                     chip.long = summary.long
                     chip.short = summary.short
                     chip.glyph = summary.glyph
+                    chip.outcome = summary.seenAt == nil
                 }
             }
         }

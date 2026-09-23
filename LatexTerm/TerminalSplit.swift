@@ -44,6 +44,8 @@ final class TerminalSplitView: NSView {
     /// automatisch wie angepasst. Die eine Wahrheit dafür; der Baum trägt es nur mit (`withFront`).
     private var shownAt: [String: Int] = [:]
     private var shownClock = 0
+    /// Verdeckte Reiter, deren Inhalt sich seither geändert hat (Abzeichen „neu“, Scheibe C) — bis sie vorn sind.
+    private var newsPanes: Set<UUID> = []
     /// Laufender Zug an einer Trennlinie: Ausgangsbaum und Linie.
     private var dragOrigin: (tree: LayoutNode, divider: LayoutDivider)?
     /// Laufender Zug einer Kachel (am Reiter oder Titelleisten-Chip): welche, und die Anzeige des Ziels.
@@ -636,6 +638,7 @@ final class TerminalSplitView: NSView {
         cancelPaneDrag()
         panes.remove(at: idx)
         shownAt[pane.id.uuidString] = nil
+        newsPanes.remove(pane.id)
         // Layout: ihr Platz fällt an ihre Nachbarn im Block; ihre Begleiter werden eigenständig.
         companionOf[pane.id] = nil
         for (companion, anchor) in companionOf where anchor == pane.id { companionOf[companion] = nil }
@@ -989,12 +992,26 @@ final class TerminalSplitView: NSView {
             view.tabs = bar.tabs.compactMap { id in
                 panes.first { $0.id.uuidString == id }.map { pane in
                     let index = ordered.firstIndex { $0 === pane }.map { $0 + 1 }
+                    let badge = id == bar.front ? nil : tabBadge(for: pane)
                     return PaneTabBarView.Tab(id: id, number: index.flatMap { $0 <= 9 ? $0 : nil },
                                        title: pane.tabTitle, accent: pane.effectiveAccent,
-                                       front: id == bar.front, focused: id == bar.front && isFocused(pane))
+                                       front: id == bar.front, focused: id == bar.front && isFocused(pane),
+                                       badge: badge?.badge, badgeText: badge?.text)
                 }
             }
         }
+    }
+
+    /// Abzeichen eines verdeckten Reiters (Scheibe C), wichtigstes zuerst: Agent wartet › arbeitet › ungesehenes
+    /// Ergebnis › Inhalt neu. Alles aus dem Chip der Kachel (eine Wahrheit mit der Titelleiste) plus `newsPanes`.
+    private func tabBadge(for pane: any Pane) -> (badge: PaneTabBarView.Badge, text: String)? {
+        let chip = pane.statusChip
+        // Texte ohne Uhr: der Chip tickt sekündlich, der Tooltip soll dabei nicht flackern.
+        if chip.urgent { return (.attention(chip.tone), chip.long ?? chip.short ?? "braucht dich") }
+        if chip.pulsing { return (.working(chip.tone), "arbeitet") }
+        if chip.outcome { return (.outcome(chip.tone), chip.long ?? chip.short ?? "fertig") }
+        if newsPanes.contains(pane.id) { return (.news(pane.effectiveAccent), "neu, seit sie verdeckt ist") }
+        return nil
     }
 
     /// Wurzel-Kachel einer Kachel: der Begleiter eines Begleiters gehört zu dessen Kachel.
@@ -1105,6 +1122,12 @@ final class TerminalSplitView: NSView {
             for (view, bar) in zip(tabBarViews, bars) { view.frame = bar.rect }
         }
         for (pane, isHidden) in zip(panes, hidden) where pane.container.isHidden != isHidden { pane.container.isHidden = isHidden }
+        // Wieder vorn = gesehen: kein „neu“ mehr.
+        let seen = zip(panes, hidden).filter { !$0.1 }.map { $0.0.id }
+        if !newsPanes.isDisjoint(with: seen) {
+            newsPanes.subtract(seen)
+            updateTabBarContents()
+        }
         isFirstLayout = false
         updateDividers(lines)
         keepFocusVisible()
@@ -1379,6 +1402,9 @@ extension TerminalSplitView: PaneHost {
     func paneRequestsJump(toPane index: Int) { jumpToPane(index) }
 
     func paneStyleChanged(_ pane: any Pane) {
+        // Ungesehenes Ergebnis hinter einem Reiter: auch „neu“ merken — der Nachklang des Chips endet nach
+        // 10 min, der Reiter soll sich bis zum Hinsehen erinnern.
+        if pane.statusChip.outcome, hiddenTabIDs.contains(pane.id.uuidString) { newsPanes.insert(pane.id) }
         updateWindowTitle()
         updateTitlebarHUD()
         updateTabBarContents()
@@ -1399,6 +1425,12 @@ extension TerminalSplitView: PaneHost {
     /// Inhalt geladen, Wunschform steht fest (PDF hochkant …): einmal neu anordnen, danach nie wieder
     /// für diese Kachel — ein später geladenes PDF anderer Form verschiebt nichts. Angepasste Layouts
     /// und laufende Züge bleiben unberührt.
+    /// Neuigkeit nur für verdeckte Reiter merken — was vorn liegt, sieht Mats ja.
+    func paneHasNews(_ pane: any Pane) {
+        guard hiddenTabIDs.contains(pane.id.uuidString), newsPanes.insert(pane.id).inserted else { return }
+        updateTabBarContents()
+    }
+
     func paneLayoutPreferenceChanged(_ pane: any Pane) {
         guard settledPreferences.insert(pane.id).inserted, manualLayout == nil, dragOrigin == nil else { return }
         relayout(animated: true)

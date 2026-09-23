@@ -86,6 +86,9 @@ protocol PaneContentDelegate: AnyObject {
     func contentRequestsAttention(title: String, body: String?)
     /// Die Wunschform hat sich geändert (`layoutPreference`); das Layout ordnet höchstens einmal neu.
     func contentLayoutPreferenceChanged()
+    /// Etwas Neues ist zu sehen, ohne dass der Nutzer es ausgelöst hat (Datei neu geladen, Agent hat
+    /// gezeichnet). Nicht für Titel-/Chip-Wechsel — die gehen über `contentStyleChanged`.
+    func contentHasNews()
     /// Wer die Kachel geöffnet hat (`Pane.openedBy`): Kachel-UUID eines Agenten, "user" oder nil.
     var contentOpener: String? { get }
     /// Kacheln mit laufender Claude-/Codex-Session (alle Fenster).

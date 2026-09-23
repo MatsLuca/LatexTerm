@@ -85,6 +85,8 @@ final class AppPane: Pane, PaneContentDelegate {
 
     func contentLayoutPreferenceChanged() { host?.paneLayoutPreferenceChanged(self) }
 
+    func contentHasNews() { host?.paneHasNews(self) }
+
     var contentOpener: String? { openedBy }
 
     func contentAgentPanes() -> [PaneInfo] { host?.agentPanes() ?? [] }

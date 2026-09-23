@@ -246,6 +246,7 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
         let paths = pendingChanges
         pendingChanges = []
         guard !paths.isEmpty else { return }
+        delegate?.contentHasNews()
         let names = paths.map { ($0 as NSString).lastPathComponent }.sorted().joined(separator: ", ")
         if paths.allSatisfy({ $0.lowercased().hasSuffix(".css") }), showsLocalFile {
             webView.evaluateJavaScript("""

@@ -78,6 +78,9 @@ struct StatusChip: Equatable {
     var pulsing = false
     var urgent = false
     var tooltip: String?
+    /// Ergebnis, das noch niemand gesehen hat (Turn fertig, Fehler, abgebrochen) — verdeckte Reiter zeigen es
+    /// als Abzeichen in der Tonfarbe.
+    var outcome = false
 }
 
 /// Schließschutz für `latexterm close-pane` ohne `--force`.
@@ -110,6 +113,9 @@ protocol PaneHost: AnyObject {
     func paneIsObserved(_ pane: any Pane) -> Bool
     /// Die Wunschform hat sich geändert (Inhalt geladen: PDF hochkant, Bild im Querformat).
     func paneLayoutPreferenceChanged(_ pane: any Pane)
+    /// Der Inhalt hat sich von selbst geändert (Datei neu geladen, Agent hat gezeichnet) — liegt die Kachel
+    /// gerade verdeckt hinter einem Reiter, bekommt ihr Reiter ein Abzeichen, bis sie wieder vorn ist.
+    func paneHasNews(_ pane: any Pane)
 
     // Terminal/Home: die Split-View legt die neue Kachel an, die anfragende startet darin.
 

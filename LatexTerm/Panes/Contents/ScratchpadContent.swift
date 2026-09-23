@@ -171,6 +171,7 @@ final class ScratchpadContent: PaneContent {
         }
         let items = result.shapes.map { ScratchStroke(shape: $0, author: ScratchStroke.claude) }
         let removed = canvas.add(items, replacing: replacing)
+        delegate?.contentHasNews()
         let box = items.map(\.bounds).reduce(items[0].bounds) { $0.union($1) }
         return Self.json(["added": items.count, "removed": removed, "fitted": result.fitted,
                           "bounds": Self.rect(box), "visible": Self.rect(canvas.visibleWorldRect),

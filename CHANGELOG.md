@@ -22,6 +22,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   highlighted exactly — a side of another pane (halves it), its middle (join as a tab), a position in a tab bar
   (reorder or join), or the window edge (full height/width). Esc cancels; a drop that would make a pane too small is
   refused. What you arrange by hand is marked ✋ for agents and stays until you ask for something else.
+- **Tab badges (23.09.).** A hidden tab shows what is going on behind it: yellow and pulsing when its agent needs you,
+  a calm pulse while it works, the result colour (done / error) until you have seen it, and a ring when a preview or
+  web page reloaded or an agent drew on the scratchpad. Bringing the tab to the front clears it.
 
 ### Fixed
 - **Einzeilige `$$…$$`-Formel winzig (23.09., README-Dreh).** KaTeX' Display-Rand (1em oben/unten) zählte beim Einpassen mit; ohne leere Nachbarzeilen schrumpfte die Formel auf ~40 %. Der Rand ist im Overlay jetzt 0 (die Box zentriert selbst) — dieselbe Formel passt mit ~90 % in eine Zeile.
