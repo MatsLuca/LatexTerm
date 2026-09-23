@@ -11,14 +11,17 @@ struct PaneSnapshot: Codable, Equatable {
     var openedBy: String? = nil
     /// ID der Kachel, neben der sie steht (Kachel-Layout: Begleiter in deren Nebenspalte).
     var companionOf: String? = nil
+    /// Lag als hinterer Reiter verdeckt (Kachel-Layout Stufe 2); nil = sichtbar.
+    var hidden: Bool? = nil
 
     init(kind: String, args: [String: String] = [:], id: String? = nil, openedBy: String? = nil,
-         companionOf: String? = nil) {
+         companionOf: String? = nil, hidden: Bool? = nil) {
         self.kind = kind
         self.args = args
         self.id = id
         self.openedBy = openedBy
         self.companionOf = companionOf
+        self.hidden = hidden
     }
 
     init(from decoder: Decoder) throws {
@@ -28,6 +31,7 @@ struct PaneSnapshot: Codable, Equatable {
         id = try c.decodeIfPresent(String.self, forKey: .id)
         openedBy = try c.decodeIfPresent(String.self, forKey: .openedBy)
         companionOf = try? c.decodeIfPresent(String.self, forKey: .companionOf)
+        hidden = try? c.decodeIfPresent(Bool.self, forKey: .hidden)
     }
 }
 

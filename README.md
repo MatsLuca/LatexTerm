@@ -106,7 +106,7 @@ bash scripts/test-regressions.sh
 | `⌘N` | new **Home** pane |
 | `⌘T` / `⌘W` | new shell pane (inherits the folder) / close pane |
 | `⇧⌘T` | new tab |
-| `⌘1…9` | grow the grid to N panes |
+| `⌘1…9` | jump to pane N (brings a hidden tab to the front) |
 | `⌘⏎` | zoom the focused pane |
 | `⇧⌘⏎` | hand the sketch, marked passage or picked element to the agent |
 | `⌘F` | find in the focused pane |

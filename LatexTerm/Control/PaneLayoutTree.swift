@@ -18,11 +18,17 @@ enum LayoutActor: String, Codable, Equatable {
     case mats, agent
 }
 
-/// Knoten im Layout-Baum: Blatt (eine Kachel) oder Teilung mit Kindern. Ein Struct statt eines
+/// Knoten im Layout-Baum: Blatt (ein Platz) oder Teilung mit Kindern. Ein Struct statt eines
 /// rekursiven Enums, damit das JSON flach und nachsichtig lesbar bleibt (Snapshot von der Platte).
+///
+/// Reiter (Stufe 2, 23.09.2026): ein Blatt kann mehrere Kacheln an einem Platz halten (`tabs`), sichtbar
+/// ist genau eine (`pane`). Welche vorn liegt, entscheidet die Split-View (zuletzt gezeigt,
+/// `withFront`); der Baum trägt es nur mit, damit Lagebild und Snapshot es kennen.
 struct LayoutNode: Codable, Equatable {
-    /// Blatt: Kachel-UUID (groß geschrieben). nil = Teilung.
+    /// Blatt: Kachel-UUID (groß geschrieben), bei Reitern die vordere. nil = Teilung.
     var pane: String?
+    /// Blatt mit Reitern: alle Kacheln des Platzes in Reiter-Reihenfolge (enthält `pane`), sonst leer.
+    var tabs: [String] = []
     /// Teilung: Richtung. Blätter haben keine.
     var axis: LayoutAxis?
     var children: [LayoutNode]
@@ -43,16 +49,25 @@ struct LayoutNode: Codable, Equatable {
         LayoutNode(pane: id.uppercased(), axis: nil, children: [], weight: weight, setBy: nil)
     }
 
+    /// Platz mit Reitern; `front` = die sichtbare (Default: die erste). Eine Kachel = normales Blatt.
+    static func group(_ ids: [String], front: String? = nil, weight: Double = 1) -> LayoutNode {
+        let members = ids.map { $0.uppercased() }
+        let shown = front.map { $0.uppercased() }.flatMap { members.contains($0) ? $0 : nil } ?? members.first ?? ""
+        var node = LayoutNode.leaf(shown, weight: weight)
+        if members.count > 1 { node.tabs = members }
+        return node
+    }
     static func split(_ axis: LayoutAxis, _ children: [LayoutNode], weight: Double = 1,
                       setBy: LayoutActor? = nil) -> LayoutNode {
         LayoutNode(pane: nil, axis: axis, children: children, weight: weight, setBy: setBy)
     }
 
-    private enum CodingKeys: String, CodingKey { case pane, axis, children, weight, setBy }
+    private enum CodingKeys: String, CodingKey { case pane, tabs, axis, children, weight, setBy }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         pane = try c.decodeIfPresent(String.self, forKey: .pane)
+        tabs = (try? c.decodeIfPresent([String].self, forKey: .tabs)) ?? []
         axis = try? c.decodeIfPresent(LayoutAxis.self, forKey: .axis)
         children = try c.decodeIfPresent([LayoutNode].self, forKey: .children) ?? []
         weight = (try? c.decodeIfPresent(Double.self, forKey: .weight)) ?? 1
@@ -62,6 +77,7 @@ struct LayoutNode: Codable, Equatable {
     func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encodeIfPresent(pane, forKey: .pane)
+        if !tabs.isEmpty { try c.encode(tabs, forKey: .tabs) }
         try c.encodeIfPresent(axis, forKey: .axis)
         if !children.isEmpty { try c.encode(children, forKey: .children) }
         try c.encode(weight, forKey: .weight)
@@ -70,20 +86,48 @@ struct LayoutNode: Codable, Equatable {
 
     var isLeaf: Bool { pane != nil }
 
-    /// Alle Kachel-IDs in Lesereihenfolge (links → rechts, oben → unten) — die eine Reihenfolge für
-    /// Index, Titelleisten-Chips und Lagebild.
+    /// Kacheln dieses Blatts: die Reiter, sonst die eine; Teilung = leer.
+    var members: [String] {
+        guard let pane else { return [] }
+        return tabs.count > 1 ? tabs : [pane]
+    }
+
+    /// Blatt mit mehr als einer Kachel?
+    var isGroup: Bool { pane != nil && tabs.count > 1 }
+
+    /// Alle Kachel-IDs in Lesereihenfolge (links → rechts, oben → unten, Reiter in ihrer Reihenfolge) —
+    /// die eine Reihenfolge für Index, Titelleisten-Chips und Lagebild.
     var paneIDs: [String] {
-        if let pane { return [pane] }
+        if pane != nil { return members }
         return children.flatMap(\.paneIDs)
+    }
+
+    /// Kacheln, die gerade verdeckt sind (hintere Reiter).
+    var hiddenPaneIDs: [String] {
+        if let pane { return members.filter { $0 != pane } }
+        return children.flatMap(\.hiddenPaneIDs)
+    }
+
+    /// Je Reiter-Platz die vordere Kachel neu bestimmen: die mit dem höchsten Rang (zuletzt gezeigt);
+    /// bei Gleichstand bleibt die bisherige vorn.
+    func withFront(_ rank: (String) -> Int) -> LayoutNode {
+        var copy = self
+        if isGroup, let current = pane {
+            copy.pane = members.reduce(current) { best, id in rank(id) > rank(best) ? id : best }
+        } else if pane == nil {
+            copy.children = children.map { $0.withFront(rank) }
+        }
+        return copy
     }
 
     /// Kachel-IDs umschreiben (Wiederherstellen: alte → neue ID); Blätter ohne Ziel fallen weg.
     /// Danach `normalized()`, damit leere oder einkindrige Teilungen verschwinden.
     func mappingPanes(_ transform: (String) -> String?) -> LayoutNode? {
         if let pane {
-            guard let mapped = transform(pane) else { return nil }
-            var copy = self
-            copy.pane = mapped.uppercased()
+            let mapped = members.compactMap { transform($0)?.uppercased() }
+            guard !mapped.isEmpty else { return nil }
+            var copy = LayoutNode.group(mapped, front: transform(pane), weight: weight)
+            copy.setBy = setBy
             return copy
         }
         var copy = self
@@ -107,9 +151,17 @@ struct LayoutNode: Codable, Equatable {
     private func normalized(keeping: Set<String>?, seen: inout Set<String>) -> LayoutNode? {
         let w = weight.isFinite && weight > 0 ? weight : 1
         if let pane {
-            let id = pane.uppercased()
-            guard !id.isEmpty, keeping?.contains(id) ?? true, seen.insert(id).inserted else { return nil }
-            return .leaf(id, weight: w)
+            // Reiter: nur behaltene, jede einmal. Fällt die vordere weg, rückt ihr rechter Nachbar vor
+            // (sonst der linke) — die Split-View bestimmt danach ohnehin die zuletzt gezeigte.
+            let all = members.map { $0.uppercased() }
+            var kept: [String] = []
+            for id in all where !id.isEmpty && (keeping?.contains(id) ?? true) && seen.insert(id).inserted { kept.append(id) }
+            guard !kept.isEmpty else { return nil }
+            let front = pane.uppercased()
+            let shown = kept.contains(front) ? front
+                : (all.firstIndex(of: front).flatMap { i in all[(i + 1)...].first(where: kept.contains) ?? all[..<i].last(where: kept.contains) }
+                   ?? kept[0])
+            return .group(kept, front: shown, weight: w)
         }
         let axis = self.axis ?? .row
         // Gleich gerichtete Teilungen werden bewusst NICHT verschmolzen: eine Teilung in einer Teilung

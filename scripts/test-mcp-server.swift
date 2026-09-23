@@ -311,6 +311,22 @@ struct MCPServerTests {
                && shown.contains("└ 25 % · übereinander ✋") && shown.contains("von dir geöffnet")
                && shown.contains("✋ = Aufteilung"), shown)
         assert(call(layServer, "panes").text.contains("Anordnung (Stand"))
+        // Reiter: Lagebild zeigt vorn/verdeckt, panes markiert verdeckte; reiter/vorholen gehen als tab/front raus.
+        lay.root = .split(.row, [.leaf("SELF-0000", weight: 3), .group(["WEB1-0000", "FREM-0000"], front: "FREM-0000")])
+        lay.panes[1].hidden = true
+        let tabbed = call(layServer, "layout").text
+        assert(tabbed.contains("└ 25 % · Reiter (2, einer sichtbar)") && tabbed.contains("   ├ verdeckt · 2 · WEB1-000 · web")
+               && tabbed.contains("   └ vorn · 3 · FREM-000 · terminal"), tabbed)
+        assert(call(layServer, "panes").text.contains("verdeckter Reiter"))
+        r = call(layServer, "layout", ["action": "vorholen", "pane": "WEB1"])
+        assert(!r.error && lay.sent("layout").last?.layoutOp == "front" && lay.sent("layout").last?.pane == "WEB1-0000", r.text)
+        r = call(layServer, "layout", ["action": "reiter", "pane": "WEB1", "other": "SELF"])
+        assert(!r.error && lay.sent("layout").last?.layoutOp == "tab" && lay.sent("layout").last?.otherPane == "SELF-0000", r.text)
+        assert(call(layServer, "layout", ["action": "reiter", "pane": "WEB1"]).error, "reiter braucht other")
+        lay.panes[1].hidden = nil
+        lay.root = .split(.row, [.leaf("SELF-0000", weight: 3),
+                                 .split(.column, [.leaf("WEB1-0000"), .leaf("FREM-0000")], setBy: .mats)])
+        _ = call(layServer, "layout")
         // Nummern verschoben: die gesehene Nr. 2 ist jetzt eine andere Kachel → abgelehnt, danach gilt der neue Stand.
         lay.panes.swapAt(1, 2)
         lay.panes[1].index = 2

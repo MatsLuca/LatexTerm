@@ -51,7 +51,7 @@ final class PaneContainerView: NSView {
 
     // MARK: Kachel-Kürzel
 
-    enum Shortcut: Equatable { case split, close, zoom, paneCount(Int) }
+    enum Shortcut: Equatable { case split, close, zoom, jump(Int) }
 
     /// ⌘T, ⌘W, ⌘1…9, ⌘⏎ — genau ⌘, ohne ⇧/⌥/⌃. Beide Zeichenformen prüfen, damit es auf jedem
     /// Tastaturlayout greift.
@@ -61,7 +61,7 @@ final class PaneContainerView: NSView {
         if keys.contains("t") { return .split }
         if keys.contains("w") { return .close }
         if keys.contains("\r") { return .zoom }
-        if let digit = keys.lazy.compactMap({ Int($0) }).first, (1...9).contains(digit) { return .paneCount(digit) }
+        if let digit = keys.lazy.compactMap({ Int($0) }).first, (1...9).contains(digit) { return .jump(digit) }
         return nil
     }
 
@@ -78,7 +78,7 @@ final class PaneContainerView: NSView {
         switch shortcut {
         case .split: host.paneRequestsSplit(pane); return true
         case .close: host.paneRequestsClose(pane); return true
-        case .paneCount(let count): host.paneRequestsPaneCount(count); return true
+        case .jump(let index): host.paneRequestsJump(toPane: index); return true
         case .zoom, nil: break
         }
         if super.performKeyEquivalent(with: event) { return true }

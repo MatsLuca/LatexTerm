@@ -64,6 +64,7 @@ struct PaneLayoutTests {
         dividers()
         intents()
         coding()
+        tabs()
         if failures > 0 { print("pane-layout: \(failures) Fehler"); exit(1) }
         print("pane-layout: ok")
     }
@@ -211,7 +212,7 @@ struct PaneLayoutTests {
     static func dividers() {
         let bounds = CGRect(x: 0, y: 0, width: 1000, height: 600)
         var root = LayoutNode.split(.row, [.leaf("A"), .split(.column, [.leaf("B"), .leaf("C")])])
-        let (_, lines) = LayoutGeometry.layout(root, in: bounds, gap: 8)
+        let lines = LayoutGeometry.layout(root, in: bounds, gap: 8).dividers
         check(lines.count == 2, "zwei Trennlinien")
         let vertical = lines.first { $0.axis == .row }!
         check(vertical.start == 0 && vertical.end == 1000 && abs(vertical.rect.midX - 500) < 0.1, "senkrechte Linie mittig")
@@ -274,5 +275,82 @@ struct PaneLayoutTests {
         let loose = #"{"axis":"quer","setBy":"jemand","children":[{"pane":"a"},{"pane":"b","weight":2}]}"#
         let node = try! JSONDecoder().decode(LayoutNode.self, from: Data(loose.utf8)).normalized()!
         check(node.axis == .row && node.setBy == nil && node.children.map(\.weight) == [1, 2], "nachsichtig: \(node)")
+    }
+    /// Reiter (Stufe 2): mehrere Kacheln an einem Platz, eine vorn.
+    static func tabs() {
+        let bounds = CGRect(x: 0, y: 0, width: 1000, height: 600)
+        // Modell: Reihenfolge, vordere, Bereinigung, JSON.
+        let g = LayoutNode.group(["b", "c", "d"], front: "c")
+        check(g.isGroup && g.pane == "C" && g.members == ["B", "C", "D"], "Gruppe: \(g)")
+        check(LayoutNode.group(["x"]) == .leaf("X"), "eine Kachel = Blatt")
+        let root = LayoutNode.split(.row, [.leaf("A"), g])
+        check(root.paneIDs == ["A", "B", "C", "D"] && root.hiddenPaneIDs == ["B", "D"], "Lesereihenfolge mit Reitern")
+        check(root.normalized(keeping: ["A", "B", "D"])!.children[1] == .group(["B", "D"], front: "D"), "vordere weg → rechter Nachbar vor")
+        check(root.normalized(keeping: ["A", "D"])!.children[1] == .leaf("D"), "ein Reiter übrig → Blatt")
+        check(LayoutNode.split(.row, [.group(["a", "b"]), .leaf("b")]).normalized()!.paneIDs == ["A", "B"], "doppelte Kachel einmal")
+        let back = try! JSONDecoder().decode(LayoutNode.self, from: JSONEncoder().encode(root))
+        check(back == root, "JSON mit Reitern")
+        check(!String(decoding: try! JSONEncoder().encode(LayoutNode.leaf("a")), as: UTF8.self).contains("tabs"), "Blatt ohne tabs im JSON")
+        check(root.withFront { $0 == "D" ? 5 : 0 }.children[1].pane == "D", "zuletzt gezeigte vorn")
+        check(root.withFront { _ in 0 }.children[1].pane == "C", "Gleichstand: bisherige bleibt")
+        check(root.mappingPanes { $0 == "C" ? nil : $0.lowercased() }!.paneIDs == ["A", "B", "D"], "Umschreiben ohne C")
+
+        // Geometrie: Leiste oben, alle Reiter im selben Frame darunter, hintere verborgen.
+        let out = LayoutGeometry.layout(root, in: bounds, gap: 8, tabBarHeight: 28)
+        check(out.tabBars.count == 1 && out.tabBars[0].tabs == ["B", "C", "D"] && out.tabBars[0].front == "C", "eine Leiste")
+        let bar = out.tabBars[0].rect
+        let members = out.slots.filter { ["B", "C", "D"].contains($0.pane) }
+        check(Set(members.map(\.frame)).count == 1, "gleicher Frame für alle Reiter")
+        check(members.first!.frame.minY == bar.maxY && bar.minY == 0 && bar.height == 28 && members.first!.frame.minX == bar.minX, "Leiste über dem Inhalt")
+        check(members.filter { !$0.hidden }.map(\.pane) == ["C"], "nur die vordere sichtbar")
+        check(!members.first!.outer.contains(.top), "Inhalt unter der Leiste liegt nicht am Fensterrand")
+        check(LayoutGeometry.layout(root, in: bounds, gap: 8).slots.first { $0.pane == "C" }!.frame.minY == 0, "ohne Leistenhöhe wie früher")
+
+        // Automatik: höchstens drei Plätze in der Nebenspalte, der Rest als Reiter auf dem letzten.
+        let terminal = LayoutPreference(aspect: nil, minWidth: 480, minHeight: 200, comfortWidth: 640)
+        var items = [LayoutItem(id: "S", companionOf: nil, preference: terminal)]
+        for id in ["P1", "P2", "P3"] { items.append(LayoutItem(id: id, companionOf: "S", preference: .flexible)) }
+        var auto = AutoLayout.build(items, width: 1512, height: 880, gap: 8)!
+        check(auto.hiddenPaneIDs.isEmpty && auto.paneIDs == ["S", "P1", "P2", "P3"], "drei Begleiter: drei Plätze")
+        items += [LayoutItem(id: "P4", companionOf: "S", preference: .flexible), LayoutItem(id: "P5", companionOf: "S", preference: .flexible)]
+        auto = AutoLayout.build(items, width: 1512, height: 880, gap: 8)!
+        let column = auto.children[1]
+        check(column.axis == .column && column.children.count == 3, "fünf Begleiter: weiter drei Plätze")
+        check(column.children[2].members == ["P3", "P4", "P5"], "Rest als Reiter auf dem letzten Platz: \(column.children[2].members)")
+        let places = LayoutGeometry.layout(auto, in: CGRect(x: 0, y: 0, width: 1512, height: 880), gap: 8, tabBarHeight: 28).slots
+        check(places.filter { !$0.hidden }.allSatisfy { $0.frame.height > 200 }, "kein Platz zu flach")
+        check(AutoLayout.companionPlaces(["a", "b"]) == [["a"], ["b"]], "wenige Begleiter einzeln")
+
+        // Angepasst: Spalte voll → neuer Begleiter als Reiter; Entfernen lässt den Platz stehen.
+        var manual = AutoLayout.build(Array(items.prefix(4)), width: 1512, height: 880, gap: 8)!
+        manual.setBy = .mats
+        manual = LayoutEdit.insert("P4", companionOf: "S", anchorCompanions: ["P1", "P2", "P3"], focusBlock: [],
+                                   preference: .flexible, anchorPreference: terminal, into: manual,
+                                   bounds: CGRect(x: 0, y: 0, width: 1512, height: 880), gap: 8)
+        check(manual.children[1].children.count == 3 && manual.children[1].children[2].members == ["P3", "P4"], "Einsetzen als Reiter: \(manual)")
+        check(manual.setBy == .mats, "Sperre bleibt")
+        let fewer = LayoutEdit.remove("P3", from: manual)!
+        check(fewer.children[1].children[2] == .leaf("P4", weight: manual.children[1].children[2].weight), "Reiter weg, Platz bleibt")
+        let single = LayoutEdit.insert("Q", companionOf: "S", anchorCompanions: ["P1", "P2"], focusBlock: [], preference: .flexible,
+                                       anchorPreference: terminal,
+                                       into: .split(.row, [.leaf("S"), .group(["P1", "P2"])]), bounds: bounds, gap: 8)
+        check(single.children[1].axis == .column && single.children[1].children.map(\.members) == [["P1", "P2"], ["Q"]], "Platz frei → neuer Platz unter den Reitern")
+
+        // Absichten: als Reiter anlegen, herauslösen, tauschen über Reiter hinweg.
+        let flat = LayoutNode.split(.row, [.leaf("A"), .split(.column, [.leaf("B"), .leaf("C")])])
+        var r = try! LayoutEdit.apply(.tab("C", into: "B"), to: flat, actor: .agent, overrideMats: false)
+        check(r == .split(.row, [.leaf("A"), .group(["B", "C"])]), "C als Reiter hinter B: \(r)")
+        check(try! LayoutEdit.apply(.tab("C", into: "B"), to: r, actor: .agent, overrideMats: false) == r, "schon Reiter: nichts")
+        let out2 = try! LayoutEdit.apply(.beside("B", "C"), to: r, actor: .agent, overrideMats: false)
+        check(out2.paneIDs == ["A", "B", "C"] && out2.hiddenPaneIDs.isEmpty, "herauslösen: \(out2)")
+        r = try! LayoutEdit.apply(.swap("A", "C"), to: r, actor: .agent, overrideMats: false)
+        check(r == .split(.row, [.leaf("C"), .group(["B", "A"])]), "tauschen mit Reiter: \(r)")
+        var locked = LayoutNode.split(.row, [.leaf("A"), .group(["B", "C"])], setBy: .mats)
+        check((try? LayoutEdit.apply(.beside("A", "C"), to: locked, actor: .agent, overrideMats: false)) != nil,
+              "Reiter lösen ändert keine gesperrte Teilung")
+        locked = .split(.row, [.leaf("A"), .leaf("B"), .leaf("C")], setBy: .mats)
+        do { _ = try LayoutEdit.apply(.tab("C", into: "B"), to: locked, actor: .agent, overrideMats: false); check(false, "Reiter aus Mats-Teilung") }
+        catch { check("\(error)".contains("Mats"), "Grund nennt Mats") }
+        check(LayoutGeometry.rect(of: "C", in: r, bounds: bounds) != nil && LayoutGeometry.rect(of: "A", in: r, bounds: bounds) == LayoutGeometry.rect(of: "B", in: r, bounds: bounds), "Reiter teilen den Platz")
     }
 }

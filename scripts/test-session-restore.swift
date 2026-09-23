@@ -34,6 +34,18 @@ struct SessionRestoreTests {
                                      companionOf: "AAAA-1")
         check(try JSONDecoder().decode(PaneSnapshot.self, from: try JSONEncoder().encode(companion)) == companion,
               "companionOf survives the round trip")
+        // Reiter (Stufe 2): verdeckte Kacheln und der Reiter-Platz im Layout überleben; alt = sichtbar.
+        let behind = PaneSnapshot(kind: "web", args: ["url": "/tmp/b.html"], id: "DDDD-4", companionOf: "AAAA-1", hidden: true)
+        check(try JSONDecoder().decode(PaneSnapshot.self, from: try JSONEncoder().encode(behind)) == behind,
+              "hidden survives the round trip")
+        check(companion.hidden == nil, "old snapshot panes are visible")
+        let tabPlace = SessionSnapshot.Window(entries: [
+            (snapshot: PaneSnapshot(kind: "terminal", id: "AAAA-1"), focused: true, zoomed: false),
+            (snapshot: companion, focused: false, zoomed: false),
+            (snapshot: behind, focused: false, zoomed: false),
+        ], layout: .split(.row, [.leaf("AAAA-1"), .group(["CCCC-3", "DDDD-4", "GONE-9"], front: "CCCC-3")], setBy: .mats))
+        check(tabPlace.layout?.children[1] == .group(["CCCC-3", "DDDD-4"], front: "CCCC-3"),
+              "tab place keeps its snapshot panes: \(String(describing: tabPlace.layout))")
         let arranged = LayoutNode.split(.row, [.leaf("AAAA-1", weight: 0.6), .leaf("CCCC-3", weight: 0.4)], setBy: .mats)
         let laidOut = SessionSnapshot.Window(entries: [
             (snapshot: PaneSnapshot(kind: "terminal", id: "AAAA-1"), focused: true, zoomed: false),

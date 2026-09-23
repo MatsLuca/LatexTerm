@@ -99,6 +99,8 @@ struct PaneInfo: Codable {
     var openedBy: String? = nil
     /// Kachel-Layout: UUID der Kachel, in deren Nebenspalte diese steht; nil = eigenständig.
     var companionOf: String? = nil
+    /// Kachel-Layout Stufe 2: liegt als hinterer Reiter verdeckt; nil = sichtbar.
+    var hidden: Bool? = nil
 }
 
 /// Selbstbeschreibung einer Kachelart für Agenten (Capability `pane-kind-info`, 22.09.2026):

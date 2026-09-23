@@ -97,8 +97,8 @@ protocol PaneHost: AnyObject {
     func paneDidClose(_ pane: any Pane)
     /// ⌘⏎: Zoom-Toggle (#26).
     func paneRequestsZoom(_ pane: any Pane)
-    /// ⌘1…9: auf so viele Kacheln auffüllen (nur erweitern, nie schließen).
-    func paneRequestsPaneCount(_ count: Int)
+    /// ⌘1…9: zur Kachel mit dieser Nummer (Lesereihenfolge) springen; verdeckte Reiter kommen nach vorn.
+    func paneRequestsJump(toPane index: Int)
     /// Akzent, Chip oder Titel haben sich geändert → Fenstertitel und Titelleiste nachziehen.
     func paneStyleChanged(_ pane: any Pane)
     /// Die Kachel will Aufmerksamkeit (Titel und Text formuliert sie selbst); gemeldet wird nur,

@@ -159,7 +159,9 @@ final class MCPServer {
         Umordnen mit layout — erst den aktuellen Stand lesen (panes oder layout ohne action), dann ändern; geändert wird nur auf \
         dem Stand, den du zuletzt gelesen hast. Ordne von dir aus an, wenn es gerade hilft (arbeitest du am PDF: Vorschau groß; \
         danach automatisch). Deine eigenen Kacheln frei; fremde und Aufteilungen mit ✋ (von Mats von Hand gesetzt) nur auf \
-        seinen Wunsch. Kacheln per UUID-Präfix ansprechen — Nummern verschieben sich beim Umordnen.
+        seinen Wunsch. Kacheln per UUID-Präfix ansprechen — Nummern verschieben sich beim Umordnen. Reiter: ab dem vierten \
+        Begleiter teilen sich Kacheln einen Platz (eine vorn, der Rest verdeckt, Reiterleiste darüber); eine neue kommt vorn \
+        hin. Willst du eine verdeckte zeigen: layout vorholen; Platz sparen: layout reiter.
         """)
         return lines.joined(separator: "\n")
     }
@@ -239,11 +241,11 @@ final class MCPServer {
               "full": ["type": "boolean", "description": "Bild der ganzen Seite statt des Ausschnitts"]],
              ["steps"]),
         tool("layout", "Kacheln anordnen",
-             "Zeigt die Anordnung deines Fensters mit Stand-Nummer (Baum aus nebeneinander/übereinander, Anteile in %, ✋ = Aufteilung von Mats von Hand gesetzt) und ändert sie auf Absichts-Ebene. Ohne action: nur zeigen. Geändert wird nur auf dem Stand, den du zuletzt gelesen hast (hier oder in panes) — hat sich inzwischen etwas geändert, kommt der neue Stand zurück: prüfen, dann erneut. Kein Zoom, alles bleibt sichtbar. Eigene Kacheln (du und was du geöffnet hast) ordnest du frei um; fremde Kacheln und ✋-Aufteilungen nur, wenn der Nutzer es ausdrücklich will (auf_auftrag: true). automatisch = eigene Anpassungen verwerfen, die App ordnet wieder selbst.",
-             ["action": ["type": "string", "enum": ["zeigen", "gross", "groesser", "kleiner", "nebeneinander", "untereinander", "tauschen", "automatisch"],
-                         "description": "gross = pane groß, der Rest schmal · groesser/kleiner = um ein Stück · nebeneinander/untereinander = other rechts neben bzw. unter pane stellen · tauschen = Plätze von pane und other tauschen"],
+             "Zeigt die Anordnung deines Fensters mit Stand-Nummer (Baum aus nebeneinander/übereinander, Anteile in %, ✋ = Aufteilung von Mats von Hand gesetzt, Reiter = mehrere Kacheln an einem Platz, eine vorn) und ändert sie auf Absichts-Ebene. Ohne action: nur zeigen. Geändert wird nur auf dem Stand, den du zuletzt gelesen hast (hier oder in panes) — hat sich inzwischen etwas geändert, kommt der neue Stand zurück: prüfen, dann erneut. Kein Zoom. Eigene Kacheln (du und was du geöffnet hast) ordnest du frei um; fremde Kacheln und ✋-Aufteilungen nur, wenn der Nutzer es ausdrücklich will (auf_auftrag: true). automatisch = eigene Anpassungen verwerfen, die App ordnet wieder selbst.",
+             ["action": ["type": "string", "enum": ["zeigen", "gross", "groesser", "kleiner", "nebeneinander", "untereinander", "tauschen", "reiter", "vorholen", "automatisch"],
+                         "description": "gross = pane groß, der Rest schmal (holt einen verdeckten Reiter nach vorn) · groesser/kleiner = um ein Stück · nebeneinander/untereinander = other rechts neben bzw. unter pane stellen (löst ihn auch aus Reitern) · tauschen = Plätze von pane und other tauschen · reiter = pane als Reiter hinter other an dessen Platz legen (spart Platz, bleibt einen Klick entfernt) · vorholen = verdeckten Reiter pane nach vorn holen, ohne Fokus"],
               "pane": paneProperty,
-              "other": ["type": "string", "description": "zweite Kachel (nebeneinander, untereinander, tauschen), UUID-Präfix oder Nummer"],
+              "other": ["type": "string", "description": "zweite Kachel (nebeneinander, untereinander, tauschen, reiter), UUID-Präfix oder Nummer"],
               "auf_auftrag": ["type": "boolean", "description": "Nutzer hat ausdrücklich darum gebeten — erlaubt fremde Kacheln und ✋-Aufteilungen"]],
              []),
         tool("close_pane", "Kachel schließen",
@@ -554,7 +556,7 @@ final class MCPServer {
     private func layoutTool(_ a: JSON) throws -> String {
         let action = (a["action"] as? String) ?? "zeigen"
         let ops = ["zeigen": "show", "gross": "big", "groesser": "grow", "kleiner": "shrink", "nebeneinander": "beside",
-                   "untereinander": "below", "tauschen": "swap", "automatisch": "auto"]
+                   "untereinander": "below", "tauschen": "swap", "reiter": "tab", "vorholen": "front", "automatisch": "auto"]
         guard let op = ops[action] else { throw ToolFailure("action „\(action)“ gibt es nicht (\(ops.keys.sorted().joined(separator: ", ")))") }
         if op == "show" { return panesTool() }
 
@@ -566,7 +568,7 @@ final class MCPServer {
             guard a["pane"] != nil else { throw ToolFailure("pane fehlt — welche Kachel?") }
             request.pane = try target(a).0.id
         }
-        if ["beside", "below", "swap"].contains(op) {
+        if ["beside", "below", "swap", "tab"].contains(op) {
             guard let other = a["other"] else { throw ToolFailure("\(action) braucht other (die zweite Kachel)") }
             request.otherPane = try target(["pane": other]).0.id
         }
@@ -596,7 +598,9 @@ final class MCPServer {
     ///     ├ 55 % · 1 · 3F2A91C0 · terminal · claude · ← du
     ///     └ 45 % · übereinander ✋
     ///        ├ 60 % · 2 · 8B1D22AA · preview „main.pdf“ · von dir geöffnet
-    ///        └ 40 % · 3 · 5C0E71B2 · web · von dir geöffnet
+    ///        └ 40 % · Reiter (2, einer sichtbar)
+    ///           ├ vorn · 3 · 5C0E71B2 · web · von dir geöffnet
+    ///           └ verdeckt · 4 · 9A0B33C1 · scratchpad · von dir geöffnet
     private func lagebild(_ report: LayoutReport?, panes: [PaneInfo]) -> String {
         guard let report, let root = report.root else { return "" }
         layoutSeen = report.revision
@@ -605,19 +609,21 @@ final class MCPServer {
         var lines = ["Anordnung (Stand \(report.revision), \(report.automatic ? "automatisch" : "angepasst"), Fenster \(Int(report.width))×\(Int(report.height)) pt):"]
         var locked = false
         func label(_ node: LayoutNode) -> String {
-            if let id = node.pane {
-                guard let pane = byID[id] else { return String(id.prefix(8)) }
-                shownIndex[pane.index] = pane.id.uppercased()
-                var parts = ["\(pane.index)", String(pane.id.prefix(8)), pane.kind ?? "terminal"]
-                if let agent = pane.agent { parts.append(agent) }
-                if let title = pane.title, !title.isEmpty, (pane.kind ?? "terminal") != "terminal" { parts[parts.count - 1] += " „\(title.prefix(40))“" }
-                if pane.id == own?.id { parts.append("← du") }
-                else if isMine(pane) { parts.append("von dir geöffnet") }
-                return parts.joined(separator: " · ")
-            }
+            if node.isGroup { return "Reiter (\(node.members.count), einer sichtbar)" }
+            if let id = node.pane { return paneLabel(id) }
             var text = node.axis == .column ? "übereinander" : "nebeneinander"
             if node.setBy == .mats { text += " ✋"; locked = true }
             return text
+        }
+        func paneLabel(_ id: String) -> String {
+            guard let pane = byID[id] else { return String(id.prefix(8)) }
+            shownIndex[pane.index] = pane.id.uppercased()
+            var parts = ["\(pane.index)", String(pane.id.prefix(8)), pane.kind ?? "terminal"]
+            if let agent = pane.agent { parts.append(agent) }
+            if let title = pane.title, !title.isEmpty, (pane.kind ?? "terminal") != "terminal" { parts[parts.count - 1] += " „\(title.prefix(40))“" }
+            if pane.id == own?.id { parts.append("← du") }
+            else if isMine(pane) { parts.append("von dir geöffnet") }
+            return parts.joined(separator: " · ")
         }
         func walk(_ node: LayoutNode, indent: String, last: Bool, share: Double?) {
             let connector = share == nil ? "" : (last ? "└ " : "├ ")
@@ -625,6 +631,12 @@ final class MCPServer {
             lines.append(indent + connector + percent + label(node))
             let total = node.children.reduce(0) { $0 + $1.weight }
             let childIndent = share == nil ? "" : indent + (last ? "   " : "│  ")
+            if node.isGroup {
+                for (i, id) in node.members.enumerated() {
+                    let branch = i == node.members.count - 1 ? "└ " : "├ "
+                    lines.append(childIndent + branch + (id == node.pane ? "vorn · " : "verdeckt · ") + paneLabel(id))
+                }
+            }
             for (i, child) in node.children.enumerated() {
                 walk(child, indent: childIndent, last: i == node.children.count - 1, share: total > 0 ? child.weight / total : nil)
             }
@@ -1097,6 +1109,7 @@ final class MCPServer {
         if let program = pane.foreground, pane.agent == nil { marks.append("läuft: \(program)") }
         if pane.focused { marks.append("fokussiert") }
         if pane.zoomed { marks.append("gezoomt") }
+        if pane.hidden == true { marks.append("verdeckter Reiter") }
         if isMine(pane) { marks.append("von dir geöffnet") }
         else if pane.openedBy == "user" { marks.append("vom Nutzer geöffnet") }
         if !marks.isEmpty { parts.append(marks.joined(separator: ", ")) }

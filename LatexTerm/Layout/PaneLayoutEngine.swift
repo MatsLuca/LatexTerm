@@ -35,12 +35,23 @@ struct LayoutEdges: OptionSet, Equatable {
     static let left = LayoutEdges(rawValue: 4), right = LayoutEdges(rawValue: 8)
 }
 
-/// Platz einer Kachel: `rect` = ihr Anteil ohne Steg, `frame` = was die Hülle bekommt.
+/// Platz einer Kachel: `rect` = ihr Anteil ohne Steg, `frame` = was die Hülle bekommt (bei Reitern
+/// unter der Reiterleiste). Hintere Reiter bekommen denselben Frame, bleiben aber verborgen — so hat
+/// ihr Inhalt schon die richtige Größe, wenn sie nach vorn kommen (kein PTY-Resize beim Umschalten).
 struct LayoutSlot: Equatable {
     var pane: String
     var rect: CGRect
     var frame: CGRect
     var outer: LayoutEdges
+    var hidden = false
+}
+
+/// Reiterleiste eines Platzes mit mehreren Kacheln.
+struct LayoutTabBar: Equatable {
+    /// Kacheln in Reiter-Reihenfolge; `front` ist die sichtbare.
+    var tabs: [String]
+    var front: String
+    var rect: CGRect
 }
 
 /// Trennlinie zwischen Kind `index` und `index + 1` der Teilung bei `path`.
@@ -64,18 +75,25 @@ struct LayoutRefusal: Error, CustomStringConvertible {
 // MARK: - Geometrie
 
 enum LayoutGeometry {
-    /// Plätze und Trennlinien für `root` in `bounds`. Kanten werden gerundet wie im alten Raster
-    /// (`(size * anteil).rounded()` ab dem Ursprung), damit keine Lücken durch Rundung entstehen;
-    /// innen bekommt jede Kachel einen halben Steg Abstand, am Fensterrand keinen.
-    static func layout(_ root: LayoutNode, in bounds: CGRect, gap: CGFloat) -> (slots: [LayoutSlot], dividers: [LayoutDivider]) {
+    /// Plätze, Trennlinien und Reiterleisten für `root` in `bounds`. Kanten werden gerundet wie im alten
+    /// Raster (`(size * anteil).rounded()` ab dem Ursprung), damit keine Lücken durch Rundung entstehen;
+    /// innen bekommt jede Kachel einen halben Steg Abstand, am Fensterrand keinen. Ein Platz mit Reitern
+    /// gibt oben `tabBarHeight` an seine Leiste ab.
+    static func layout(_ root: LayoutNode, in bounds: CGRect, gap: CGFloat, tabBarHeight: CGFloat = 0)
+        -> (slots: [LayoutSlot], dividers: [LayoutDivider], tabBars: [LayoutTabBar]) {
+        var out = Output()
+        place(root, rect: bounds, path: [], bounds: bounds, gap: gap, bar: tabBarHeight, out: &out)
+        return (out.slots, out.dividers, out.tabBars)
+    }
+
+    private struct Output {
         var slots: [LayoutSlot] = []
         var dividers: [LayoutDivider] = []
-        place(root, rect: bounds, path: [], bounds: bounds, gap: gap, slots: &slots, dividers: &dividers)
-        return (slots, dividers)
+        var tabBars: [LayoutTabBar] = []
     }
 
     private static func place(_ node: LayoutNode, rect: CGRect, path: [Int], bounds: CGRect, gap g: CGFloat,
-                              slots: inout [LayoutSlot], dividers: inout [LayoutDivider]) {
+                              bar: CGFloat, out: inout Output) {
         if let pane = node.pane {
             // Auf ganze Punkte: innen sind die Kanten schon gerundet, außen (Fenstermaß mit halben
             // Punkten) rundet das alte Raster genauso.
@@ -92,7 +110,20 @@ enum LayoutGeometry {
             let top = rect.minY + (outer.contains(.top) ? 0 : g / 2)
             let bottom = rect.maxY - (outer.contains(.bottom) ? 0 : g / 2)
             let frame = CGRect(x: left, y: top, width: max(0, right - left), height: max(0, bottom - top))
-            slots.append(LayoutSlot(pane: pane, rect: rect, frame: frame, outer: outer))
+            guard node.isGroup else {
+                out.slots.append(LayoutSlot(pane: pane, rect: rect, frame: frame, outer: outer))
+                return
+            }
+            // Reiter: Leiste oben im Platz, die Kacheln darunter — ihre Oberkante liegt dann nie am Fensterrand.
+            let height = min(bar, frame.height)
+            out.tabBars.append(LayoutTabBar(tabs: node.members, front: pane,
+                                            rect: CGRect(x: frame.minX, y: frame.minY, width: frame.width, height: height)))
+            let content = CGRect(x: frame.minX, y: frame.minY + height, width: frame.width, height: frame.height - height)
+            var below = outer
+            if height > 0 { below.remove(.top) }
+            for id in node.members {
+                out.slots.append(LayoutSlot(pane: id, rect: rect, frame: content, outer: below, hidden: id != pane))
+            }
             return
         }
         let axis = node.axis ?? .row
@@ -103,7 +134,7 @@ enum LayoutGeometry {
             case .row: childRect = CGRect(x: edges[i], y: rect.minY, width: edges[i + 1] - edges[i], height: rect.height)
             case .column: childRect = CGRect(x: rect.minX, y: edges[i], width: rect.width, height: edges[i + 1] - edges[i])
             }
-            place(child, rect: childRect, path: path + [i], bounds: bounds, gap: g, slots: &slots, dividers: &dividers)
+            place(child, rect: childRect, path: path + [i], bounds: bounds, gap: g, bar: bar, out: &out)
             guard i + 1 < node.children.count else { continue }
             let b = edges[i + 1]
             let hit: CGRect
@@ -111,7 +142,7 @@ enum LayoutGeometry {
             case .row: hit = CGRect(x: b - g / 2, y: rect.minY, width: g, height: rect.height)
             case .column: hit = CGRect(x: rect.minX, y: b - g / 2, width: rect.width, height: g)
             }
-            dividers.append(LayoutDivider(path: path, index: i, axis: axis, rect: hit,
+            out.dividers.append(LayoutDivider(path: path, index: i, axis: axis, rect: hit,
                                           start: Double(edges[i]), end: Double(edges[i + 2])))
         }
     }
@@ -158,6 +189,28 @@ enum AutoLayout {
     /// Ziel-Seitenverhältnis einer Zelle im Raster ohne Begleiter — das alte Raster, unverändert.
     /// < 1 = leicht hochkant → mehr Spalten nebeneinander, bevor eine Reihe aufgemacht wird.
     static let idealCellAspect = 0.82
+
+    /// Höchstens so viele Plätze übereinander in einer Nebenspalte; weitere Begleiter kommen als Reiter
+    /// auf den letzten Platz (Live-Test 23.09.: vier Begleiter à 25 % Höhe waren alle unbrauchbar).
+    static let maxCompanionPlaces = 3
+
+    /// Begleiter auf Plätze verteilen: die ersten einzeln, der Rest gemeinsam als Reiter auf dem letzten.
+    static func companionPlaces(_ companions: [String]) -> [[String]] {
+        guard companions.count > maxCompanionPlaces else { return companions.map { [$0] } }
+        let single = maxCompanionPlaces - 1
+        return companions.prefix(single).map { [$0] } + [Array(companions.dropFirst(single))]
+    }
+
+    /// Wunschform eines Platzes mit Reitern: Form nur, wenn alle dieselbe wollen; Mindestmaße der größten.
+    static func merged(_ preferences: [LayoutPreference]) -> LayoutPreference {
+        guard let first = preferences.first else { return .flexible }
+        guard preferences.count > 1 else { return first }
+        let aspects = Set(preferences.map { $0.aspect })
+        return LayoutPreference(aspect: aspects.count == 1 ? first.aspect : nil,
+                                minWidth: preferences.map(\.minWidth).max() ?? first.minWidth,
+                                minHeight: preferences.map(\.minHeight).max() ?? first.minHeight,
+                                comfortWidth: preferences.compactMap(\.comfortWidth).max())
+    }
 
     /// Reihenzahl für `n` Zellen, deren Seitenverhältnis dem Ziel am nächsten kommt; bei Gleichstand
     /// weniger Reihen (breiter). Bewertet mit der vollen Spaltenzahl `ceil(n/rows)`.
@@ -274,12 +327,13 @@ enum AutoLayout {
                 guard !block.companions.isEmpty else { nodes.append(.leaf(block.anchor, weight: block.demand)); continue }
                 let blockWidth = width * block.demand / demand - (line.count > 1 ? gap : 0)
                 let blockHeight = height / Double(rows) - (rows > 1 ? gap : 0)
+                let places = companionPlaces(block.companions)
                 let choice = chooseSplit(anchor: byID[block.anchor]?.preference ?? .flexible,
-                                         companions: block.companions.map { byID[$0]?.preference ?? .flexible },
+                                         companions: places.map { merged($0.map { byID[$0]?.preference ?? .flexible }) },
                                          width: blockWidth, height: blockHeight, gap: gap)
-                let column: LayoutNode = block.companions.count == 1
-                    ? .leaf(block.companions[0], weight: choice.fraction)
-                    : .split(.column, zip(block.companions, choice.heights).map { .leaf($0, weight: $1) },
+                let column: LayoutNode = places.count == 1
+                    ? .group(places[0], weight: choice.fraction)
+                    : .split(.column, zip(places, choice.heights).map { .group($0, weight: $1) },
                              weight: choice.fraction)
                 nodes.append(.split(.row, [.leaf(block.anchor, weight: 1 - choice.fraction), column],
                                     weight: block.demand))
@@ -336,7 +390,7 @@ enum LayoutEdit {
     /// Pfad (Kind-Indizes) zum Blatt einer Kachel.
     static func path(of pane: String, in root: LayoutNode) -> [Int]? {
         let id = pane.uppercased()
-        if root.pane == id { return [] }
+        if root.members.contains(id) { return [] }
         for (i, child) in root.children.enumerated() {
             if let rest = path(of: id, in: child) { return [i] + rest }
         }
@@ -401,7 +455,14 @@ enum LayoutEdit {
                     let ids = sibling.paneIDs
                     if !ids.isEmpty, ids.allSatisfy(companions.contains) {
                         let grown: LayoutNode
-                        if sibling.axis == .column {
+                        if sibling.axis == .column, sibling.children.count >= AutoLayout.maxCompanionPlaces,
+                           let last = sibling.children.last, last.isLeaf {
+                            // Spalte voll: als Reiter auf den letzten Platz (wie die Automatik).
+                            var column = sibling
+                            column.children[column.children.count - 1] = .group(last.members + [id], front: last.pane,
+                                                                               weight: last.weight)
+                            grown = column
+                        } else if sibling.axis == .column {
                             var column = sibling
                             let average = column.children.reduce(0) { $0 + $1.weight } / Double(column.children.count)
                             column.children.append(.leaf(id, weight: average))
@@ -416,12 +477,13 @@ enum LayoutEdit {
                     }
                 }
             }
-            let leaf = node(at: anchorPath, in: root)
+            var leaf = node(at: anchorPath, in: root)
             let rect = LayoutGeometry.rect(at: anchorPath, in: root, bounds: bounds)
             let choice = AutoLayout.chooseSplit(anchor: anchorPreference, companions: [preference],
                                                 width: Double(rect.width), height: Double(rect.height), gap: gap)
-            let pair = LayoutNode.split(.row, [.leaf(leaf.pane ?? anchor, weight: 1 - choice.fraction),
-                                               .leaf(id, weight: choice.fraction)], weight: leaf.weight)
+            let weight = leaf.weight
+            leaf.weight = 1 - choice.fraction
+            let pair = LayoutNode.split(.row, [leaf, .leaf(id, weight: choice.fraction)], weight: weight)
             let result = replacing(at: anchorPath, in: root, with: pair)
             return result.normalized() ?? result
         }
@@ -440,6 +502,15 @@ enum LayoutEdit {
     static func remove(_ pane: String, from root: LayoutNode) -> LayoutNode? {
         let id = pane.uppercased()
         guard let target = path(of: id, in: root) else { return root }
+        let place = node(at: target, in: root)
+        if place.isGroup {
+            // Ein Reiter geht, der Platz bleibt (mit einer Kachel wieder ein normales Blatt). Ging der
+            // vordere, rückt sein rechter Nachbar vor (die Split-View wählt danach den zuletzt gezeigten).
+            let rest = place.members.filter { $0 != id }
+            let front = place.pane != id ? place.pane
+                : place.members.firstIndex(of: id).flatMap { i in place.members[(i + 1)...].first ?? place.members[..<i].last }
+            return replacing(at: target, in: root, with: .group(rest, front: front, weight: place.weight))
+        }
         guard let last = target.last else { return nil }
         let parentPath = Array(target.dropLast())
         var parent = node(at: parentPath, in: root)
@@ -497,12 +568,14 @@ enum LayoutOp: Equatable {
     case beside(String, String)
     case below(String, String)
     case swap(String, String)
+    /// `a` als Reiter an den Platz von `b` legen (hinter die vordere Kachel dort).
+    case tab(String, into: String)
 
     /// Kacheln, die die Absicht bewegt (für die Rechteprüfung).
     var panes: [String] {
         switch self {
         case .big(let a), .grow(let a), .shrink(let a): return [a]
-        case .beside(let a, let b), .below(let a, let b), .swap(let a, let b): return [a, b]
+        case .beside(let a, let b), .below(let a, let b), .swap(let a, let b), .tab(let a, let b): return [a, b]
         }
     }
 }
@@ -564,7 +637,7 @@ extension LayoutEdit {
             guard idA != idB else { throw LayoutRefusal("Zweimal dieselbe Kachel.") }
             _ = try locate(idA)
             let pathB = try locate(idB)
-            if let _ = pathB.last { try guardMats(node(at: Array(pathB.dropLast()), in: root)) }
+            if !node(at: pathB, in: root).isGroup, pathB.last != nil { try guardMats(node(at: Array(pathB.dropLast()), in: root)) }
             guard let without = remove(idB, from: root), let pathA = path(of: idA, in: without) else { return root }
             var leafA = node(at: pathA, in: without)
             let weight = leafA.weight
@@ -575,14 +648,25 @@ extension LayoutEdit {
             return result.normalized() ?? result
 
         case .swap(let a, let b):
-            let pathA = try locate(a), pathB = try locate(b)
-            guard pathA != pathB else { throw LayoutRefusal("Zweimal dieselbe Kachel.") }
-            var result = root
-            var leafA = node(at: pathA, in: root), leafB = node(at: pathB, in: root)
-            swap(&leafA.pane, &leafB.pane)
-            result = replacing(at: pathA, in: result, with: leafA)
-            result = replacing(at: pathB, in: result, with: leafB)
-            return result
+            let idA = a.uppercased(), idB = b.uppercased()
+            _ = try locate(idA)
+            _ = try locate(idB)
+            guard idA != idB else { throw LayoutRefusal("Zweimal dieselbe Kachel.") }
+            // Plätze tauschen, auch zwischen Reitern: überall A ↔ B.
+            return root.mappingPanes { $0 == idA ? idB : $0 == idB ? idA : $0 } ?? root
+
+        case .tab(let a, let b):
+            let idA = a.uppercased(), idB = b.uppercased()
+            guard idA != idB else { throw LayoutRefusal("Zweimal dieselbe Kachel.") }
+            let pathA = try locate(idA)
+            let pathB = try locate(idB)
+            if pathA == pathB { return root }   // schon Reiter an diesem Platz
+            if !node(at: pathA, in: root).isGroup, pathA.last != nil { try guardMats(node(at: Array(pathA.dropLast()), in: root)) }
+            guard let without = remove(idA, from: root), let target = path(of: idB, in: without) else { return root }
+            let place = node(at: target, in: without)
+            let result = replacing(at: target, in: without,
+                                   with: .group(place.members + [idA], front: place.pane, weight: place.weight))
+            return result.normalized() ?? result
         }
     }
 }

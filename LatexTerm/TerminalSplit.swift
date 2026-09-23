@@ -11,6 +11,11 @@ import os
 /// steht jede Kachel ihres Agenten in einer Nebenspalte rechts neben ihm. Zieht Mats eine Trennlinie
 /// oder ordnet ein Agent an, wird der Baum angepasst (`manualLayout`) und neue Kacheln werden nur noch
 /// eingesetzt, ohne den Rest umzuwerfen; „Automatisch anordnen“ gibt ihn zurück.
+///
+/// Reiter (Stufe 2, 23.09.2026): ein Platz kann mehrere Kacheln halten (die Nebenspalte ab dem vierten
+/// Begleiter, `als_reiter`). Vorn liegt die zuletzt gezeigte (`shownAt`); die übrigen haben denselben
+/// Frame, sind aber verborgen. Wer eine verdeckte Kachel fokussiert (Reiter, Chip, ⌘1–9, Steuerkanal),
+/// holt sie vorher nach vorn (`reveal`).
 final class TerminalSplitView: NSView {
 
     /// Regel (Kachel-Protokoll): die Split-View spricht nur `Pane`. `as? TerminalPane` steht an
@@ -32,6 +37,13 @@ final class TerminalSplitView: NSView {
     private var settledPreferences: Set<UUID> = []
     /// Stege, an denen Mats ziehen kann (je Teilungsgrenze einer).
     private var dividerViews: [PaneDividerView] = []
+    /// Reiterleisten (je Platz mit mehreren Kacheln eine) und die Leisten, die sie gerade zeigen.
+    private var tabBarViews: [PaneTabBarView] = []
+    private var currentTabBars: [LayoutTabBar] = []
+    /// Wann eine Kachel zuletzt nach vorn kam (Zähler) — bei Reitern liegt die zuletzt gezeigte vorn,
+    /// automatisch wie angepasst. Die eine Wahrheit dafür; der Baum trägt es nur mit (`withFront`).
+    private var shownAt: [String: Int] = [:]
+    private var shownClock = 0
     /// Laufender Zug an einer Trennlinie: Ausgangsbaum und Linie.
     private var dragOrigin: (tree: LayoutNode, divider: LayoutDivider)?
     /// Stand-Nummer der Anordnung (`LayoutReport.revision`): wächst mit jeder Änderung. Agenten müssen
@@ -65,6 +77,8 @@ final class TerminalSplitView: NSView {
 
     /// Kleinste Kachelbreite/-höhe beim Ziehen einer Trennlinie (pt).
     private static let dragMinimum: Double = 120
+    /// Höhe der Reiterleiste über einem Platz mit mehreren Kacheln (pt, inkl. Luft zur Kachel).
+    private static let tabBarHeight: CGFloat = 30
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -131,6 +145,7 @@ final class TerminalSplitView: NSView {
             case .zoom: self.paneRequestsZoom(pane)
             case .find: _ = pane.handle(.find)
             case .rearrange: self.rearrangeAutomatically()
+            case .fill(let count): self.ensurePaneCount(count)
             }
         }
 
@@ -218,10 +233,12 @@ final class TerminalSplitView: NSView {
     }
 
     private func windowSnapshot() -> SessionSnapshot.Window {
-        SessionSnapshot.Window(entries: panes.map { pane in
+        let hidden = hiddenTabIDs
+        return SessionSnapshot.Window(entries: panes.map { pane in
             (snapshot: pane.snapshot().map {
                 var s = $0; s.id = pane.id.uuidString; s.openedBy = pane.openedBy
                 s.companionOf = companionOf[pane.id]?.uuidString
+                s.hidden = hidden.contains(pane.id.uuidString) ? true : nil
                 return s
             }, focused: isFocused(pane), zoomed: pane === zoomedPane)
         }, layout: manualLayout)
@@ -247,6 +264,7 @@ final class TerminalSplitView: NSView {
             return pane
         }
         restoreRelations(plan.panes, idMap: idMap)
+        restoreFrontTabs(plan.panes, idMap: idMap)
         // Angepasste Anordnung mit den (ggf. neuen) Kachel-IDs; was nicht zurückkam, fällt heraus.
         if let saved = plan.layout,
            let mapped = saved.mappingPanes({ idMap[$0.uppercased()]?.uuidString })?
@@ -265,6 +283,14 @@ final class TerminalSplitView: NSView {
             guard let old = entry.id?.uppercased(), let pane = idMap[old],
                   let target = entry.companionOf?.uppercased(), let anchor = idMap[target], anchor != pane else { continue }
             companionOf[pane] = anchor
+        }
+    }
+
+    /// Reiter, die beim Beenden vorn lagen, liegen wieder vorn: sichtbare Kacheln gelten als zuletzt gezeigt.
+    private func restoreFrontTabs(_ saved: [PaneSnapshot], idMap: [String: UUID]) {
+        for entry in saved where entry.hidden != true {
+            guard let old = entry.id?.uppercased(), let id = idMap[old], let pane = panes.first(where: { $0.id == id }) else { continue }
+            markShown(pane)
         }
     }
 
@@ -331,6 +357,7 @@ final class TerminalSplitView: NSView {
                 if let old = saved.id?.uppercased() { idMap[old] = pane.id }
             }
             restoreRelations(window.panes, idMap: idMap)
+            restoreFrontTabs(window.panes, idMap: idMap)
         }
         layoutChanged()
         relayout(animated: false)
@@ -460,6 +487,7 @@ final class TerminalSplitView: NSView {
         for pane in panes { pane.container.hasFocus = isFocused(pane) }
         updateWindowTitle()
         updateTitlebarHUD()
+        updateTabBarContents()
     }
 
     /// Fenstertitel = Titel der fokussierten Kachel; ohne Fokus in einer Kachel bleibt er stehen.
@@ -542,6 +570,7 @@ final class TerminalSplitView: NSView {
         let focused = panes.first(where: { isFocused($0) })
         setZoomedPane(nil)
         panes.append(pane)
+        markShown(pane)
         switch placement {
         case .own: break
         case .beside(let anchor):
@@ -550,6 +579,9 @@ final class TerminalSplitView: NSView {
             if let focused { companionOf[pane.id] = focused.id }
         }
         if manualLayout != nil { insertIntoManualLayout(pane, focused: focused) }
+        // Landet die neue Kachel als Reiter vor der, in der Mats gerade tippt, bleibt seine vorn — die neue
+        // kommt nur nach vorn, wenn sie selbst den Fokus bekommt (`settle`).
+        if let focused, hiddenTabIDs.contains(focused.id.uuidString) { markShown(focused) }
         layoutChanged()
         updateTitlebarHUD()
         addSubview(pane.container)
@@ -562,12 +594,23 @@ final class TerminalSplitView: NSView {
         updateFocusBorders()
         relayout(animated: true)
         guard focus else { return }
-        DispatchQueue.main.async { [weak self] in self?.window?.makeFirstResponder(pane.focusTarget) }
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.panes.contains(where: { $0 === pane }) else { return }
+            self.reveal(pane)
+            self.window?.makeFirstResponder(pane.focusTarget)
+        }
     }
 
-    /// Cmd+1…9: auf `n` Kacheln auffüllen – nur erweitern, nie schließen.
+    /// Menü „Kacheln auffüllen“: auf `n` Kacheln auffüllen – nur erweitern, nie schließen.
     func ensurePaneCount(_ n: Int) {
         while panes.count < n { addPane() }
+    }
+
+    /// ⌘1…9: zur Kachel `n` in Lesereihenfolge springen (verdeckte Reiter kommen nach vorn).
+    func jumpToPane(_ n: Int) {
+        let ordered = displayPanes
+        guard ordered.indices.contains(n - 1) else { NSSound.beep(); return }
+        focusPane(ordered[n - 1])
     }
 
     /// Cmd+W: Kachel beenden (`willClose`) UND sofort entfernen. `terminate()` cancelt den
@@ -583,11 +626,14 @@ final class TerminalSplitView: NSView {
         // Nur wer die geschlossene Kachel fokussiert hatte, bekommt den Nachbarn — schließt ein Agent eine
         // andere Kachel, bleibt die Tastatur, wo Mats gerade tippt (Live-Befund 23.09.).
         let hadFocus = isFocused(pane) || panes.first(where: { isFocused($0) }) == nil
+        // Reiter-Nachbarn: geht die vordere, bekommt die zuletzt gezeigte dahinter Platz und Fokus.
+        let mates = placeMembers(of: pane).filter { $0 !== pane }
         // Auch wenn eine ANDERE (verdeckte) Kachel stirbt: das Grid darunter ändert
         // sich — Zoom beenden, damit der Nutzer den neuen Zustand sieht.
         setZoomedPane(nil)
         cancelDividerDrag()
         panes.remove(at: idx)
+        shownAt[pane.id.uuidString] = nil
         // Layout: ihr Platz fällt an ihre Nachbarn im Block; ihre Begleiter werden eigenständig.
         companionOf[pane.id] = nil
         for (companion, anchor) in companionOf where anchor == pane.id { companionOf[companion] = nil }
@@ -600,7 +646,11 @@ final class TerminalSplitView: NSView {
         guard !panes.isEmpty else { window?.close(); return }
         updateFocusBorders()
         relayout(animated: true)
-        if hadFocus { window?.makeFirstResponder(panes[min(idx, panes.count - 1)].focusTarget) }
+        guard hadFocus else { return }
+        let successor = mates.max { (shownAt[$0.id.uuidString] ?? 0) < (shownAt[$1.id.uuidString] ?? 0) }
+            ?? panes[min(idx, panes.count - 1)]
+        let visible = frontOfPlace(of: successor) ?? successor
+        window?.makeFirstResponder(visible.focusTarget)
     }
 
     /// Rahmen-Regeln: Fokus-Abstufung nur im sichtbaren Grid (≥2 Kacheln, kein
@@ -798,6 +848,7 @@ final class TerminalSplitView: NSView {
         guard let pane = panes.first(where: { $0.id == id }) else { return }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+        reveal(pane)
         if panes.count > 1 {
             setZoomedPane(pane)
             updateFocusBorders()
@@ -811,6 +862,7 @@ final class TerminalSplitView: NSView {
     /// Kachel gezoomt, WANDERT der Zoom zur angeklickten — die Punkte sind im
     /// Zoom der Session-Umschalter, ein Rückfall ins Grid wäre ein Bruch.
     private func focusPane(_ pane: any Pane) {
+        reveal(pane)
         if let zoomed = zoomedPane, zoomed !== pane {
             setZoomedPane(pane)
             updateFocusBorders()
@@ -831,6 +883,10 @@ final class TerminalSplitView: NSView {
 
     /// Der Baum, der gerade gilt: angepasst (bereinigt, jede Kachel drin) oder von der Automatik.
     private func effectiveLayout() -> LayoutNode? {
+        rawLayout()?.withFront { self.shownAt[$0] ?? 0 }
+    }
+
+    private func rawLayout() -> LayoutNode? {
         let ids = Set(panes.map { $0.id.uuidString })
         if var manual = manualLayout?.normalized(keeping: ids) {
             // Sicherheitsnetz: jede Kachel steht im Baum — sonst läge sie unsichtbar unter den anderen.
@@ -855,6 +911,79 @@ final class TerminalSplitView: NSView {
         var byID = Dictionary(panes.map { ($0.id.uuidString, $0) }, uniquingKeysWith: { a, _ in a })
         let ordered = root.paneIDs.compactMap { byID.removeValue(forKey: $0) }
         return ordered + panes.filter { byID[$0.id.uuidString] != nil }
+    }
+
+    // MARK: Reiter
+
+    /// Kacheln, die gerade als hintere Reiter verdeckt sind.
+    private var hiddenTabIDs: Set<String> {
+        guard panes.count > 1, let root = effectiveLayout() else { return [] }
+        return Set(root.hiddenPaneIDs)
+    }
+
+    /// Alle Kacheln am Platz von `pane` (Reiter samt ihr; sonst nur sie).
+    private func placeMembers(of pane: any Pane) -> [any Pane] {
+        guard let root = effectiveLayout(), let path = LayoutEdit.path(of: pane.id.uuidString, in: root) else { return [pane] }
+        let ids = LayoutEdit.node(at: path, in: root).members
+        return ids.compactMap { id in panes.first { $0.id.uuidString == id } }
+    }
+
+    /// Die Kachel, die am Platz von `pane` gerade vorn liegt.
+    private func frontOfPlace(of pane: any Pane) -> (any Pane)? {
+        guard let root = effectiveLayout(), let path = LayoutEdit.path(of: pane.id.uuidString, in: root),
+              let front = LayoutEdit.node(at: path, in: root).pane else { return nil }
+        return panes.first { $0.id.uuidString == front }
+    }
+
+    private func markShown(_ pane: any Pane) {
+        shownClock += 1
+        shownAt[pane.id.uuidString] = shownClock
+    }
+
+    /// Verdeckten Reiter nach vorn holen (sofort, ohne Animation). Kein neuer Layout-Stand: was vorn liegt,
+    /// ändert keine Aufteilung. true = war verdeckt.
+    @discardableResult
+    private func reveal(_ pane: any Pane) -> Bool {
+        guard hiddenTabIDs.contains(pane.id.uuidString) else { return false }
+        markShown(pane)
+        relayout(animated: false)
+        return true
+    }
+
+    /// Reiter angeklickt: nach vorn und fokussieren.
+    private func selectTab(_ id: String) {
+        guard let pane = panes.first(where: { $0.id.uuidString == id }) else { return }
+        focusPane(pane)
+    }
+
+    /// Reiter-Leisten an die Plätze legen; Inhalte (Titel, Farbe, Fokus) zieht `updateTabBarContents` nach.
+    private func placeTabBars(_ bars: [LayoutTabBar]) {
+        currentTabBars = bars
+        while tabBarViews.count > bars.count { tabBarViews.removeLast().removeFromSuperview() }
+        while tabBarViews.count < bars.count {
+            let view = PaneTabBarView(frame: .zero)
+            view.onSelect = { [weak self] in self?.selectTab($0) }
+            view.onClose = { [weak self] id in
+                guard let self, let pane = self.panes.first(where: { $0.id.uuidString == id }) else { return }
+                self.closePane(pane)
+            }
+            addSubview(view)
+            tabBarViews.append(view)
+        }
+        // Im Zoom verdeckt die gezoomte Kachel alles.
+        for view in tabBarViews { view.isHidden = zoomedPane != nil }
+        updateTabBarContents()
+    }
+
+    private func updateTabBarContents() {
+        for (view, bar) in zip(tabBarViews, currentTabBars) {
+            view.tabs = bar.tabs.compactMap { id in
+                panes.first { $0.id.uuidString == id }.map { pane in
+                    PaneTabBarView.Tab(id: id, title: pane.title, accent: pane.effectiveAccent,
+                                       front: id == bar.front, focused: id == bar.front && isFocused(pane))
+                }
+            }
+        }
     }
 
     /// Wurzel-Kachel einer Kachel: der Begleiter eines Begleiters gehört zu dessen Kachel.
@@ -893,8 +1022,9 @@ final class TerminalSplitView: NSView {
         let W = bounds.width, H = bounds.height
         guard W > 0, H > 0, let root = effectiveLayout() else { return }
         if manualLayout != nil { manualLayout = root }   // bereinigte Fassung behalten
-        let (slots, lines) = LayoutGeometry.layout(root, in: bounds, gap: Self.gap)
+        let (slots, lines, bars) = LayoutGeometry.layout(root, in: bounds, gap: Self.gap, tabBarHeight: Self.tabBarHeight)
         let slotByID = Dictionary(slots.map { ($0.pane, $0) }, uniquingKeysWith: { a, _ in a })
+        placeTabBars(bars)
 
         var frames: [NSRect] = []
         var cornerMasks: [CACornerMask] = []
@@ -948,17 +1078,33 @@ final class TerminalSplitView: NSView {
             for (pane, frame) in zip(panes, frames) { pane.container.pinContent(forTargetSize: frame.size) }
         }
 
+        // Hintere Reiter: gleicher Frame wie die vordere, aber verborgen; die gezoomte ist immer sichtbar.
+        let hidden = panes.map { pane in slotByID[pane.id.uuidString]?.hidden == true && pane !== zoomedPane }
         if animated && !isFirstLayout && window != nil && dragOrigin == nil {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.22
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
-                for (pane, frame) in zip(panes, frames) { pane.container.animator().frame = frame }
+                for (i, pane) in panes.enumerated() {
+                    if hidden[i] { pane.container.frame = frames[i] } else { pane.container.animator().frame = frames[i] }
+                }
+                for (view, bar) in zip(tabBarViews, bars) { view.animator().frame = bar.rect }
             }
         } else {
             for (pane, frame) in zip(panes, frames) { pane.container.frame = frame }
+            for (view, bar) in zip(tabBarViews, bars) { view.frame = bar.rect }
         }
+        for (pane, isHidden) in zip(panes, hidden) where pane.container.isHidden != isHidden { pane.container.isHidden = isHidden }
         isFirstLayout = false
         updateDividers(lines)
+        keepFocusVisible()
+    }
+
+    /// Liegt der Tastaturfokus in einer Kachel, die gerade verdeckt wurde, wandert er zur vorderen ihres Platzes.
+    private func keepFocusVisible() {
+        guard let responder = window?.firstResponder as? NSView,
+              let owner = panes.first(where: { responder.isDescendant(of: $0.container) }),
+              owner.container.isHidden, let front = frontOfPlace(of: owner), front !== owner else { return }
+        window?.makeFirstResponder(front.focusTarget)
     }
 
     // MARK: Trennlinien (Mats zieht)
@@ -1054,11 +1200,12 @@ extension TerminalSplitView: PaneHost {
     func paneRequestsClose(_ pane: any Pane) { closePane(pane) }
     func paneDidClose(_ pane: any Pane) { removePane(pane) }
     func paneRequestsZoom(_ pane: any Pane) { toggleZoom(pane) }
-    func paneRequestsPaneCount(_ count: Int) { ensurePaneCount(count) }
+    func paneRequestsJump(toPane index: Int) { jumpToPane(index) }
 
     func paneStyleChanged(_ pane: any Pane) {
         updateWindowTitle()
         updateTitlebarHUD()
+        updateTabBarContents()
     }
 
     /// Nur melden, wenn die Kachel gerade niemand ansieht — App im Hintergrund, Fenster
@@ -1272,7 +1419,8 @@ extension TerminalSplitView: ControlCommandHandler {
                         args: terminal == nil ? pane.snapshot()?.args : nil,
                         foreground: terminal?.foregroundProcessName,
                         openedBy: pane.openedBy,
-                        companionOf: companionOf[pane.id]?.uuidString)
+                        companionOf: companionOf[pane.id]?.uuidString,
+                        hidden: hiddenTabIDs.contains(pane.id.uuidString) ? true : nil)
     }
 
     /// Steuerkanal `layout` (Kachel-Layout): Stand zeigen oder eine Absicht anwenden. Ein Agent ordnet
@@ -1319,6 +1467,11 @@ extension TerminalSplitView: ControlCommandHandler {
         if !onBehalf, let foreign = targets.first(where: { !own($0) }) {
             return .failure("\(layoutName(foreign)) hast nicht du geöffnet — fremde Kacheln ordnest du nur auf ausdrücklichen Auftrag um (auf_auftrag: true).")
         }
+        // Reiter nach vorn holen: ändert keine Aufteilung, also auch keinen Stand.
+        if op == "front" {
+            reveal(first)
+            return ControlResponse(ok: true, pane: info(for: first), layout: report())
+        }
         let a = first.id.uuidString, b = targets.count > 1 ? targets[1].id.uuidString : nil
         let intent: LayoutOp
         switch (op, b) {
@@ -1328,19 +1481,31 @@ extension TerminalSplitView: ControlCommandHandler {
         case ("beside", let b?): intent = .beside(a, b)
         case ("below", let b?): intent = .below(a, b)
         case ("swap", let b?): intent = .swap(a, b)
-        case ("beside", nil), ("below", nil), ("swap", nil): return .failure("\(op) braucht eine zweite Kachel (otherPane)")
-        default: return .failure("Unbekannte Absicht „\(op)“ (show, big, grow, shrink, beside, below, swap, auto)")
+        case ("tab", let b?): intent = .tab(a, into: b)
+        case ("beside", nil), ("below", nil), ("swap", nil), ("tab", nil): return .failure("\(op) braucht eine zweite Kachel (otherPane)")
+        default: return .failure("Unbekannte Absicht „\(op)“ (show, big, grow, shrink, beside, below, swap, tab, front, auto)")
         }
         guard zoomedPane == nil else { return .failure("Gerade ist eine Kachel gezoomt (⌘⏎) — erst danach umordnen.") }
         guard let root = manualLayout ?? effectiveLayout() else { return .failure("Kein Layout") }
         let changed: LayoutNode
         do { changed = try LayoutEdit.apply(intent, to: root, actor: actor, overrideMats: onBehalf || actor == .mats) }
         catch { return .failure(String(describing: error)) }
+        switch intent {
+        case .big, .grow, .shrink:
+            // Wer eine Kachel groß haben will, will sie sehen.
+            markShown(first)
+        case .tab:
+            // Als Reiter anlegen = dahinter: die bisher vordere am Zielplatz bleibt vorn.
+            if let front = frontOfPlace(of: targets[1]) { markShown(front) }
+        default: break
+        }
         if changed != root {
             cancelDividerDrag()
             manualLayout = changed
             relayout(animated: true)
             layoutChanged()
+        } else {
+            relayout(animated: false)
         }
         return ControlResponse(ok: true, pane: info(for: first), layout: report())
     }
