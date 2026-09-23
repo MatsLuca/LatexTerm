@@ -1,6 +1,6 @@
 #!/bin/zsh
 set -x
-REC=/Users/matslucadagott/Documents/4_Projekte/01_Aktiv/LatexTerm/demo-video/recordings/take1.mov
+REC="${0:A:h:h}/recordings/take1.mov"
 LT=/opt/homebrew/bin/latexterm
 
 # newest pane index = pane whose cwd matches, fallback: highest index

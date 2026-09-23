@@ -492,8 +492,7 @@ final class MCPServer {
         }
         let previews = try listPanes().filter { $0.kind == "preview" }
         let mine = previews.filter(isMine)
-        if let chosen = mine.first(where: \.focused) ?? (mine.count == 1 ? mine.first : nil)
-            ?? previews.first(where: \.focused) ?? (previews.count == 1 ? previews.first : nil) ?? mine.last {
+        if let chosen = defaultPane(mine: mine, all: previews) {
             return chosen
         }
         if previews.isEmpty { throw ToolFailure("Keine Vorschau offen — open_preview öffnet eine.") }
@@ -554,8 +553,7 @@ final class MCPServer {
         }
         let webs = try listPanes().filter { $0.kind == "web" }
         let mine = webs.filter(isMine)
-        if let chosen = mine.first(where: \.focused) ?? (mine.count == 1 ? mine.first : nil)
-            ?? webs.first(where: \.focused) ?? (webs.count == 1 ? webs.first : nil) ?? mine.last {
+        if let chosen = defaultPane(mine: mine, all: webs) {
             return chosen
         }
         if webs.isEmpty { throw ToolFailure("Keine Web-Kachel offen — open_web öffnet eine.") }
@@ -666,8 +664,7 @@ final class MCPServer {
         } else {
             let pads = try listPanes().filter { $0.kind == "scratchpad" }
             let mine = pads.filter(isMine)
-            if let chosen = mine.first(where: \.focused) ?? (mine.count == 1 ? mine.first : nil)
-                ?? pads.first(where: \.focused) ?? (pads.count == 1 ? pads.first : nil) ?? mine.last {
+            if let chosen = defaultPane(mine: mine, all: pads) {
                 pane = chosen
             } else if pads.isEmpty {
                 throw ToolFailure("Kein Scratchpad offen — open_scratchpad öffnet eins neben dir.")
@@ -907,6 +904,16 @@ final class MCPServer {
         if opened.contains(pane.id.uppercased()) { return true }
         guard let paneID, let opener = pane.openedBy else { return false }
         return opener.caseInsensitiveCompare(paneID) == .orderedSame
+    }
+
+    /// Standardziel ohne `pane`: eigene fokussierte, einzige eigene, fokussierte, einzige, zuletzt eigene.
+    /// Als Einzelschritte statt einer `??`-Kette — die lange Kette sprengt den Type-Checker in CI.
+    private func defaultPane(mine: [PaneInfo], all: [PaneInfo]) -> PaneInfo? {
+        if let focused = mine.first(where: \.focused) { return focused }
+        if mine.count == 1 { return mine[0] }
+        if let focused = all.first(where: \.focused) { return focused }
+        if all.count == 1 { return all[0] }
+        return mine.last
     }
 
     private func selfPane(in panes: [PaneInfo]) -> PaneInfo? {
