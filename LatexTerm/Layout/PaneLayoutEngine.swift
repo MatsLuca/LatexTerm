@@ -499,6 +499,41 @@ enum LayoutEdit {
         return result.normalized() ?? result
     }
 
+    /// Neue Kachel verdeckt einsetzen, ohne Platz zu nehmen (Agent öffnet „im Hintergrund“): als hinterer Reiter
+    /// auf den letzten Platz der Nebenspalte ihrer Kachel, gibt es keine, hinter die Kachel selbst. Nie in Reiter,
+    /// die Mats zusammengestellt hat (✋) — nil, wenn es keinen erlaubten Platz gibt (der Aufrufer setzt sie dann
+    /// normal ein). Welche Kachel vorn liegt, entscheidet die Split-View; die neue kommt hinten an.
+    static func insertBehind(_ pane: String, anchor: String, anchorCompanions: Set<String>, into root: LayoutNode) -> LayoutNode? {
+        let id = pane.uppercased()
+        guard !root.paneIDs.contains(id), let anchorPath = path(of: anchor, in: root) else { return nil }
+        let companions = Set(anchorCompanions.map { $0.uppercased() })
+        var candidates: [[Int]] = []
+        // Nebenspalte = rechter Nachbar in einer Zeile, der nur Begleiter enthält; ihr letzter Platz (unten).
+        if let index = anchorPath.last {
+            let parentPath = Array(anchorPath.dropLast())
+            let parent = node(at: parentPath, in: root)
+            if parent.axis == .row, index + 1 < parent.children.count {
+                let sibling = parent.children[index + 1]
+                if !sibling.paneIDs.isEmpty, sibling.paneIDs.allSatisfy(companions.contains) {
+                    var placePath = parentPath + [index + 1]
+                    while !node(at: placePath, in: root).isLeaf {
+                        placePath.append(node(at: placePath, in: root).children.count - 1)
+                    }
+                    candidates.append(placePath)
+                }
+            }
+        }
+        candidates.append(anchorPath)
+        for placePath in candidates {
+            let place = node(at: placePath, in: root)
+            guard place.setBy != .mats else { continue }
+            let result = replacing(at: placePath, in: root,
+                                   with: .group(place.members + [id], front: place.pane, weight: place.weight, setBy: place.setBy))
+            return result.normalized() ?? result
+        }
+        return nil
+    }
+
     /// Kachel herausnehmen; die Geschwister behalten ihr Verhältnis zueinander.
     static func remove(_ pane: String, from root: LayoutNode) -> LayoutNode? {
         let id = pane.uppercased()

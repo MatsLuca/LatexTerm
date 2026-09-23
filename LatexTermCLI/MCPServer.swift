@@ -161,7 +161,8 @@ final class MCPServer {
         danach automatisch). Deine eigenen Kacheln frei; fremde und Aufteilungen mit ✋ (von Mats von Hand gesetzt) nur auf \
         seinen Wunsch. Kacheln per UUID-Präfix ansprechen — Nummern verschieben sich beim Umordnen. Reiter: ab dem vierten \
         Begleiter teilen sich Kacheln einen Platz (eine vorn, der Rest verdeckt, Reiterleiste darüber); eine neue kommt vorn \
-        hin. Willst du eine verdeckte zeigen: layout vorholen; Platz sparen: layout reiter.
+        hin. Willst du eine verdeckte zeigen: layout vorholen; Platz sparen: layout reiter — oder gleich mit placement \
+        hintergrund öffnen, wenn der Nutzer die Kachel nicht sofort sehen muss (Log, Server, Nachschlagen).
         """)
         return lines.joined(separator: "\n")
     }
@@ -174,8 +175,8 @@ final class MCPServer {
     ]
 
     private static let placementProperty: JSON = [
-        "type": "string", "enum": ["neben_mich", "eigen"],
-        "description": "neben_mich (Default): in deine Nebenspalte rechts neben dir; eigen: eigenständige Kachel mit eigenem Platz (z. B. für ein anderes Projekt)",
+        "type": "string", "enum": ["neben_mich", "eigen", "hintergrund"],
+        "description": "neben_mich (Default): in deine Nebenspalte rechts neben dir; eigen: eigenständige Kachel mit eigenem Platz (z. B. für ein anderes Projekt); hintergrund: verdeckt als Reiter hinter deinen Kacheln, nimmt keinen Platz (Log, Server, Nachschlagen)",
     ]
 
     private static let staticTools: [JSON] = [
@@ -294,8 +295,8 @@ final class MCPServer {
     private func openTool(_ info: PaneKindInfo) -> JSON {
         var properties: [String: JSON] = [:]
         for arg in info.args { properties[arg.name] = ["type": "string", "description": arg.summary] }
-        properties["placement"] = ["type": "string", "enum": ["neben_mich", "eigen", "ersetzen"],
-                                   "description": "neben_mich (Default): in deine Nebenspalte rechts neben dir · eigen: eigenständige Kachel · ersetzen: statt einer neuen deine vorhandene Kachel dieser Art mit dem neuen Inhalt laden"]
+        properties["placement"] = ["type": "string", "enum": ["neben_mich", "eigen", "ersetzen", "hintergrund"],
+                                   "description": "neben_mich (Default): in deine Nebenspalte rechts neben dir · eigen: eigenständige Kachel · ersetzen: statt einer neuen deine vorhandene Kachel dieser Art mit dem neuen Inhalt laden · hintergrund: verdeckt als Reiter hinter deinen Kacheln, nimmt keinen Platz (der Nutzer sieht ein Abzeichen, wenn sich dort etwas ändert)"]
         var description = info.summary + " Öffnet eine neue Kachel neben dir, ohne Fokuswechsel; ist dieselbe schon offen, wird sie wiederverwendet."
         if !info.actions.isEmpty {
             description += " Danach per pane_action: " + info.actions.map { "\($0.name) (\($0.summary))" }.joined(separator: ", ") + "."
@@ -367,8 +368,9 @@ final class MCPServer {
         switch a["placement"] as? String {
         case nil, "neben_mich": return "beside"
         case "eigen": return "own"
+        case "hintergrund": return "background"
         case "ersetzen" where allowReplace: return "replace"
-        case let other: throw ToolFailure("placement „\(other ?? "")“ gibt es hier nicht (neben_mich, eigen\(allowReplace ? ", ersetzen" : "")).")
+        case let other: throw ToolFailure("placement „\(other ?? "")“ gibt es hier nicht (neben_mich, eigen, hintergrund\(allowReplace ? ", ersetzen" : "")).")
         }
     }
 
@@ -546,7 +548,7 @@ final class MCPServer {
         request.kind = info.kind
         request.args = args
         request.focus = false
-        request.placement = placed == "own" ? "own" : "beside"
+        request.placement = placed == "replace" ? "beside" : placed
         let pane = try open(request)
         return "\(info.kind)-Kachel \(pane.index) (\(pane.id.prefix(8))) geöffnet." + currentLayout()
     }

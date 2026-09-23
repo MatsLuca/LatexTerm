@@ -55,7 +55,8 @@ struct ControlRequest: Codable {
     /// Default false: dann nur eine ruhende Shell ohne Vordergrundprozess.
     var force: Bool?
     /// new-pane (Kachel-Layout, Capability `layout`): "beside" = neben die aufrufende Kachel (Default,
-    /// sobald es einen Aufrufer gibt), "own" = eigenständig (neue Agenten-Session).
+    /// sobald es einen Aufrufer gibt), "own" = eigenständig (neue Agenten-Session), "background" = als verdeckter
+    /// Reiter bei der aufrufenden Kachel, ohne Platz zu nehmen.
     var placement: String?
     /// layout: Absicht "show" | "big" | "grow" | "shrink" | "beside" | "below" | "swap" | "auto";
     /// Ziel in `pane`, zweite Kachel in `otherPane`.

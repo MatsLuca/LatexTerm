@@ -341,6 +341,8 @@ struct MCPServerTests {
         _ = call(layServer, "open_terminal", ["placement": "eigen"])
         assert(lay.sent("new-pane").last?.placement == "own")
         assert(call(layServer, "open_terminal", ["placement": "ersetzen"]).error)
+        _ = call(layServer, "open_terminal", ["placement": "hintergrund"])
+        assert(lay.sent("new-pane").last?.placement == "background")
         _ = call(layServer, "start_agent", ["agent": "claude"])
         assert(lay.sent("new-pane").last?.placement == "own")
         // Ersetzen: die eigene Web-Kachel lädt die neue Seite, statt eine zweite zu öffnen.
@@ -354,6 +356,10 @@ struct MCPServerTests {
         try "<p>c</p>".write(toFile: third, atomically: true, encoding: .utf8)
         r = call(layServer, "open_web", ["url": third])
         assert(!r.error && lay.sent("new-pane").last?.placement == "beside" && r.text.contains("Anordnung (Stand"), r.text)
+        let fourth = tmp.appendingPathComponent("fourth.html").path
+        try "<p>d</p>".write(toFile: fourth, atomically: true, encoding: .utf8)
+        r = call(layServer, "open_web", ["url": fourth, "placement": "hintergrund"])
+        assert(!r.error && lay.sent("new-pane").last?.placement == "background", r.text)
 
         print("mcp-server: ok")
     }

@@ -540,6 +540,8 @@ final class TerminalSplitView: NSView {
         case beside(UUID)
         /// Von Hand geöffnete App-Kachel: neben die fokussierte Kachel.
         case besideFocused
+        /// Verdeckt als Reiter bei dieser Kachel (Agent öffnet „im Hintergrund“), ohne Platz zu nehmen.
+        case background(UUID)
     }
 
     /// Terminal- oder Home-Kachel anhängen.
@@ -577,16 +579,34 @@ final class TerminalSplitView: NSView {
         cancelPaneDrag()
         let focused = panes.first(where: { isFocused($0) })
         setZoomedPane(nil)
+        // Hintergrund braucht den Baum, wie er gerade aussieht — die neue Kachel kommt als Reiter dazu.
+        let before = effectiveLayout()
         panes.append(pane)
-        markShown(pane)
+        var inBackground = false
         switch placement {
         case .own: break
         case .beside(let anchor):
             if anchor != pane.id, panes.contains(where: { $0.id == anchor }) { companionOf[pane.id] = anchor }
         case .besideFocused:
             if let focused { companionOf[pane.id] = focused.id }
+        case .background(let anchor):
+            guard anchor != pane.id, panes.contains(where: { $0.id == anchor }) else { break }
+            companionOf[pane.id] = anchor
+            let root = rootAnchor(of: anchor)
+            if let tree = manualLayout ?? before,
+               let placed = LayoutEdit.insertBehind(pane.id.uuidString, anchor: anchor.uuidString,
+                                                    anchorCompanions: block(of: root, excluding: pane.id)
+                                                        .subtracting([anchor.uuidString]),
+                                                    into: tree) {
+                manualLayout = placed
+                inBackground = true
+            }
         }
-        if manualLayout != nil { insertIntoManualLayout(pane, focused: focused) }
+        // Verdeckt angelegt: nicht als zuletzt gezeigt markieren, sonst läge sie gleich vorn.
+        if !inBackground {
+            markShown(pane)
+            if manualLayout != nil { insertIntoManualLayout(pane, focused: focused) }
+        }
         // Landet die neue Kachel als Reiter vor der, in der Mats gerade tippt, bleibt seine vorn — die neue
         // kommt nur nach vorn, wenn sie selbst den Fokus bekommt (`settle`).
         if let focused, hiddenTabIDs.contains(focused.id.uuidString) { markShown(focused) }
@@ -1501,10 +1521,15 @@ extension TerminalSplitView: ControlCommandHandler {
             let placement: PanePlacement
             switch request.placement {
             case "own": placement = .own
+            case "background":
+                guard let openerID, panes.contains(where: { $0.id == openerID }) else {
+                    return .failure("placement background braucht eine aufrufende Kachel in diesem Fenster")
+                }
+                placement = .background(openerID)
             case nil, "beside":
                 if let openerID, panes.contains(where: { $0.id == openerID }) { placement = .beside(openerID) }
                 else { placement = kind == "terminal" || kind == "home" ? .own : .besideFocused }
-            default: return .failure("placement „\(request.placement ?? "")“ unbekannt (beside | own)")
+            default: return .failure("placement „\(request.placement ?? "")“ unbekannt (beside | own | background)")
             }
             let layout = { self.layoutReport() }
             switch kind {

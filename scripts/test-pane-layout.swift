@@ -460,6 +460,22 @@ struct PaneLayoutTests {
         full = LayoutEdit.insert("P5", companionOf: "S", anchorCompanions: ["P1", "P2", "P3", "P4"], focusBlock: [], preference: .flexible,
                                  anchorPreference: .flexible, into: full, bounds: bounds, gap: 8)
         check(full.children[1].children.count == 4 && full.children[1].children[2].members == ["P3", "P4"], "Neue Begleiterin nicht in Mats' Reiter: \(full)")
+        // Hintergrund: als hinterer Reiter auf den letzten Platz der Nebenspalte, sonst hinter die Kachel selbst; nie in ✋-Reiter.
+        let column = LayoutNode.split(.row, [.leaf("S"), .split(.column, [.leaf("P1"), .leaf("P2")])])
+        var bg = LayoutEdit.insertBehind("N", anchor: "S", anchorCompanions: ["P1", "P2"], into: column)!
+        check(bg.children[1].children[1] == .group(["P2", "N"], front: "P2"), "hinter den letzten Platz: \(bg)")
+        check(LayoutGeometry.rect(of: "P1", in: bg, bounds: bounds) == LayoutGeometry.rect(of: "P1", in: column, bounds: bounds), "nimmt keinen Platz")
+        bg = LayoutEdit.insertBehind("N", anchor: "S", anchorCompanions: [], into: .split(.row, [.leaf("S"), .leaf("X")]))!
+        check(bg.children[0] == .group(["S", "N"], front: "S"), "ohne Nebenspalte hinter die Kachel selbst: \(bg)")
+        let lockedColumn = LayoutNode.split(.row, [.leaf("S"), .split(.column, [.leaf("P1"), .group(["P2", "P3"], setBy: .mats)])])
+        bg = LayoutEdit.insertBehind("N", anchor: "S", anchorCompanions: ["P1", "P2", "P3"], into: lockedColumn)!
+        check(bg.children[0] == .group(["S", "N"], front: "S") && bg.children[1] == lockedColumn.children[1], "✋-Reiter bleiben zu: \(bg)")
+        var lockedAll = LayoutNode.split(.row, [.group(["S", "Q"], setBy: .mats), .leaf("X")])
+        check(LayoutEdit.insertBehind("N", anchor: "S", anchorCompanions: [], into: lockedAll) == nil, "kein erlaubter Platz → nil")
+        lockedAll = .leaf("S")
+        check(LayoutEdit.insertBehind("N", anchor: "S", anchorCompanions: [], into: lockedAll) == .group(["S", "N"], front: "S"), "einzige Kachel")
+        check(LayoutEdit.insertBehind("S", anchor: "S", anchorCompanions: [], into: lockedAll) == nil, "schon drin")
+
         // Mats' Sperren anderer Teilungen bleiben; Ergebnis ist bereinigt (keine Ein-Kind-Teilungen).
         var locked = root
         locked.children[1].setBy = .mats

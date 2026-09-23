@@ -25,6 +25,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **Tab badges (23.09.).** A hidden tab shows what is going on behind it: yellow and pulsing when its agent needs you,
   a calm pulse while it works, the result colour (done / error) until you have seen it, and a ring when a preview or
   web page reloaded or an agent drew on the scratchpad. Bringing the tab to the front clears it.
+  Agents can open a pane *in the background* (`placement: hintergrund`): it arrives as a hidden tab behind their side
+  column and takes no space — never inside tabs you arranged by hand.
 
 ### Fixed
 - **Einzeilige `$$…$$`-Formel winzig (23.09., README-Dreh).** KaTeX' Display-Rand (1em oben/unten) zählte beim Einpassen mit; ohne leere Nachbarzeilen schrumpfte die Formel auf ~40 %. Der Rand ist im Overlay jetzt 0 (die Box zentriert selbst) — dieselbe Formel passt mit ~90 % in eine Zeile.
