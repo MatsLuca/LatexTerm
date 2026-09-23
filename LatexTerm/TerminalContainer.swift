@@ -1,17 +1,17 @@
 import SwiftUI
 import AppKit
 
-/// Wrappt den `TerminalSplitView` (AppKit) für SwiftUI. Die gesamte Pane-/Split-Logik
-/// liegt in AppKit, damit die teuren, zustandsbehafteten WKWebView-Overlays beim
+/// Wrappt die `BoardHostView` (AppKit: Bretter mit je einem `TerminalSplitView`) für SwiftUI. Die gesamte
+/// Pane-/Split-Logik liegt in AppKit, damit die teuren, zustandsbehafteten WKWebView-Overlays beim
 /// Splitten nicht von SwiftUI-Re-Renders zerlegt werden.
 struct TerminalContainer: NSViewRepresentable {
     @Environment(\.openWindow) private var openWindow
 
-    func makeNSView(context: Context) -> TerminalSplitView {
+    func makeNSView(context: Context) -> BoardHostView {
         let open = openWindow
-        WindowTabs.open = { open(id: LatexTermApp.windowGroupID) }
-        return TerminalSplitView(frame: .zero)
+        BoardHostView.openWindow = { open(id: LatexTermApp.windowGroupID) }
+        return BoardHostView()
     }
 
-    func updateNSView(_ nsView: TerminalSplitView, context: Context) {}
+    func updateNSView(_ nsView: BoardHostView, context: Context) {}
 }

@@ -50,25 +50,29 @@ struct SessionSnapshot: Codable, Equatable {
         /// Index in `panes`; nil = keine Kachel fokussiert bzw. nichts gezoomt.
         var focused: Int?
         var zoomed: Int?
-        /// Tab-Leiste (22.09.): Fenster mit derselben Nummer waren Tabs einer Leiste, in Snapshot-
-        /// Reihenfolge = Tab-Reihenfolge. nil = alter Snapshot (alles landet dann in einer Leiste).
+        /// Fenster: Einträge mit derselben Nummer sind die Bretter eines Fensters, in Snapshot-Reihenfolge =
+        /// Brett-Reihenfolge (bis 22.09. native Tabs einer Leiste — dieselbe Bedeutung, alte Snapshots gelten
+        /// weiter). nil = alter Snapshot (alles landet dann in einem Fenster).
         var tabGroup: Int?
-        /// Der sichtbare Tab seiner Leiste.
+        /// Das vordere Brett seines Fensters.
         var selected: Bool?
         /// Angepasste Anordnung; Blätter tragen die Kachel-IDs aus `panes`. nil = Automatik.
         var layout: LayoutNode?
+        /// Bretter (23.09.): von Mats gesetzter Name; nil = automatisch.
+        var name: String?
 
         init(panes: [PaneSnapshot], focused: Int? = nil, zoomed: Int? = nil,
-             tabGroup: Int? = nil, selected: Bool? = nil, layout: LayoutNode? = nil) {
+             tabGroup: Int? = nil, selected: Bool? = nil, layout: LayoutNode? = nil, name: String? = nil) {
             self.panes = panes
             self.focused = focused
             self.zoomed = zoomed
             self.tabGroup = tabGroup
             self.selected = selected
             self.layout = layout
+            self.name = name
         }
 
-        private enum CodingKeys: String, CodingKey { case panes, focused, zoomed, tabGroup, selected, layout }
+        private enum CodingKeys: String, CodingKey { case panes, focused, zoomed, tabGroup, selected, layout, name }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -79,6 +83,7 @@ struct SessionSnapshot: Codable, Equatable {
             selected = try c.decodeIfPresent(Bool.self, forKey: .selected)
             // Ein kaputtes Layout kostet nur die Anordnung, nie die Kacheln.
             layout = try? c.decodeIfPresent(LayoutNode.self, forKey: .layout)
+            name = try? c.decodeIfPresent(String.self, forKey: .name)
         }
 
         /// Aus den Kacheln eines Fensters: Kacheln ohne Snapshot fallen weg, Fokus- und
@@ -214,25 +219,26 @@ enum SessionStore {
     }
 }
 
-/// Wiederherzustellende Fenster beim Start. Jedes neue Fenster holt sich das nächste; das erste
-/// öffnet für den Rest neue Tabs (`WindowTabs.open`, macOS öffnet nach ⌘Q meist nur ein Fenster).
-/// Was danach noch niemand geholt hat, hängt das erste Fenster als Kacheln an — keine Session geht
-/// verloren, schlimmstenfalls die Tab-Grenze.
+/// Wiederherzustellende Bretter beim Start. Jedes neue Fenster holt sich die nächste Gruppe (seine Bretter); das
+/// erste öffnet für die übrigen Gruppen neue Fenster (macOS öffnet nach ⌘Q meist nur eins). Was danach noch niemand
+/// geholt hat, hängt das erste Fenster als Kacheln an — keine Session geht verloren, schlimmstenfalls die Grenze.
 struct RestoreQueue {
     private var windows: [SessionSnapshot.Window]
-    private var claimedAny = false
-    private var lastGroup: Int?
     init(_ windows: [SessionSnapshot.Window]) { self.windows = windows }
 
     var isEmpty: Bool { windows.isEmpty }
     var count: Int { windows.count }
+    /// Zahl der Gruppen (Fenster), die noch warten.
+    var groupCount: Int {
+        zip(windows, windows.dropFirst()).filter { $0.tabGroup != $1.tabGroup }.count + (windows.isEmpty ? 0 : 1)
+    }
 
-    /// Wie `claim`, dazu: beginnt mit diesem Plan eine andere Tab-Leiste als beim zuvor geholten?
-    /// Dann wird er ein eigenes Fenster statt ein Tab daneben.
-    mutating func claimTab() -> (window: SessionSnapshot.Window, ownWindow: Bool)? {
-        guard let plan = claim() else { return nil }
-        defer { claimedAny = true; lastGroup = plan.tabGroup }
-        return (plan, claimedAny && plan.tabGroup != lastGroup)
+    /// Bretter (23.09.): alle aufeinanderfolgenden Pläne derselben Gruppe = die Bretter eines Fensters.
+    mutating func claimGroup() -> [SessionSnapshot.Window] {
+        guard let first = claim() else { return [] }
+        var group = [first]
+        while let next = windows.first, next.tabGroup == first.tabGroup { group.append(next); windows.removeFirst() }
+        return group
     }
 
     mutating func claim() -> SessionSnapshot.Window? {

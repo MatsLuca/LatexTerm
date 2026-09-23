@@ -88,8 +88,10 @@ final class TerminalSplitView: NSView {
     /// Kachel ziehen: kleiner als das darf durch einen Wurf keine Kachel werden (Breite, Höhe in pt).
     private static let dropMinimum = CGSize(width: 120, height: 90)
 
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
+    /// Ein Brett (23.09.2026): `plan` = gespeicherte Kacheln beim Wiederherstellen, sonst beginnt es mit Home.
+    /// Die Warteschlange des Snapshots verteilt `BoardHostView`.
+    init(plan: SessionSnapshot.Window?) {
+        super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = Self.gapColor.cgColor   // scheint in den Kachel-Lücken durch
         themeObserver = NotificationCenter.default.addObserver(
@@ -99,15 +101,9 @@ final class TerminalSplitView: NSView {
         // Erste Kachel = Projekt-Launcher (Mats' Entscheidung 24.08.). Der Session-Snapshot (#11)
         // wird bei jedem Beenden geschrieben, als Startlayout aber nur einmal nach „Neu starten“ /
         // „Beenden und Kacheln merken“ benutzt (Marke im Snapshot, `SessionStore.takeRestore`).
-        if let claimed = Self.restoreQueue.claimTab() {
-            restore(claimed.window)
-            restoredTab = (group: claimed.window.tabGroup ?? 0, ownWindow: claimed.ownWindow,
-                           selected: claimed.window.selected == true)
-            // Nur das erste Fenster öffnet die übrigen Tabs; Nachzügler finden die Schlange leer.
-            if !Self.restoreStarted {
-                Self.restoreStarted = true
-                DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in self?.restoreLeftovers() }
-            }
+        if let plan {
+            restore(plan)
+            customName = plan.name
         } else {
             addPane(home: true)
         }
@@ -116,7 +112,7 @@ final class TerminalSplitView: NSView {
         newHomeObserver = NotificationCenter.default.addObserver(
             forName: .latexTermNewHomePane, object: nil, queue: .main
         ) { [weak self] _ in
-            guard let self, self.window?.isKeyWindow == true else { return }
+            guard let self, self.isFrontBoard else { return }
             self.addPane(home: true)
         }
 
@@ -124,7 +120,7 @@ final class TerminalSplitView: NSView {
         newAppPaneObserver = NotificationCenter.default.addObserver(
             forName: .latexTermNewAppPane, object: nil, queue: .main
         ) { [weak self] note in
-            guard let self, self.window?.isKeyWindow == true, let kind = note.userInfo?["kind"] as? String,
+            guard let self, self.isFrontBoard, let kind = note.userInfo?["kind"] as? String,
                   let args = PaneKindRegistry.menuArgs(for: kind) else { return }
             do { try self.addAppPane(kind: kind, args: args) } catch {
                 Logger(subsystem: "com.mats.LatexTerm", category: "panes").error("Neue Kachel \(kind, privacy: .public): \(String(describing: error), privacy: .public)")
@@ -135,7 +131,7 @@ final class TerminalSplitView: NSView {
         showHomeObserver = NotificationCenter.default.addObserver(
             forName: .latexTermShowHome, object: nil, queue: .main
         ) { [weak self] _ in
-            guard let self, self.window?.isKeyWindow == true else { return }
+            guard let self, self.isFrontBoard else { return }
             if let fresh = self.panes.first(where: { $0.kind == "home" }) { self.focusPane(fresh) }
             else { self.focusPane(self.addPane(home: true)) }
         }
@@ -144,7 +140,7 @@ final class TerminalSplitView: NSView {
         paneCommandObserver = NotificationCenter.default.addObserver(
             forName: .latexTermPaneCommand, object: nil, queue: .main
         ) { [weak self] note in
-            guard let self, self.window?.isKeyWindow == true,
+            guard let self, self.isFrontBoard,
                   let cmd = note.userInfo?["command"] as? PaneCommand,
                   let pane = self.panes.first(where: { self.isFocused($0) }) ?? self.panes.first else { return }
             switch cmd {
@@ -164,11 +160,10 @@ final class TerminalSplitView: NSView {
             guard let self, let q = note.userInfo?["quickstart"] as? ProjekteData.Quickstart, self.window != nil else { return }
             // Key-Fenster, sonst erstes sichtbares, beim Kaltstart das erste überhaupt.
             let target = NSApp.keyWindow ?? NSApp.windows.first(where: { $0.isVisible }) ?? NSApp.windows.first
-            guard self.window === target else { return }
+            guard self.window === target, self.isActiveBoard else { return }
             self.runQuickstart(q)
         }
 
-        Self.live.append(Weak(self))
 
         // Notification-Klick → Pane fokussieren + zoomen (#30). Der Zugriff
         // setzt zugleich den UNUserNotificationCenter-Delegate früh.
@@ -215,32 +210,97 @@ final class TerminalSplitView: NSView {
         return order.first { !taken.contains($0) } ?? wanted
     }
 
-    // MARK: - Session-Snapshot (#11)
+    // MARK: - Brett (23.09.2026)
 
-    private struct Weak { weak var view: TerminalSplitView?; init(_ v: TerminalSplitView) { view = v } }
-    /// Alle Fenster in Entstehungsreihenfolge — der Snapshot beim Beenden ist EINE Datei für alle
-    /// (früher schrieb jedes Fenster seine eigene, das letzte gewann).
-    private static var live: [Weak] = []
+    /// Fenster-Hülle mit der Brett-Leiste; nil nur, solange das Brett noch nicht eingehängt ist.
+    weak var boardHost: BoardHostView?
+    /// Liegt dieses Brett vorn? Setzt nur `BoardHostView` (über `boardDidBecomeActive`/`boardDidResignActive`).
+    /// Daran hängen Titelleisten-Chips, Fenstertitel, Fokus, „beobachtet“ und das Ziel neuer Kacheln.
+    private(set) var isActiveBoard = false
+    /// Vorderes Brett im Key-Fenster — Ziel von Menü, ⌘N und Steuerkanal ohne Aufrufer.
+    var isFrontBoard: Bool { isActiveBoard && window?.isKeyWindow == true }
+    /// Von Mats gesetzter Name; nil = automatisch (`displayName`).
+    var customName: String?
+    /// Zuletzt fokussierte Kachel — bekommt die Tastatur zurück, wenn das Brett wieder nach vorn kommt.
+    private weak var lastFocused: (any Pane)?
 
-    /// Stand aller offenen Fenster; CWDs und Session-Identitäten werden live ausgelesen.
-    static func sessionSnapshot(restoreOnce: Bool) -> SessionSnapshot {
-        live.removeAll { $0.view == nil }
-        let views = live.compactMap(\.view).filter { $0.window != nil && !$0.windowClosed }
-        // Tab-Leisten zusammenhängend und in Anzeige-Reihenfolge (Tabs lassen sich verschieben).
-        let order = SessionSnapshot.tabOrder(count: views.count) { i in
-            views[i].window?.tabGroup?.windows.compactMap { w in views.firstIndex { $0.window === w } }
-        }
-        let windows = order.map { entry -> SessionSnapshot.Window in
-            let view = views[entry.index]
-            var snapshot = view.windowSnapshot()
-            snapshot.tabGroup = entry.group
-            snapshot.selected = view.window.map { $0.tabGroup?.selectedWindow === $0 }
-            return snapshot
-        }
-        return SessionSnapshot(windows: windows.filter { !$0.panes.isEmpty }, restoreOnce: restoreOnce)
+    /// Einziger Weg zur Tastatur: nur das vordere Brett darf den First Responder setzen, sonst verschwände die
+    /// Eingabe in ein verdecktes Brett (ein Agent schließt dort eine Kachel, eine neue entsteht …).
+    private func takeFocus(_ pane: any Pane) {
+        lastFocused = pane
+        guard isActiveBoard else { return }
+        window?.makeFirstResponder(pane.focusTarget)
     }
 
-    private func windowSnapshot() -> SessionSnapshot.Window {
+    /// Name in der Brett-Leiste.
+    var displayName: String {
+        if let customName, !customName.isEmpty { return customName }
+        let infos = displayPanes.map { info(for: $0) }
+        return BoardName.automatic(agentDirectories: infos.compactMap { $0.agent != nil ? $0.cwd : nil },
+                                   directories: infos.compactMap(\.cwd), home: NSHomeDirectory(),
+                                   number: boardHost?.position(of: self) ?? 1)
+    }
+
+    /// Abzeichen für die Brett-Leiste (nur verdeckte Bretter): wichtigstes aller Kacheln — wartet › arbeitet ›
+    /// ungesehenes Ergebnis › neu; dieselbe Wahrheit wie an verdeckten Reitern.
+    var boardBadge: PaneTabBarView.Badge? {
+        let badges = panes.compactMap { tabBadge(for: $0)?.badge }
+        func rank(_ b: PaneTabBarView.Badge) -> Int {
+            switch b { case .attention: return 0; case .working: return 1; case .outcome: return 2; case .news: return 3 }
+        }
+        return badges.min { rank($0) < rank($1) }
+    }
+
+    /// Grund, warum das Brett nicht ohne Rückfrage zugehen sollte (erste beschäftigte Kachel); nil = frei.
+    var closeConcern: String? {
+        for pane in panes {
+            if case .busy(let reason) = pane.closeGuard { return reason }
+            if info(for: pane).state == "working" { return "Agent arbeitet" }
+        }
+        return nil
+    }
+
+    func boardDidBecomeActive() {
+        isActiveBoard = true
+        isHidden = false
+        relayout(animated: false)
+        updateFocusBorders()
+        let target = lastFocused.flatMap { last in panes.first { $0 === last } } ?? displayPanes.first
+        if let target { takeFocus(target) }
+        updateWindowTitle()
+        updateTitlebarHUD()
+        updateTabBarContents()
+    }
+
+    func boardDidResignActive() {
+        if let focused = panes.first(where: { isFocused($0) }) { lastFocused = focused }
+        isActiveBoard = false
+        removeTitlebarHUD()
+        isHidden = true
+    }
+
+    /// Brett schließen (× in der Leiste, ⇧⌘W): Kacheln aufräumen wie ⌘W, raus aus dem Snapshot.
+    func closeBoard() {
+        windowClosed = true
+        panes.forEach { $0.willClose() }
+        removeTitlebarHUD()
+        removeFromSuperview()
+    }
+
+    /// Die Brett-Leiste links hat ihre Breite geändert: Chips neu bemessen.
+    func titlebarSpaceChanged() { updateTitlebarHUD() }
+
+    private func removeTitlebarHUD() {
+        titlebarHUD?.removeFromParent()
+        titlebarHUD = nil
+        hudChips = [:]
+        hudSignature = ""
+    }
+
+    // MARK: - Session-Snapshot (#11)
+
+    /// Kacheln dieses Bretts für den Snapshot; Fenster-Nummer, Vorn und Name setzt `BoardHostView`.
+    func windowSnapshot() -> SessionSnapshot.Window {
         let hidden = hiddenTabIDs
         return SessionSnapshot.Window(entries: panes.map { pane in
             (snapshot: pane.snapshot().map {
@@ -248,18 +308,10 @@ final class TerminalSplitView: NSView {
                 s.companionOf = companionOf[pane.id]?.uuidString
                 s.hidden = hidden.contains(pane.id.uuidString) ? true : nil
                 return s
-            }, focused: isFocused(pane), zoomed: pane === zoomedPane)
+            }, focused: isFocused(pane) || (!isActiveBoard && pane === lastFocused), zoomed: pane === zoomedPane)
         }, layout: manualLayout)
     }
 
-    /// Beim ersten Zugriff einmal von der Platte geholt, dann fensterweise verteilt.
-    private static var restoreQueue = RestoreQueue(SessionStore.takeRestore() ?? [])
-    /// Nur das erste wiederhergestellte Fenster öffnet die übrigen Tabs.
-    private static var restoreStarted = false
-    /// Wiederhergestellter Tab: beginnt er eine eigene Leiste, war er der sichtbare Tab?
-    private var restoredTab: (group: Int, ownWindow: Bool, selected: Bool)?
-    /// Beim Wiederherstellen: erstes Fenster je Leiste — die übrigen Tabs hängen sich daran.
-    private static var restoreAnchors: [Int: Weak] = [:]
     /// Fokus und Zoom des wiederhergestellten Fensters — gesetzt wird erst mit Fenster.
     private var pendingRestoreLayout: (focused: (any Pane)?, zoomed: (any Pane)?)?
 
@@ -330,32 +382,8 @@ final class TerminalSplitView: NSView {
         return pane
     }
 
-    /// Übrige Fenster des Snapshots als Tabs öffnen (jedes neue Fenster holt sich im `init` seinen
-    /// Plan). Was danach niemand geholt hat, kommt als Kacheln hierher — keine Session geht verloren.
-    private func restoreLeftovers() {
-        let remaining = Self.restoreQueue.count
-        guard remaining > 0, let open = WindowTabs.open else { mergeLeftovers(); Self.selectRestoredTabs(); return }
-        for _ in 0..<remaining { open() }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-            self?.mergeLeftovers()
-            Self.selectRestoredTabs()
-        }
-    }
-
-    /// Je Leiste den Tab nach vorn, der beim Beenden sichtbar war; Key wird der der ersten Leiste.
-    private static func selectRestoredTabs() {
-        let selected = live.compactMap(\.view).filter { $0.restoredTab?.selected == true }
-        for view in selected.reversed() {
-            guard let window = view.window else { continue }
-            window.tabGroup?.selectedWindow = window
-            window.makeKeyAndOrderFront(nil)
-        }
-        for view in live.compactMap(\.view) { view.restoredTab = nil }
-        restoreAnchors = [:]
-    }
-
-    private func mergeLeftovers() {
-        let leftovers = Self.restoreQueue.drain()
+    /// Was beim Wiederherstellen kein Fenster abgeholt hat, kommt als Kacheln hierher — keine Session geht verloren.
+    func mergeLeftovers(_ leftovers: [SessionSnapshot.Window]) {
         guard !leftovers.isEmpty else { return }
         let focused = panes.first(where: { isFocused($0) }), zoomed = zoomedPane
         for window in leftovers {
@@ -380,7 +408,7 @@ final class TerminalSplitView: NSView {
             updateFocusBorders()
             relayout(animated: false)
         }
-        if let target = alive(focused) ?? alive(zoomed) { window?.makeFirstResponder(target.focusTarget) }
+        if let target = alive(focused) ?? alive(zoomed) { takeFocus(target) }
         updateTitlebarHUD()
     }
 
@@ -409,27 +437,12 @@ final class TerminalSplitView: NSView {
         }
 
         // Kaltstart per URL/Dock-Plugin: die Anforderung kam, bevor es ein Fenster gab.
-        if let q = QuickstartStore.shared.pending {
+        if isActiveBoard, let q = QuickstartStore.shared.pending {
             QuickstartStore.shared.pending = nil
             DispatchQueue.main.async { [weak self] in self?.runQuickstart(q) }
         }
 
-        // Tab-Leiste: sichtbar ab dem ersten Fenster. Ein wiederhergestellter Tab, der beim Beenden
-        // in einer anderen Leiste stand, löst sich wieder heraus.
-        if let tab = restoredTab {
-            let anchor = Self.restoreAnchors[tab.group]?.view?.window
-            if anchor == nil { Self.restoreAnchors[tab.group] = Weak(self) }
-            WindowTabs.prepare(window, anchor: anchor)
-            if anchor == nil, tab.ownWindow {
-                DispatchQueue.main.async { [weak window] in
-                    guard let window, (window.tabGroup?.windows.count ?? 1) > 1 else { return }
-                    window.moveTabToNewWindow(nil)
-                }
-            }
-        } else {
-            WindowTabs.prepare(window, anchor: WindowTabs.frontmost(excluding: window))
-        }
-        // Tab (bzw. Fenster) zu: Kacheln aufräumen wie ⌘W — sonst lebten ihre Prozesse weiter.
+        // Fenster zu: Kacheln aller Bretter aufräumen wie ⌘W — sonst lebten ihre Prozesse weiter.
         if let windowCloseObserver { NotificationCenter.default.removeObserver(windowCloseObserver) }
         windowCloseObserver = NotificationCenter.default.addObserver(
             forName: NSWindow.willCloseNotification, object: window, queue: .main
@@ -494,6 +507,7 @@ final class TerminalSplitView: NSView {
     /// ⌘F-Suchleiste, flackert nicht), dann Fenstertitel und Titelleiste nachziehen.
     private func syncFocus() {
         for pane in panes { pane.container.hasFocus = isFocused(pane) }
+        if let focused = panes.first(where: { isFocused($0) }) { lastFocused = focused }
         updateWindowTitle()
         updateTitlebarHUD()
         updateTabBarContents()
@@ -501,7 +515,7 @@ final class TerminalSplitView: NSView {
 
     /// Fenstertitel = Titel der fokussierten Kachel; ohne Fokus in einer Kachel bleibt er stehen.
     private func updateWindowTitle() {
-        guard let window, let pane = panes.first(where: { isFocused($0) }) else { return }
+        guard isActiveBoard, let window, let pane = panes.first(where: { isFocused($0) }) else { return }
         let title = pane.title
         if window.title != title { window.title = title }
     }
@@ -627,7 +641,7 @@ final class TerminalSplitView: NSView {
         DispatchQueue.main.async { [weak self] in
             guard let self, self.panes.contains(where: { $0 === pane }) else { return }
             self.reveal(pane)
-            self.window?.makeFirstResponder(pane.focusTarget)
+            self.takeFocus(pane)
         }
     }
 
@@ -670,14 +684,17 @@ final class TerminalSplitView: NSView {
         layoutChanged()
         updateTitlebarHUD()
         pane.container.removeFromSuperview()
-        guard !panes.isEmpty else { window?.close(); return }
+        guard !panes.isEmpty else {
+            if let boardHost { boardHost.boardBecameEmpty(self) } else { window?.close() }
+            return
+        }
         updateFocusBorders()
         relayout(animated: true)
         guard hadFocus else { return }
         let successor = mates.max { (shownAt[$0.id.uuidString] ?? 0) < (shownAt[$1.id.uuidString] ?? 0) }
             ?? panes[min(idx, panes.count - 1)]
         let visible = frontOfPlace(of: successor) ?? successor
-        window?.makeFirstResponder(visible.focusTarget)
+        takeFocus(visible)
     }
 
     /// Rahmen-Regeln: Fokus-Abstufung nur im sichtbaren Grid (≥2 Kacheln, kein
@@ -708,7 +725,7 @@ final class TerminalSplitView: NSView {
         updateFocusBorders()
         updateTitlebarHUD()
         relayout(animated: true)
-        window?.makeFirstResponder(pane.focusTarget)
+        takeFocus(pane)
     }
 
     // MARK: - Titlebar-HUD (Session-Punkte + Zoom-Badge)
@@ -736,6 +753,8 @@ final class TerminalSplitView: NSView {
     /// Monospace-Ziffern); nur wenn sich Struktur oder Gesamtbreite ändern, wird das Accessory neu
     /// angelegt — wie früher bei jedem Zustandswechsel.
     private func updateTitlebarHUD() {
+        boardHost?.boardDidChange(self)
+        guard isActiveBoard else { removeTitlebarHUD(); return }
         guard let window else { return }
         let mode = CockpitSettings.shared.statusBadgeMode
         let showZoom = zoomedPane != nil
@@ -745,7 +764,7 @@ final class TerminalSplitView: NSView {
         // ausführlich nach knapp — die erste, die passt, gewinnt (Mats, 15.09.: „alle in voller
         // Größe, solange sie nicht links in Richtung Ampel volllaufen").
         let zoomWidth: CGFloat = showZoom ? 120 : 0
-        let available = window.frame.width - 92 - 24 - zoomWidth
+        let available = window.frame.width - 92 - 24 - zoomWidth - (boardHost?.stripWidth ?? 0)
         enum Level { case allLong, focusedLong, allShort, glyph }
         let levels: [Level] = [.allLong, .focusedLong, .allShort, .glyph]
         var specs: [(pane: any Pane, spec: PaneChipView.Spec)] = []
@@ -866,7 +885,7 @@ final class TerminalSplitView: NSView {
     // MARK: - Session-Status → Notification (#30)
 
     private func isObserved(_ pane: any Pane) -> Bool {
-        NSApp.isActive && window?.isKeyWindow == true && isFocused(pane)
+        NSApp.isActive && window?.isKeyWindow == true && isActiveBoard && isFocused(pane)
     }
 
     /// Hintergrundfenster behalten ihren First Responder. Erst das Key-Fenster zählt als
@@ -881,13 +900,14 @@ final class TerminalSplitView: NSView {
         guard let pane = panes.first(where: { $0.id == id }) else { return }
         NSApp.activate(ignoringOtherApps: true)
         window?.makeKeyAndOrderFront(nil)
+        boardHost?.activate(self)
         reveal(pane)
         if panes.count > 1 {
             setZoomedPane(pane)
             updateFocusBorders()
             relayout(animated: true)
         }
-        window?.makeFirstResponder(pane.focusTarget)
+        takeFocus(pane)
         updateTitlebarHUD()
     }
 
@@ -895,13 +915,14 @@ final class TerminalSplitView: NSView {
     /// Kachel gezoomt, WANDERT der Zoom zur angeklickten — die Punkte sind im
     /// Zoom der Session-Umschalter, ein Rückfall ins Grid wäre ein Bruch.
     private func focusPane(_ pane: any Pane) {
+        boardHost?.activate(self)
         reveal(pane)
         if let zoomed = zoomedPane, zoomed !== pane {
             setZoomedPane(pane)
             updateFocusBorders()
             relayout(animated: true)
         }
-        window?.makeFirstResponder(pane.focusTarget)
+        takeFocus(pane)
         updateTitlebarHUD()
     }
 
@@ -1162,7 +1183,7 @@ final class TerminalSplitView: NSView {
         guard let responder = window?.firstResponder as? NSView,
               let owner = panes.first(where: { responder.isDescendant(of: $0.container) }),
               owner.container.isHidden, let front = frontOfPlace(of: owner), front !== owner else { return }
-        window?.makeFirstResponder(front.focusTarget)
+        takeFocus(front)
     }
 
     // MARK: Trennlinien (Mats zieht)
@@ -1241,7 +1262,7 @@ final class TerminalSplitView: NSView {
 
     private func installCommandDrag() {
         commandDragMonitor = NSEvent.addLocalMonitorForEvents(matching: .leftMouseDown) { [weak self] event in
-            guard let self, let window = self.window, event.window === window,
+            guard let self, self.isActiveBoard, let window = self.window, event.window === window,
                   event.modifierFlags.intersection([.command, .shift, .option, .control]) == .command,
                   self.zoomedPane == nil, self.panes.count > 1, self.paneDrag == nil, self.dragOrigin == nil,
                   let pane = self.panes.first(where: { pane in
@@ -1418,7 +1439,7 @@ final class TerminalSplitView: NSView {
         markShown(pane)
         relayout(animated: true)
         layoutChanged()
-        window?.makeFirstResponder(pane.focusTarget)
+        takeFocus(pane)
     }
 
     /// Anzeige weg; ein laufender Zug endet ohne Wirkung (Kachel auf/zu, Abbruch, Ende).
@@ -1529,7 +1550,7 @@ extension TerminalSplitView: PaneHost {
 /// Pane-Verwaltung (`panes`, `toggleZoom`, …) privat bleiben kann. Der
 /// `ControlServer` ruft `handleControl` synchron auf dem Main-Thread.
 extension TerminalSplitView: ControlCommandHandler {
-    var isActiveControlWindow: Bool { window?.isKeyWindow == true }
+    var isActiveControlWindow: Bool { isFrontBoard }
     var controlPanes: [PaneInfo] { window == nil || windowClosed ? [] : displayPanes.map { info(for: $0) } }
 
     func layoutReport() -> LayoutReport? {
@@ -1686,7 +1707,7 @@ extension TerminalSplitView: ControlCommandHandler {
                         state: state, agent: identity?.agent,
                         sessionID: identity?.sessionID,
                         windowID: window.map { String($0.windowNumber) },
-                        tab: WindowTabs.position(of: window),
+                        tab: boardHost?.position(of: self),
                         kind: pane.kind,
                         title: String(pane.title.prefix(120)),
                         args: terminal == nil ? pane.snapshot()?.args : nil,

@@ -141,14 +141,16 @@ struct SessionRestoreTests {
         let a = SessionSnapshot.Window(panes: [PaneSnapshot(kind: "home")], tabGroup: 0)
         let b = SessionSnapshot.Window(panes: [PaneSnapshot(kind: "terminal")], tabGroup: 0)
         let c = SessionSnapshot.Window(panes: [PaneSnapshot(kind: "home")], tabGroup: 1)
-        var tabs = RestoreQueue([a, b, c])
-        check(tabs.count == 3, "queue counts plans")
-        check(tabs.claimTab()?.ownWindow == false, "first window is never moved")
-        check(tabs.claimTab()?.ownWindow == false, "same group → tab next to it")
-        check(tabs.claimTab()?.ownWindow == true, "new group → own window")
+        var boards = RestoreQueue([a, b, c])
+        check(boards.count == 3, "queue counts plans")
+        check(boards.claimGroup() == [a, b], "same group → boards of one window")
+        check(boards.claimGroup() == [c], "next group → next window")
+        check(boards.claimGroup().isEmpty && boards.isEmpty, "queue drained")
         var legacy = RestoreQueue([window, second])
-        check(legacy.claimTab()?.ownWindow == false && legacy.claimTab()?.ownWindow == false,
-              "old snapshots become tabs of one bar")
+        check(legacy.claimGroup().count == 2, "old snapshots become boards of one window")
+        let named = SessionSnapshot.Window(panes: [PaneSnapshot(kind: "home")], tabGroup: 0, name: "Studium")
+        check(try JSONDecoder().decode(SessionSnapshot.Window.self, from: JSONEncoder().encode(named)).name == "Studium",
+              "board name survives the round trip")
 
         // Neustart-Helfer: wartet auf das Prozessende, dann erst der Befehl.
         let sleeper = Process()

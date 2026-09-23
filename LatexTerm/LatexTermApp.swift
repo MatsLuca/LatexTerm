@@ -11,6 +11,11 @@ private let qlog = Logger(subsystem: "com.mats.LatexTerm", category: "quickstart
 /// - Dock-Menü (`applicationDockMenu`) bei laufender App — dieselbe Liste wie das Plugin.
 /// Die App kennt keine Pfade und keine Befehle; alles kommt aus `projekte` (`config.toml`).
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Bretter statt nativer Tabs (23.09.): kein „Tab-Leiste einblenden“/„Alle Fenster zusammenführen“.
+        NSWindow.allowsAutomaticWindowTabbing = false
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         WidgetRefresher.shared.start()   // Desktop-Widgets füttern (projekte widget), dann alle 5 min
         // macOS hängt ans App-Menü ein verstecktes „Quit and Keep Windows“ (⌥-Variante von „Beenden“) —
@@ -65,7 +70,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Stand aller Fenster sichern (Snapshot v2). Erst hier, nach dem Ja von `VMQuitGuard`: ein
     /// abgebrochenes Beenden hinterlässt so keine Wiederherstell-Marke.
     func applicationWillTerminate(_ notification: Notification) {
-        SessionStore.save(TerminalSplitView.sessionSnapshot(restoreOnce: keepPanes != nil))
+        SessionStore.save(BoardHostView.sessionSnapshot(restoreOnce: keepPanes != nil))
         guard keepPanes == .relaunch else { return }
         do { try AppRelaunch.reopen(Bundle.main.bundleURL) } catch {
             // Marke steht trotzdem: das nächste Öffnen von Hand stellt wieder her.
@@ -125,10 +130,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     /// „+“ in der Tab-Leiste (AppKit zeigt den Knopf, sobald die Aktion in der Responder-Kette steht).
-    @objc func newWindowForTab(_ sender: Any?) {
-        WindowTabs.open?()
-    }
-
     func applicationDockMenu(_ sender: NSApplication) -> NSMenu? {
         let menu = NSMenu()
         let items = QuickstartStore.shared.items
@@ -227,11 +228,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 @main
 struct LatexTermApp: App {
 
+    private func boardCommand(_ c: BoardCommand) {
+        NotificationCenter.default.post(name: .latexTermBoardCommand, object: c)
+    }
+
     private func paneCommand(_ c: PaneCommand) {
         NotificationCenter.default.post(name: .latexTermPaneCommand, object: nil, userInfo: ["command": c])
     }
 
-    /// Id der einen WindowGroup — `WindowTabs.open` öffnet darüber neue Tabs.
+    /// Id der einen WindowGroup — `BoardHostView.openWindow` öffnet darüber neue Fenster.
     static let windowGroupID = "main"
 
     init() { AppearanceMigration.run() }
@@ -323,10 +328,24 @@ struct LatexTermApp: App {
                 // darunter die App-Kacheln aus der Registry — eine neue Art erscheint hier ohne
                 // Menü-Code. Die Tasten fängt die Kachel-Hülle (PaneContainerView.performKeyEquivalent);
                 // das Menü ist Schaufenster + Mausweg.
-                // Neuer Tab = neues Fenster in der Tab-Leiste, beginnt mit Home. ⌘T bleibt Terminal
-                // (Mats, 22.09.); ⇧⌘T ist in Terminals sonst frei.
-                Button("Neuer Tab") { WindowTabs.open?() }
+                // Bretter (23.09.): eigene Leiste oben links statt nativer Tabs. ⌘T bleibt Terminal, ⌘W Kachel,
+                // ⌘1–9 Kachel n — Bretter bekommen ⇧⌘T/⇧⌘W, ⇧⌘[ ] und ⌃1–9; ⌃⇥/⌃⇧⇥ fängt die Kachel-Hülle.
+                Button("Neues Brett") { boardCommand(.new) }
                     .keyboardShortcut("t", modifiers: [.command, .shift])
+                Button("Brett schließen") { boardCommand(.close) }
+                    .keyboardShortcut("w", modifiers: [.command, .shift])
+                Button("Nächstes Brett") { boardCommand(.next) }
+                    .keyboardShortcut("]", modifiers: [.command, .shift])
+                Button("Voriges Brett") { boardCommand(.previous) }
+                    .keyboardShortcut("[", modifiers: [.command, .shift])
+                Menu("Brett wählen") {
+                    ForEach(1...9, id: \.self) { n in
+                        Button("Brett \(n)") { boardCommand(.select(n)) }
+                            .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .control)
+                    }
+                }
+                Button("Neues Fenster") { boardCommand(.newWindow) }
+                    .keyboardShortcut("n", modifiers: [.command, .option])
                 Divider()
                 Button("Neue Home-Kachel") {
                     NotificationCenter.default.post(name: .latexTermNewHomePane, object: nil)
