@@ -34,7 +34,8 @@ struct LayoutNode: Codable, Equatable {
     var children: [LayoutNode]
     /// Anteil im Elternknoten, relativ zu den Geschwistern (nur das Verhältnis zählt).
     var weight: Double
-    /// Teilung: wer die Anteile der Kinder zuletzt gesetzt hat; nil = Automatik.
+    /// Teilung: wer die Anteile der Kinder zuletzt gesetzt hat; Platz mit Reitern: wer ihn zusammengestellt hat
+    /// (Mats per Ziehen). nil = Automatik.
     var setBy: LayoutActor?
 
     init(pane: String?, axis: LayoutAxis?, children: [LayoutNode], weight: Double, setBy: LayoutActor?) {
@@ -49,12 +50,12 @@ struct LayoutNode: Codable, Equatable {
         LayoutNode(pane: id.uppercased(), axis: nil, children: [], weight: weight, setBy: nil)
     }
 
-    /// Platz mit Reitern; `front` = die sichtbare (Default: die erste). Eine Kachel = normales Blatt.
-    static func group(_ ids: [String], front: String? = nil, weight: Double = 1) -> LayoutNode {
+    /// Platz mit Reitern; `front` = die sichtbare (Default: die erste). Eine Kachel = normales Blatt (ohne `setBy`).
+    static func group(_ ids: [String], front: String? = nil, weight: Double = 1, setBy: LayoutActor? = nil) -> LayoutNode {
         let members = ids.map { $0.uppercased() }
         let shown = front.map { $0.uppercased() }.flatMap { members.contains($0) ? $0 : nil } ?? members.first ?? ""
         var node = LayoutNode.leaf(shown, weight: weight)
-        if members.count > 1 { node.tabs = members }
+        if members.count > 1 { node.tabs = members; node.setBy = setBy }
         return node
     }
     static func split(_ axis: LayoutAxis, _ children: [LayoutNode], weight: Double = 1,
@@ -126,9 +127,7 @@ struct LayoutNode: Codable, Equatable {
         if let pane {
             let mapped = members.compactMap { transform($0)?.uppercased() }
             guard !mapped.isEmpty else { return nil }
-            var copy = LayoutNode.group(mapped, front: transform(pane), weight: weight)
-            copy.setBy = setBy
-            return copy
+            return LayoutNode.group(mapped, front: transform(pane), weight: weight, setBy: setBy)
         }
         var copy = self
         copy.children = children.compactMap { $0.mappingPanes(transform) }
@@ -161,7 +160,7 @@ struct LayoutNode: Codable, Equatable {
             let shown = kept.contains(front) ? front
                 : (all.firstIndex(of: front).flatMap { i in all[(i + 1)...].first(where: kept.contains) ?? all[..<i].last(where: kept.contains) }
                    ?? kept[0])
-            return .group(kept, front: shown, weight: w)
+            return .group(kept, front: shown, weight: w, setBy: setBy)
         }
         let axis = self.axis ?? .row
         // Gleich gerichtete Teilungen werden bewusst NICHT verschmolzen: eine Teilung in einer Teilung

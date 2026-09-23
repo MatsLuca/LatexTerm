@@ -46,6 +46,8 @@ final class TerminalSplitView: NSView {
     private var shownClock = 0
     /// Laufender Zug an einer Trennlinie: Ausgangsbaum und Linie.
     private var dragOrigin: (tree: LayoutNode, divider: LayoutDivider)?
+    /// Laufender Zug einer Kachel (am Reiter oder Titelleisten-Chip): welche, und die Anzeige des Ziels.
+    private var paneDrag: (pane: String, overlay: PaneDropOverlayView)?
     /// Stand-Nummer der Anordnung (`LayoutReport.revision`): wächst mit jeder Änderung. Agenten müssen
     /// die zuletzt gelesene mitschicken, um umzuordnen — so ordnet keiner auf einem veralteten Bild um.
     private var layoutRevision = 0
@@ -79,6 +81,10 @@ final class TerminalSplitView: NSView {
     private static let dragMinimum: Double = 120
     /// Höhe der Reiterleiste über einem Platz mit mehreren Kacheln (pt, inkl. Luft zur Kachel).
     private static let tabBarHeight: CGFloat = 30
+    /// Kachel ziehen: so nah am Fensterrand (pt) zählt der Rand statt der Kachel darunter.
+    private static let windowDropBand: CGFloat = 14
+    /// Kachel ziehen: kleiner als das darf durch einen Wurf keine Kachel werden (Breite, Höhe in pt).
+    private static let dropMinimum = CGSize(width: 120, height: 90)
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -566,6 +572,7 @@ final class TerminalSplitView: NSView {
         // Standard: von Hand geöffnet. Steuerkanal (Agent) und Restore setzen es danach selbst.
         pane.openedBy = PaneOpener.user
         cancelDividerDrag()
+        cancelPaneDrag()
         let focused = panes.first(where: { isFocused($0) })
         setZoomedPane(nil)
         panes.append(pane)
@@ -626,6 +633,7 @@ final class TerminalSplitView: NSView {
         // sich — Zoom beenden, damit der Nutzer den neuen Zustand sieht.
         setZoomedPane(nil)
         cancelDividerDrag()
+        cancelPaneDrag()
         panes.remove(at: idx)
         shownAt[pane.id.uuidString] = nil
         // Layout: ihr Platz fällt an ihre Nachbarn im Block; ihre Begleiter werden eigenständig.
@@ -763,6 +771,10 @@ final class TerminalSplitView: NSView {
             let chip = PaneChipView { [weak self, weak pane] in
                 guard let self, let pane else { return }
                 self.focusPane(pane)
+            }
+            chip.onDrag = { [weak self, weak pane] event in
+                guard let self, let pane else { return false }
+                return self.dragPane(pane.id.uuidString, with: event)
             }
             chip.apply(spec)
             hudChips[pane.id] = chip
@@ -961,6 +973,7 @@ final class TerminalSplitView: NSView {
                 guard let self, let pane = self.panes.first(where: { $0.id.uuidString == id }) else { return }
                 self.closePane(pane)
             }
+            view.onDrag = { [weak self] id, event in self?.dragPane(id, with: event) }
             addSubview(view)
             tabBarViews.append(view)
         }
@@ -1171,14 +1184,179 @@ final class TerminalSplitView: NSView {
         layoutChanged()
     }
 
+    // MARK: Kachel ziehen (Mats, Stufe 2 Scheibe B)
+
+    /// Kachel am Reiter oder Titelleisten-Chip gezogen: bis zum Loslassen zeigt die Anzeige, wo sie landen
+    /// würde; beim Loslassen wird genau das umgesetzt, Esc bricht ab. Der Zug läuft als eigene
+    /// Ereignisschleife (`trackEvents`) und kehrt erst danach zurück — so hängt er nicht an der Quelle
+    /// (Chips werden bei jeder Statusänderung neu aufgebaut, Reiterleisten beim Umordnen). Gerechnet wird bei
+    /// jedem Schritt auf dem aktuellen Baum: ändert ein Agent oder die Automatik etwas, folgt die Anzeige;
+    /// kommt eine Kachel dazu oder geht eine, endet der Zug ohne Wirkung. false = nichts zu ziehen.
+    @discardableResult
+    private func dragPane(_ id: String, with event: NSEvent) -> Bool {
+        guard let window, paneDrag == nil, dragOrigin == nil, zoomedPane == nil, panes.count > 1,
+              let pane = panes.first(where: { $0.id.uuidString == id }) else { return false }
+        let overlay = PaneDropOverlayView(frame: bounds)
+        overlay.title = pane.tabTitle
+        overlay.accent = pane.effectiveAccent
+        addSubview(overlay)
+        paneDrag = (id, overlay)
+        let members = Set(panes.map { $0.id.uuidString })
+        NSCursor.closedHand.push()
+        window.disableCursorRects()
+        defer {
+            window.enableCursorRects()
+            NSCursor.pop()
+        }
+
+        // Position über den Bildschirm umrechnen: im Vollbild liegen die Chips in einem eigenen Titelleisten-Fenster,
+        // dessen `locationInWindow` nichts mit diesem Fenster zu tun hat.
+        func location(_ event: NSEvent) -> NSPoint {
+            let screen = event.window.map { $0.convertPoint(toScreen: event.locationInWindow) } ?? NSEvent.mouseLocation
+            return window.convertPoint(fromScreen: screen)
+        }
+        var drop: LayoutNode?
+        var dropRevision = 0
+        updatePaneDrag(at: location(event))
+        window.trackEvents(matching: [.leftMouseDragged, .leftMouseUp, .rightMouseDown, .keyDown, .appKitDefined],
+                           timeout: NSEvent.foreverDuration, mode: .eventTracking) { [weak self] event, stop in
+            // Kachel auf/zu (cancelPaneDrag) oder Zoom (Benachrichtigung, Steuerkanal) beendet den Zug ohne Wirkung.
+            guard let self, let event, self.paneDrag?.pane == id, self.zoomedPane == nil,
+                  Set(self.panes.map { $0.id.uuidString }) == members else { stop.pointee = true; return }
+            switch event.type {
+            case .leftMouseDragged:
+                self.updatePaneDrag(at: location(event))
+            case .leftMouseUp:
+                drop = self.updatePaneDrag(at: location(event))
+                dropRevision = self.layoutRevision
+                stop.pointee = true
+            case .keyDown where event.keyCode == 53:   // Esc
+                stop.pointee = true
+            case .rightMouseDown:
+                stop.pointee = true
+            case .appKitDefined where event.subtype == .applicationDeactivated:
+                stop.pointee = true
+            default:
+                break
+            }
+        }
+        let valid = paneDrag?.pane == id && zoomedPane == nil && Set(panes.map { $0.id.uuidString }) == members
+        cancelPaneDrag()
+        guard valid, let drop else { return true }
+        // Nach dem Rücksprung aus dem Maus-Handler der Quelle umbauen: die Quelle (Chip, Reiterleiste) darf
+        // dabei verschwinden, ohne dass ihr eigener Aufruf noch auf ihr läuft.
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.panes.contains(where: { $0 === pane }), self.zoomedPane == nil,
+                  self.layoutRevision == dropRevision,
+                  Set(self.panes.map { $0.id.uuidString }) == members else { return }
+            self.applyPaneDrop(pane, result: drop)
+        }
+        return true
+    }
+
+    /// Ziel unter der Maus bestimmen und anzeigen; liefert das Ergebnis, das ein Loslassen hier hätte (nil = keins).
+    @discardableResult
+    private func updatePaneDrag(at locationInWindow: NSPoint) -> LayoutNode? {
+        guard let drag = paneDrag, let tree = effectiveLayout() else { return nil }
+        let overlay = drag.overlay
+        if overlay.frame != bounds { overlay.frame = bounds }
+        // Neue Reiterleisten/Stege (Agent ordnet während des Zugs um) kämen sonst darüber.
+        if subviews.last !== overlay { addSubview(overlay, positioned: .above, relativeTo: nil) }
+        let point = convert(locationInWindow, from: nil)
+        overlay.cursor = point
+        let current = LayoutGeometry.layout(tree, in: bounds, gap: Self.gap, tabBarHeight: Self.tabBarHeight)
+        overlay.source = current.slots.first { $0.pane == drag.pane && !$0.hidden }?.frame
+        overlay.caret = nil
+        overlay.preview = nil
+        overlay.note = nil
+
+        guard let target = dropTarget(at: point, in: current) else { return nil }
+        if case .tabBar(let front, let index) = target,
+           let (view, _) = zip(tabBarViews, currentTabBars).first(where: { $0.1.front == front }),
+           let caret = view.insertionCaret(for: index) {
+            overlay.caret = convert(caret, from: view)
+        }
+        guard let result = LayoutEdit.moved(drag.pane, to: target, in: tree, actor: .mats) else {
+            overlay.caret = nil
+            return nil
+        }
+        let next = LayoutGeometry.layout(result, in: bounds, gap: Self.gap, tabBarHeight: Self.tabBarHeight)
+        // Sieht danach alles gleich aus (z. B. A links neben B, wo A schon steht), ist es kein Wurf — sonst würde
+        // die Anordnung ohne sichtbaren Grund angepasst, ✋ und neue Stand-Nummer.
+        let byPane: ([LayoutSlot]) -> [LayoutSlot] = { $0.sorted { $0.pane < $1.pane } }
+        if byPane(next.slots) == byPane(current.slots), next.tabBars == current.tabBars {
+            overlay.caret = nil
+            return nil
+        }
+        guard fitsAfterDrop(before: current.slots, after: next.slots, moved: drag.pane),
+              let landing = next.slots.first(where: { $0.pane == drag.pane }) else {
+            overlay.caret = nil
+            overlay.note = "zu eng"
+            return nil
+        }
+        // Landet sie als Reiter, gehört die Leiste zum Platz dazu.
+        let bar = next.tabBars.first { $0.tabs.contains(drag.pane) }?.rect
+        overlay.preview = bar.map { landing.frame.union($0) } ?? landing.frame
+        return result
+    }
+
+    /// Ziel unter `point`: eine Reiterleiste (Einfügestelle), der Fensterrand, sonst eine Seite oder die Mitte
+    /// des Platzes darunter (Anteil ohne Steg — auch der Spalt gehört so zu einem Nachbarn).
+    private func dropTarget(at point: NSPoint, in current: (slots: [LayoutSlot], dividers: [LayoutDivider], tabBars: [LayoutTabBar]))
+        -> LayoutDropTarget? {
+        guard bounds.contains(point) else { return nil }
+        for (view, bar) in zip(tabBarViews, currentTabBars) where !view.isHidden && bar.rect.contains(point) {
+            return .tabBar(bar.front, index: view.insertionIndex(at: view.convert(point, from: self)))
+        }
+        if let edge = LayoutDrop.windowZone(at: point, in: bounds, band: Self.windowDropBand) { return .window(edge) }
+        guard let slot = current.slots.first(where: { !$0.hidden && $0.rect.contains(point) }),
+              let zone = LayoutDrop.zone(at: point, in: slot.rect) else { return nil }
+        return .place(slot.pane, zone)
+    }
+
+    /// Kein Wurf darf eine Kachel unbrauchbar klein machen: die gezogene nicht und keine, die dabei schrumpft.
+    /// (Was schon vorher so klein war und nicht kleiner wird, bleibt erlaubt.)
+    private func fitsAfterDrop(before: [LayoutSlot], after: [LayoutSlot], moved: String) -> Bool {
+        let old = Dictionary(before.map { ($0.pane, $0.frame.size) }, uniquingKeysWith: { a, _ in a })
+        let min = Self.dropMinimum
+        for slot in after where !slot.hidden || slot.pane == moved {
+            let size = slot.frame.size
+            let was = slot.pane == moved ? nil : old[slot.pane]
+            if size.width < min.width, size.width < (was?.width ?? .infinity) - 0.5 { return false }
+            if size.height < min.height, size.height < (was?.height ?? .infinity) - 0.5 { return false }
+        }
+        return true
+    }
+
+    /// Wurf umsetzen: Anordnung gilt als angepasst (die neue Teilung ✋), die Kachel liegt vorn und hat den Fokus.
+    private func applyPaneDrop(_ pane: any Pane, result: LayoutNode) {
+        guard let root = effectiveLayout(), Set(result.paneIDs) == Set(root.paneIDs) else { return }
+        manualLayout = result
+        markShown(pane)
+        relayout(animated: true)
+        layoutChanged()
+        window?.makeFirstResponder(pane.focusTarget)
+    }
+
+    /// Anzeige weg; ein laufender Zug endet ohne Wirkung (Kachel auf/zu, Abbruch, Ende).
+    private func cancelPaneDrag() {
+        guard let drag = paneDrag else { return }
+        paneDrag = nil
+        drag.overlay.removeFromSuperview()
+    }
+
     /// „Kachel 2 (preview)“ — Index in Lesereihenfolge.
     private func layoutName(_ pane: any Pane) -> String {
         let index = (displayPanes.firstIndex { $0 === pane } ?? 0) + 1
         return "Kachel \(index) (\(pane.kind))"
     }
 
-    /// Neue Stand-Nummer: jedes Lagebild, das ein Agent vorher gelesen hat, ist damit veraltet.
-    private func layoutChanged() { layoutRevision += 1 }
+    /// Neue Stand-Nummer: jedes Lagebild, das ein Agent vorher gelesen hat, ist damit veraltet. Die Chips in der
+    /// Titelleiste folgen der Lesereihenfolge — nach jeder Änderung der Anordnung nachziehen.
+    private func layoutChanged() {
+        layoutRevision += 1
+        updateTitlebarHUD()
+    }
 
     /// Menü „Automatisch anordnen“ / Agent mit Auftrag: Anordnung zurück an die Automatik.
     fileprivate func rearrangeAutomatically() {
@@ -1530,7 +1708,8 @@ extension TerminalSplitView: ControlCommandHandler {
 /// Punkt in Kachelfarbe (fokussiert = voll + heller Ring; pulsiert bei Arbeit, schneller bei
 /// „braucht dich") und daneben der Statustext in der Tonfarbe. Ohne Text nur der Punkt (18 px
 /// Klickfläche wie früher). Klick fokussiert die Kachel. `apply` aktualisiert in place — die Uhr
-/// tickt so ohne Neuaufbau.
+/// tickt so ohne Neuaufbau. Ziehen verschiebt die Kachel (Kachel-Layout Scheibe B): ab ein paar Punkten Weg
+/// übernimmt die Split-View; der Klick zählt deshalb erst beim Loslassen.
 private final class PaneChipView: NSView {
     struct Spec: Equatable {
         var color: NSColor
@@ -1554,6 +1733,13 @@ private final class PaneChipView: NSView {
     }
 
     private let onClick: () -> Void
+    /// Zug beginnt: true = die Split-View hat ihn geführt (kehrt erst nach dem Loslassen zurück),
+    /// false = hier gibt es nichts zu ziehen (Zoom, eine Kachel) — dann bleibt es ein Klick.
+    var onDrag: ((NSEvent) -> Bool)?
+    /// Wo gedrückt wurde (Fensterkoordinaten); nil = kein Klick offen.
+    private var pressedAt: NSPoint?
+    private var dragRefused = false
+    private static let dragThreshold: CGFloat = 4
     private let circle = CALayer()
     private let label = NSTextField(labelWithString: "")
     private var spec: Spec?
@@ -1577,7 +1763,33 @@ private final class PaneChipView: NSView {
 
     required init?(coder: NSCoder) { fatalError() }
 
-    override func mouseDown(with event: NSEvent) { onClick() }
+    override func mouseDown(with event: NSEvent) {
+        pressedAt = event.locationInWindow
+        dragRefused = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard let start = pressedAt, !dragRefused else { return }
+        let point = event.locationInWindow
+        guard hypot(point.x - start.x, point.y - start.y) >= Self.dragThreshold else { return }
+        // Chips werden bei Statuswechseln neu aufgebaut — während des Zugs am Leben halten.
+        let led = withExtendedLifetime(self) { onDrag?(event) == true }
+        if led { pressedAt = nil } else { dragRefused = true }
+    }
+
+    /// Klick = Loslassen über dem Chip ohne geführten Zug. Wurde die Leiste zwischendurch neu gebaut (Status-
+    /// wechsel), hängt der Chip an keinem Fenster mehr — der Klick zählt trotzdem.
+    override func mouseUp(with event: NSEvent) {
+        defer { pressedAt = nil; dragRefused = false }
+        guard pressedAt != nil, window == nil || bounds.contains(convert(event.locationInWindow, from: nil)) else { return }
+        onClick()
+    }
+
+    /// Der ganze Chip ist Ziel — auch über dem Text. Sonst nähme die Titelleiste einen Zug, der auf dem Label
+    /// beginnt, als Fenster-Verschieben.
+    override func hitTest(_ point: NSPoint) -> NSView? {
+        frame.contains(point) ? self : nil
+    }
 
     func apply(_ spec: Spec) {
         guard spec != self.spec else { return }

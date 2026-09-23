@@ -3,6 +3,7 @@ import AppKit
 /// Reiterleiste eines Platzes mit mehreren Kacheln (Kachel-Layout Stufe 2, 23.09.2026). Liegt oben im
 /// Platz über der vorderen Kachel, zeichnet die Reiter selbst (keine Subviews, kein Layout-Zustand)
 /// und meldet Klicks an die Split-View: Reiter = nach vorn holen und fokussieren, × = Kachel schließen.
+/// Ein Reiter lässt sich wegziehen (Scheibe B): ab ein paar Punkten Weg übernimmt die Split-View den Zug.
 /// Welche Kacheln hier liegen und welche vorn ist, kommt aus dem Layout-Baum (`LayoutTabBar`).
 final class PaneTabBarView: NSView, NSViewToolTipOwner {
     struct Tab: Equatable {
@@ -21,6 +22,9 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
     }
     var onSelect: ((String) -> Void)?
     var onClose: ((String) -> Void)?
+    /// Reiter wird gezogen: die Split-View führt den Zug bis zum Loslassen selbst (eigene Ereignisschleife)
+    /// und kehrt erst danach zurück.
+    var onDrag: ((String, NSEvent) -> Void)?
 
     private static let font = AppFonts.mono(size: 11, weight: .semibold)
     private static let tabHeight: CGFloat = 22
@@ -33,6 +37,9 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
     private var hovered: Int? { didSet { if hovered != oldValue { needsDisplay = true } } }
     private var hoveredClose = false { didSet { if hoveredClose != oldValue { needsDisplay = true } } }
     private var pressed: (index: Int, onClose: Bool)?
+    /// Wo gedrückt wurde (eigene Koordinaten) — ab `dragThreshold` Weg ist es ein Zug.
+    private var pressedAt: NSPoint?
+    private static let dragThreshold: CGFloat = 4
     private var trackingArea: NSTrackingArea?
     private var themeObserver: NSObjectProtocol?
 
@@ -70,6 +77,24 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
         return tabs.indices.map { i in
             NSRect(x: CGFloat(i) * (width + Self.spacing), y: y, width: width, height: min(Self.tabHeight, bounds.height))
         }
+    }
+
+    /// Einfügestelle für einen gezogenen Reiter bei `point` (0 … Anzahl): vor dem ersten Reiter, dessen Mitte
+    /// rechts davon liegt.
+    func insertionIndex(at point: NSPoint) -> Int {
+        let rects = tabRects()
+        return rects.firstIndex { point.x < $0.midX } ?? rects.count
+    }
+
+    /// Einfügemarke (schmaler Balken, eigene Koordinaten) vor Reiter `index`, bzw. hinter dem letzten.
+    func insertionCaret(for index: Int) -> NSRect? {
+        let rects = tabRects()
+        guard let first = rects.first else { return nil }
+        let x: CGFloat
+        if index <= 0 { x = first.minX + 1 }
+        else if index >= rects.count { x = min(bounds.maxX - 2, rects[rects.count - 1].maxX + Self.spacing / 2) }
+        else { x = rects[index].minX - Self.spacing / 2 }
+        return NSRect(x: x - 1.5, y: first.minY - 2, width: 3, height: first.height + 4)
     }
 
     private func closeRect(in tab: NSRect) -> NSRect {
@@ -167,11 +192,27 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
 
     /// Ausgelöst wird beim Loslassen über demselben Ziel — wie bei Knöpfen; Wegziehen bricht ab.
     override func mouseDown(with event: NSEvent) {
-        pressed = hit(convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        pressed = hit(point)
+        pressedAt = point
+    }
+
+    /// Reiter (nicht ×) ein Stück gezogen → Zug an die Split-View. Danach kommt kein mouseUp mehr hier an.
+    override func mouseDragged(with event: NSEvent) {
+        guard let pressed, !pressed.onClose, let start = pressedAt, tabs.indices.contains(pressed.index) else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard hypot(point.x - start.x, point.y - start.y) >= Self.dragThreshold else { return }
+        let id = tabs[pressed.index].id
+        self.pressed = nil
+        pressedAt = nil
+        // Die Leiste kann während des Zugs aus der Ansicht fallen (Umordnen) — solange am Leben halten.
+        withExtendedLifetime(self) { onDrag?(id, event) }
+        hovered = nil
+        hoveredClose = false
     }
 
     override func mouseUp(with event: NSEvent) {
-        defer { pressed = nil }
+        defer { pressed = nil; pressedAt = nil }
         guard let pressed, let now = hit(convert(event.locationInWindow, from: nil)),
               now.index == pressed.index, now.onClose == pressed.onClose, tabs.indices.contains(now.index) else { return }
         let id = tabs[now.index].id

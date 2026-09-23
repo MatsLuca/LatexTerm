@@ -61,6 +61,26 @@ Aufbau: eine Claude-Kachel links, sonst nichts. Plan: claude-werkstatt `plans/ka
 | L12 | Agent: `layout gross` auf eigene Vorschau; danach auf ✋-Teilung; auf fremde Kachel | groß / abgelehnt mit Grund / abgelehnt ohne `auf_auftrag` | C |
 | L13 | Mats zieht, dann Agent `layout` mit altem Stand | abgelehnt, aktueller Stand kommt mit; zweiter Versuch geht | C |
 
+### Kachel ziehen (Stufe 2, Scheibe B)
+
+Aufbau: Claude + drei Begleiter + eine zweite Terminal-Kachel (⌘T), dazu ein Reiter-Platz (vierter Begleiter).
+
+| # | Aktion | Erwartet | Wer |
+|---|---|---|---|
+| Z1 | Chip in der Titelleiste kurz anklicken | fokussiert wie bisher (erst beim Loslassen), nichts wird gezogen | A |
+| Z2 | Chip einer Kachel ziehen, über eine andere Kachel fahren | Hand-Cursor, Quelle abgeblendet, Schildchen mit Titel; Rand links/rechts/oben/unten = diese Hälfte leuchtet, Mitte = ganzer Platz (als Reiter) | A |
+| Z3 | loslassen auf Z2-Hälfte | Kachel steht genau dort, hat den Fokus, Terminal-Text springt einmal (kein Treppen-Reflow) | A |
+| Z4 | loslassen in der Mitte einer Kachel | beide werden Reiter eines Platzes, die gezogene vorn | A |
+| Z5 | Reiter aus einer Leiste ziehen, auf die eigene Kachel darunter an den Rand | Reiter löst sich neben/unter die übrigen Reiter | A |
+| Z6 | Reiter innerhalb der Leiste ziehen | Einfügemarke zwischen den Reitern, Loslassen sortiert um | A |
+| Z7 | Kachel ganz an den Fensterrand ziehen (≤ 14 pt) | Vorschau über die ganze Höhe/Breite (⅓), Loslassen setzt sie dort hin | A |
+| Z8 | Ziehen und Esc drücken / außerhalb des Fensters loslassen / auf sich selbst loslassen | nichts ändert sich, keine neue Stand-Nummer | A |
+| Z9 | Kachel auf eine schon schmale Kachel werfen | Schildchen „zu eng“, Loslassen ändert nichts | A |
+| Z10 | ⌘⏎ Zoom, dann Chip ziehen | kein Zug; Loslassen über dem Chip wechselt den Zoom wie ein Klick | A |
+| Z11 | während des Ziehens öffnet/schließt ein Agent eine Kachel | Zug endet ohne Wirkung, Anzeige verschwindet | C |
+| Z12 | nach Z3/Z4: Agent `panes`, dann `layout automatisch` bzw. Kachel aus Mats' Reitern lösen | ✋ an der neuen Teilung / an den Reitern; beides abgelehnt ohne `auf_auftrag` | C |
+| Z13 | ⌥⌘R nach Z3–Z6 | gleiche Anordnung, Reiter samt Reihenfolge und vorderem | A |
+
 ## Steuerkanal
 
 | # | Befehl | Erwartet | Wer |

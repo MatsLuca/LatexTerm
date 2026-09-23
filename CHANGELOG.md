@@ -16,6 +16,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (including dragged sizes) survives ⌥⌘R. Agents see the current arrangement in `panes` and can rearrange their own
   panes with the MCP tool `layout` — only on the arrangement they last read, and never your hand-set sizes unless you
   ask.
+- **Tabs in a place and dragging panes (23.09.).** From the fourth side pane on, panes share the last place of the side
+  column as tabs (a slim tab bar on top, the last shown in front; ⌘1–9 jumps to pane n and brings a hidden tab
+  forward). Drag a pane by its tab or by its chip in the title bar: while dragging, the spot where it will land is
+  highlighted exactly — a side of another pane (halves it), its middle (join as a tab), a position in a tab bar
+  (reorder or join), or the window edge (full height/width). Esc cancels; a drop that would make a pane too small is
+  refused. What you arrange by hand is marked ✋ for agents and stays until you ask for something else.
 
 ### Fixed
 - **Einzeilige `$$…$$`-Formel winzig (23.09., README-Dreh).** KaTeX' Display-Rand (1em oben/unten) zählte beim Einpassen mit; ohne leere Nachbarzeilen schrumpfte die Formel auf ~40 %. Der Rand ist im Overlay jetzt 0 (die Box zentriert selbst) — dieselbe Formel passt mit ~90 % in eine Zeile.

@@ -456,11 +456,12 @@ enum LayoutEdit {
                     if !ids.isEmpty, ids.allSatisfy(companions.contains) {
                         let grown: LayoutNode
                         if sibling.axis == .column, sibling.children.count >= AutoLayout.maxCompanionPlaces,
-                           let last = sibling.children.last, last.isLeaf {
-                            // Spalte voll: als Reiter auf den letzten Platz (wie die Automatik).
+                           let last = sibling.children.last, last.isLeaf, last.setBy != .mats {
+                            // Spalte voll: als Reiter auf den letzten Platz (wie die Automatik) — nicht in Reiter, die Mats
+                            // von Hand zusammengestellt hat; dann bekommt die Neue einen eigenen Platz darunter.
                             var column = sibling
                             column.children[column.children.count - 1] = .group(last.members + [id], front: last.pane,
-                                                                               weight: last.weight)
+                                                                               weight: last.weight, setBy: last.setBy)
                             grown = column
                         } else if sibling.axis == .column {
                             var column = sibling
@@ -509,7 +510,7 @@ enum LayoutEdit {
             let rest = place.members.filter { $0 != id }
             let front = place.pane != id ? place.pane
                 : place.members.firstIndex(of: id).flatMap { i in place.members[(i + 1)...].first ?? place.members[..<i].last }
-            return replacing(at: target, in: root, with: .group(rest, front: front, weight: place.weight))
+            return replacing(at: target, in: root, with: .group(rest, front: front, weight: place.weight, setBy: place.setBy))
         }
         guard let last = target.last else { return nil }
         let parentPath = Array(target.dropLast())
@@ -590,8 +591,16 @@ extension LayoutEdit {
         }
         func guardMats(_ split: LayoutNode) throws {
             if split.setBy == .mats, !overrideMats {
-                throw LayoutRefusal("Diese Aufteilung hat Mats von Hand gesetzt — sie bleibt, bis er etwas anderes sagt (dann auf_auftrag: true).")
+                throw LayoutRefusal(split.isGroup
+                    ? "Diese Reiter hat Mats von Hand zusammengestellt — sie bleiben, bis er etwas anderes sagt (dann auf_auftrag: true)."
+                    : "Diese Aufteilung hat Mats von Hand gesetzt — sie bleibt, bis er etwas anderes sagt (dann auf_auftrag: true).")
             }
+        }
+        /// Kachel verlässt ihren Platz: aus Mats' Reitern oder aus seiner Teilung nur auf Auftrag.
+        func guardLeaving(_ path: [Int]) throws {
+            let place = node(at: path, in: root)
+            if place.isGroup { try guardMats(place) }
+            else if path.last != nil { try guardMats(node(at: Array(path.dropLast()), in: root)) }
         }
         /// Anteil des Kindes `index` auf `share` setzen, die Geschwister behalten ihr Verhältnis.
         func setShare(_ split: inout LayoutNode, _ index: Int, _ share: Double) {
@@ -637,7 +646,7 @@ extension LayoutEdit {
             guard idA != idB else { throw LayoutRefusal("Zweimal dieselbe Kachel.") }
             _ = try locate(idA)
             let pathB = try locate(idB)
-            if !node(at: pathB, in: root).isGroup, pathB.last != nil { try guardMats(node(at: Array(pathB.dropLast()), in: root)) }
+            try guardLeaving(pathB)
             guard let without = remove(idB, from: root), let pathA = path(of: idA, in: without) else { return root }
             var leafA = node(at: pathA, in: without)
             let weight = leafA.weight
@@ -649,9 +658,14 @@ extension LayoutEdit {
 
         case .swap(let a, let b):
             let idA = a.uppercased(), idB = b.uppercased()
-            _ = try locate(idA)
-            _ = try locate(idB)
+            let pathA = try locate(idA)
+            let pathB = try locate(idB)
             guard idA != idB else { throw LayoutRefusal("Zweimal dieselbe Kachel.") }
+            // Tauschen ändert keine Anteile, wohl aber, wer in Mats' Reitern liegt (innerhalb eines Platzes: nur Reihenfolge).
+            if pathA != pathB {
+                if node(at: pathA, in: root).isGroup { try guardMats(node(at: pathA, in: root)) }
+                if node(at: pathB, in: root).isGroup { try guardMats(node(at: pathB, in: root)) }
+            }
             // Plätze tauschen, auch zwischen Reitern: überall A ↔ B.
             return root.mappingPanes { $0 == idA ? idB : $0 == idB ? idA : $0 } ?? root
 
@@ -661,12 +675,133 @@ extension LayoutEdit {
             let pathA = try locate(idA)
             let pathB = try locate(idB)
             if pathA == pathB { return root }   // schon Reiter an diesem Platz
-            if !node(at: pathA, in: root).isGroup, pathA.last != nil { try guardMats(node(at: Array(pathA.dropLast()), in: root)) }
+            try guardLeaving(pathA)
+            try guardMats(node(at: pathB, in: root))   // zu Mats' Reitern nur auf Auftrag
             guard let without = remove(idA, from: root), let target = path(of: idB, in: without) else { return root }
             let place = node(at: target, in: without)
             let result = replacing(at: target, in: without,
-                                   with: .group(place.members + [idA], front: place.pane, weight: place.weight))
+                                   with: .group(place.members + [idA], front: place.pane, weight: place.weight, setBy: place.setBy))
             return result.normalized() ?? result
         }
+    }
+}
+
+// MARK: - Kachel ziehen (Mats, Stufe 2 Scheibe B)
+
+/// Wohin eine gezogene Kachel fällt: an eine Seite eines Platzes bzw. des Fensters, oder als Reiter in die Mitte.
+enum LayoutDropZone: String, Equatable {
+    case left, right, top, bottom, center
+
+    /// Teilungsrichtung, die an dieser Seite entsteht; `center` teilt nicht.
+    var axis: LayoutAxis? {
+        switch self {
+        case .left, .right: return .row
+        case .top, .bottom: return .column
+        case .center: return nil
+        }
+    }
+
+    /// Die gezogene Kachel kommt vor (links/oben) das Ziel.
+    var leading: Bool { self == .left || self == .top }
+}
+
+/// Ziel eines Kachel-Zugs. Plätze werden über eine ihrer Kacheln benannt (bei Reitern: irgendeine).
+enum LayoutDropTarget: Equatable {
+    /// An eine Seite des Platzes dieser Kachel (halbiert ihn) oder als Reiter in ihn (`center`).
+    case place(String, LayoutDropZone)
+    /// In die Reiterleiste dieses Platzes, vor den Reiter an Position `index` (Anzahl = ans Ende).
+    case tabBar(String, index: Int)
+    /// An den Fensterrand: über die ganze Höhe bzw. Breite.
+    case window(LayoutDropZone)
+}
+
+enum LayoutDrop {
+    /// Zone unter `point` in einem Platz: die innere Hälfte (je Achse 25–75 %) = Mitte, sonst die nächste
+    /// Kante — die Diagonalen teilen den Rand in vier Dreiecke. nil = Punkt liegt nicht im Platz.
+    static func zone(at point: CGPoint, in rect: CGRect) -> LayoutDropZone? {
+        guard rect.width > 0, rect.height > 0, rect.contains(point) else { return nil }
+        let x = (point.x - rect.minX) / rect.width, y = (point.y - rect.minY) / rect.height
+        if (0.25...0.75).contains(x), (0.25...0.75).contains(y) { return .center }
+        let distances: [(LayoutDropZone, CGFloat)] = [(.left, x), (.right, 1 - x), (.top, y), (.bottom, 1 - y)]
+        return distances.min { $0.1 < $1.1 }?.0
+    }
+
+    /// Fensterrand: `point` liegt höchstens `band` pt innerhalb einer Kante (oben = minY, die Split-View ist
+    /// geflippt). In Ecken gewinnt die nähere Kante.
+    static func windowZone(at point: CGPoint, in bounds: CGRect, band: CGFloat) -> LayoutDropZone? {
+        guard bounds.contains(point) else { return nil }
+        let distances: [(LayoutDropZone, CGFloat)] = [(.left, point.x - bounds.minX), (.right, bounds.maxX - point.x),
+                                                      (.top, point.y - bounds.minY), (.bottom, bounds.maxY - point.y)]
+        guard let nearest = distances.min(by: { $0.1 < $1.1 }), nearest.1 <= band else { return nil }
+        return nearest.0
+    }
+}
+
+extension LayoutEdit {
+    /// Kachel `pane` an `target` verschieben. Seiten halbieren den Zielplatz (bzw. geben am Fensterrand einen
+    /// Teil wie ein weiteres Kind ab), die Mitte und die Reiterleiste legen sie als Reiter dazu, vorn. Die neue
+    /// Teilung gilt als von `actor` gesetzt; alles andere behält seine Anteile, ihr alter Platz fällt an ihre
+    /// Nachbarn. nil = nichts zu tun (Ziel ist sie selbst, unbekannte Kachel, einzige Kachel).
+    static func moved(_ pane: String, to target: LayoutDropTarget, in root: LayoutNode, actor: LayoutActor) -> LayoutNode? {
+        let id = pane.uppercased()
+        guard let sourcePath = path(of: id, in: root) else { return nil }
+        let source = node(at: sourcePath, in: root)
+        let result: LayoutNode
+
+        switch target {
+        case .place(let other, let zone):
+            guard let targetPath = path(of: other, in: root) else { return nil }
+            let samePlace = targetPath == sourcePath
+            // Auf sich selbst: nur ein Reiter lässt sich aus seinem Platz neben ihn herauslösen.
+            if samePlace, !source.isGroup || zone == .center { return nil }
+            let place = node(at: targetPath, in: root)
+            guard let anchor = place.members.first(where: { $0 != id }),
+                  let without = remove(id, from: root), let anchorPath = path(of: anchor, in: without) else { return nil }
+            let remaining = node(at: anchorPath, in: without)
+            let replacement: LayoutNode
+            if let axis = zone.axis {
+                var kept = remaining
+                kept.weight = 1
+                let moved = LayoutNode.leaf(id)
+                replacement = .split(axis, zone.leading ? [moved, kept] : [kept, moved], weight: remaining.weight, setBy: actor)
+            } else {
+                replacement = .group(remaining.members + [id], front: id, weight: remaining.weight, setBy: actor)
+            }
+            result = replacing(at: anchorPath, in: without, with: replacement)
+
+        case .tabBar(let other, let index):
+            guard let targetPath = path(of: other, in: root) else { return nil }
+            let place = node(at: targetPath, in: root)
+            if let from = place.members.firstIndex(of: id) {
+                // Im eigenen Platz umsortieren.
+                var members = place.members
+                var to = min(max(index, 0), members.count)
+                members.remove(at: from)
+                if from < to { to -= 1 }
+                members.insert(id, at: to)
+                guard members != place.members else { return nil }
+                result = replacing(at: targetPath, in: root, with: .group(members, front: id, weight: place.weight, setBy: actor))
+            } else {
+                guard let anchor = place.members.first, let without = remove(id, from: root),
+                      let anchorPath = path(of: anchor, in: without) else { return nil }
+                let remaining = node(at: anchorPath, in: without)
+                // Position bezieht sich auf die Leiste, wie Mats sie sah; die gezogene Kachel stand nicht darin.
+                var members = remaining.members
+                members.insert(id, at: min(max(index, 0), members.count))
+                result = replacing(at: anchorPath, in: without, with: .group(members, front: id, weight: remaining.weight, setBy: actor))
+            }
+
+        case .window(let zone):
+            guard let axis = zone.axis, var without = remove(id, from: root) else { return nil }
+            // Wie ein weiteres Kind entlang der Achse: bei drei Spalten ein Viertel, sonst mindestens ein Drittel.
+            // Der bisherige Baum bleibt ein Block (gleich gerichtete Teilungen werden nicht verschmolzen).
+            let siblings = without.axis == axis ? without.children.count : 1
+            without.weight = Double(max(2, siblings))
+            let moved = LayoutNode.leaf(id)
+            result = .split(axis, zone.leading ? [moved, without] : [without, moved], setBy: actor)
+        }
+
+        let normalized = result.normalized() ?? result
+        return normalized == root ? nil : normalized
     }
 }

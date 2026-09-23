@@ -609,7 +609,10 @@ final class MCPServer {
         var lines = ["Anordnung (Stand \(report.revision), \(report.automatic ? "automatisch" : "angepasst"), Fenster \(Int(report.width))×\(Int(report.height)) pt):"]
         var locked = false
         func label(_ node: LayoutNode) -> String {
-            if node.isGroup { return "Reiter (\(node.members.count), einer sichtbar)" }
+            if node.isGroup {
+                if node.setBy == .mats { locked = true; return "Reiter (\(node.members.count), einer sichtbar) ✋" }
+                return "Reiter (\(node.members.count), einer sichtbar)"
+            }
             if let id = node.pane { return paneLabel(id) }
             var text = node.axis == .column ? "übereinander" : "nebeneinander"
             if node.setBy == .mats { text += " ✋"; locked = true }
@@ -642,7 +645,7 @@ final class MCPServer {
             }
         }
         walk(root, indent: "", last: true, share: nil)
-        if locked { lines.append("✋ = Aufteilung hat Mats von Hand gesetzt — bleibt, außer er bittet ausdrücklich um etwas anderes.") }
+        if locked { lines.append("✋ = Aufteilung bzw. Reiter hat Mats von Hand gesetzt — bleibt, außer er bittet ausdrücklich um etwas anderes.") }
         return lines.joined(separator: "\n")
     }
 

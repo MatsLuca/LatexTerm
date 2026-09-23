@@ -2,7 +2,7 @@ import Foundation
 import CoreGraphics
 
 /// Kachel-Layout: altes Raster exakt nachgebaut, Baum-Bereinigung, Automatik mit Begleitern,
-/// Einsetzen/Entfernen im angepassten Layout, Trennlinien, Absichten samt Mats-Sperre, JSON.
+/// Einsetzen/Entfernen im angepassten Layout, Trennlinien, Absichten samt Mats-Sperre, JSON, Kachel ziehen.
 @main
 struct PaneLayoutTests {
     static var failures = 0
@@ -65,6 +65,7 @@ struct PaneLayoutTests {
         intents()
         coding()
         tabs()
+        dragging()
         if failures > 0 { print("pane-layout: \(failures) Fehler"); exit(1) }
         print("pane-layout: ok")
     }
@@ -352,5 +353,121 @@ struct PaneLayoutTests {
         do { _ = try LayoutEdit.apply(.tab("C", into: "B"), to: locked, actor: .agent, overrideMats: false); check(false, "Reiter aus Mats-Teilung") }
         catch { check("\(error)".contains("Mats"), "Grund nennt Mats") }
         check(LayoutGeometry.rect(of: "C", in: r, bounds: bounds) != nil && LayoutGeometry.rect(of: "A", in: r, bounds: bounds) == LayoutGeometry.rect(of: "B", in: r, bounds: bounds), "Reiter teilen den Platz")
+    }
+
+    /// Kachel ziehen (Stufe 2, Scheibe B): Zonen, Verschieben an Seiten, als Reiter, Fensterrand, No-ops.
+    static func dragging() {
+        let bounds = CGRect(x: 0, y: 0, width: 1000, height: 600)
+        func rect(_ id: String, _ node: LayoutNode) -> CGRect { LayoutGeometry.rect(of: id, in: node, bounds: bounds)! }
+        func move(_ id: String, _ target: LayoutDropTarget, _ root: LayoutNode) -> LayoutNode? {
+            LayoutEdit.moved(id, to: target, in: root, actor: .mats)
+        }
+
+        // Zonen: Mitte = innere Hälfte, Rand nach der nächsten Kante, außerhalb nichts.
+        let r = CGRect(x: 100, y: 100, width: 400, height: 200)
+        check(LayoutDrop.zone(at: CGPoint(x: 300, y: 200), in: r) == .center, "Mitte")
+        check(LayoutDrop.zone(at: CGPoint(x: 110, y: 200), in: r) == .left, "links")
+        check(LayoutDrop.zone(at: CGPoint(x: 490, y: 200), in: r) == .right, "rechts")
+        check(LayoutDrop.zone(at: CGPoint(x: 300, y: 105), in: r) == .top, "oben")
+        check(LayoutDrop.zone(at: CGPoint(x: 300, y: 295), in: r) == .bottom, "unten")
+        check(LayoutDrop.zone(at: CGPoint(x: 150, y: 105), in: r) == .top, "Ecke: relativ nähere Kante gewinnt")
+        check(LayoutDrop.zone(at: CGPoint(x: 50, y: 50), in: r) == nil, "außerhalb")
+        check(LayoutDrop.zone(at: CGPoint(x: 1, y: 1), in: .zero) == nil, "leerer Platz")
+        check(LayoutDrop.windowZone(at: CGPoint(x: 5, y: 300), in: bounds, band: 14) == .left, "Fensterrand links")
+        check(LayoutDrop.windowZone(at: CGPoint(x: 500, y: 595), in: bounds, band: 14) == .bottom, "Fensterrand unten")
+        check(LayoutDrop.windowZone(at: CGPoint(x: 500, y: 300), in: bounds, band: 14) == nil, "innen kein Rand")
+        check(LayoutDrop.windowZone(at: CGPoint(x: -3, y: 300), in: bounds, band: 14) == nil, "außerhalb des Fensters")
+
+        let root = LayoutNode.split(.row, [.leaf("A"), .split(.column, [.leaf("B"), .leaf("C")])])
+
+        // Seiten: halbiert den Zielplatz, der alte Platz fällt an die Nachbarn.
+        var m = move("C", .place("A", .left), root)!
+        check(m.paneIDs == ["C", "A", "B"] && rect("C", m).width == 250 && rect("C", m).height == 600, "C links neben A: \(m.paneIDs)")
+        check(rect("B", m) == CGRect(x: 500, y: 0, width: 500, height: 600), "B erbt den Platz von C")
+        check(m.children[0].setBy == .mats, "neue Teilung gehört Mats")
+        m = move("A", .place("C", .bottom), root)!
+        check(rect("A", m).minY == 450 && rect("A", m).width == 1000 && rect("B", m).height == 300, "A unter C, Spalte wird volle Breite: \(m)")
+        m = move("B", .place("A", .top), root)!
+        check(rect("B", m) == CGRect(x: 0, y: 0, width: 500, height: 300) && rect("C", m).height == 600, "B über A")
+        m = move("A", .place("B", .right), root)!
+        check(m.paneIDs == ["B", "A", "C"] && rect("A", m).minX == 500, "A rechts neben B")
+
+        // Mitte: als Reiter, vorn; auf sich selbst nichts.
+        m = move("A", .place("B", .center), root)!
+        check(m == .split(.column, [.group(["B", "A"], front: "A", setBy: .mats), .leaf("C")]), "A als Reiter zu B, vorn: \(m)")
+        check(move("A", .place("A", .center), root) == nil && move("A", .place("A", .left), root) == nil, "auf sich selbst: nichts")
+        check(move("X", .place("A", .left), root) == nil && move("A", .place("X", .left), root) == nil, "unbekannt: nichts")
+        check(move("A", .place("A", .left), .leaf("A")) == nil && move("A", .window(.left), .leaf("A")) == nil, "einzige Kachel")
+
+        // Reiter herauslösen: an die Seite des eigenen Platzes, der Rest bleibt Reiter.
+        let grouped = LayoutNode.split(.row, [.leaf("A"), .group(["B", "C", "D"], front: "C")])
+        m = move("C", .place("C", .bottom), grouped)!
+        check(m.children[1] == .split(.column, [.group(["B", "D"], front: "D"), .leaf("C")], setBy: .mats), "C unter die übrigen Reiter: \(m)")
+        m = move("B", .place("D", .left), grouped)!
+        check(m.children[1].axis == .row && m.children[1].children[0] == .leaf("B"), "B links neben den eigenen Platz")
+        check(move("C", .place("C", .center), grouped) == nil, "Reiter in die eigene Mitte: nichts")
+        m = move("A", .place("C", .right), grouped)!
+        check(m == .split(.row, [.group(["B", "C", "D"], front: "C"), .leaf("A")], setBy: .mats), "neben einen Reiter-Platz: Gruppe bleibt ganz: \(m)")
+        m = move("C", .place("A", .center), grouped)!
+        check(m == .split(.row, [.group(["A", "C"], front: "C", setBy: .mats), .group(["B", "D"], front: "D")]), "Reiter zu anderem Platz")
+        m = move("B", .place("A", .left), move("D", .place("A", .left), move("C", .place("A", .left), grouped)!)!)!
+        check(!m.paneIDs.isEmpty && m.hiddenPaneIDs.isEmpty && Set(m.paneIDs) == ["A", "B", "C", "D"], "alle Reiter herausgelöst: \(m)")
+
+        // Reiterleiste: einfügen an Position, umsortieren im eigenen Platz.
+        m = move("A", .tabBar("B", index: 1), grouped)!
+        check(m == .group(["B", "A", "C", "D"], front: "A", setBy: .mats), "A an Position 2 der Leiste: \(m)")
+        m = move("A", .tabBar("D", index: 99), grouped)!
+        check(m.members == ["B", "C", "D", "A"], "Position hinter dem Ende = ans Ende")
+        m = move("B", .tabBar("B", index: 3), grouped)!
+        check(m.children[1].members == ["C", "D", "B"] && m.children[1].pane == "B", "B ans Ende umsortiert, vorn: \(m)")
+        m = move("D", .tabBar("B", index: 0), grouped)!
+        check(m.children[1].members == ["D", "B", "C"], "D nach vorn umsortiert")
+        check(move("B", .tabBar("B", index: 0), grouped) == nil && move("B", .tabBar("B", index: 1), grouped) == nil, "an eigener Stelle: nichts")
+        m = move("A", .tabBar("A", index: 0), root) ?? root
+        check(m == root, "Leiste der eigenen einzelnen Kachel: nichts")
+
+        // Fensterrand: ganze Höhe/Breite, ein Teil wie ein weiteres Kind; der Rest bleibt ein Block.
+        m = move("C", .window(.right), root)!
+        check(rect("C", m) == CGRect(x: 667, y: 0, width: 333, height: 600) && rect("B", m).height == 600, "C als Spalte rechts: \(rect("C", m))")
+        m = move("A", .window(.bottom), root)!
+        check(rect("A", m) == CGRect(x: 0, y: 400, width: 1000, height: 200), "A als Zeile unten: \(rect("A", m))")
+        let three = LayoutNode.split(.row, [.leaf("A"), .leaf("B"), .leaf("C"), .leaf("D")])
+        m = move("D", .window(.left), three)!
+        check(rect("D", m).width == 250 && m.paneIDs == ["D", "A", "B", "C"], "drei Spalten + eine: ein Viertel")
+        check(move("A", .window(.center), root) == nil, "Fenstermitte gibt es nicht")
+
+        // Von Mats gezogene Reiter tragen ✋: überleben Bereinigen, Entfernen und JSON; Agenten nur auf Auftrag.
+        let matsTabs = move("C", .place("B", .center), root)!
+        check(matsTabs.containsMatsLock, "Reiter von Mats gesperrt")
+        check(matsTabs.normalized() == matsTabs, "Bereinigen behält ✋")
+        check(try! JSONDecoder().decode(LayoutNode.self, from: JSONEncoder().encode(matsTabs)) == matsTabs, "JSON behält ✋")
+        let three2 = move("A", .place("B", .center), matsTabs)!
+        check(LayoutEdit.remove("A", from: three2)!.containsMatsLock, "Entfernen eines Reiters behält ✋")
+        check(!(LayoutEdit.remove("C", from: matsTabs)!.containsMatsLock), "ein Reiter übrig: Blatt ohne ✋")
+        do { _ = try LayoutEdit.apply(.beside("A", "C"), to: three2, actor: .agent, overrideMats: false); check(false, "aus Mats' Reitern") }
+        catch { check("\(error)".contains("Reiter"), "Grund nennt Reiter: \(error)") }
+        let solo = LayoutNode.split(.row, [.group(["B", "C"], setBy: .mats), .leaf("A"), .leaf("D")])
+        do { _ = try LayoutEdit.apply(.tab("D", into: "B"), to: solo, actor: .agent, overrideMats: false); check(false, "in Mats' Reiter") }
+        catch {}
+        check((try? LayoutEdit.apply(.tab("D", into: "B"), to: solo, actor: .agent, overrideMats: true))?.containsMatsLock == true, "auf Auftrag, ✋ bleibt")
+        check((try? LayoutEdit.apply(.tab("D", into: "A"), to: solo, actor: .agent, overrideMats: false)) != nil, "fremde Reiter ohne ✋ frei")
+
+        do { _ = try LayoutEdit.apply(.swap("A", "B"), to: three2, actor: .agent, overrideMats: false) } catch { check(false, "Tauschen im selben Reiter-Platz erlaubt") }
+        let swapOut = LayoutNode.split(.row, [.group(["B", "C"], setBy: .mats), .leaf("D")])
+        do { _ = try LayoutEdit.apply(.swap("C", "D"), to: swapOut, actor: .agent, overrideMats: false); check(false, "Tauschen aus Mats' Reitern") }
+        catch {}
+        var full = LayoutNode.split(.row, [.leaf("S"), .split(.column, [.leaf("P1"), .leaf("P2"), .group(["P3", "P4"], setBy: .mats)])])
+        full = LayoutEdit.insert("P5", companionOf: "S", anchorCompanions: ["P1", "P2", "P3", "P4"], focusBlock: [], preference: .flexible,
+                                 anchorPreference: .flexible, into: full, bounds: bounds, gap: 8)
+        check(full.children[1].children.count == 4 && full.children[1].children[2].members == ["P3", "P4"], "Neue Begleiterin nicht in Mats' Reiter: \(full)")
+        // Mats' Sperren anderer Teilungen bleiben; Ergebnis ist bereinigt (keine Ein-Kind-Teilungen).
+        var locked = root
+        locked.children[1].setBy = .mats
+        m = move("A", .place("B", .right), locked)!
+        check(m.setBy == .mats || m.children.contains { $0.setBy == .mats }, "Sperre bleibt")
+        func noSingles(_ n: LayoutNode) -> Bool { n.isLeaf || (n.children.count > 1 && n.children.allSatisfy(noSingles)) }
+        for target in [LayoutDropTarget.place("B", .left), .place("C", .center), .window(.top), .tabBar("B", index: 0)] {
+            if let out = move("A", target, root) { check(noSingles(out) && Set(out.paneIDs) == ["A", "B", "C"], "bereinigt nach \(target): \(out)") }
+        }
     }
 }
