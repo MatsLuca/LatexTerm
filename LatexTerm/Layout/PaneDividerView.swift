@@ -54,22 +54,39 @@ final class PaneDividerView: NSView {
     override func mouseEntered(with event: NSEvent) { hovering = true }
     override func mouseExited(with event: NSEvent) { hovering = false }
 
+    /// Erst ab dieser Strecke ist es ein Zug. Sonst setzt schon das Zucken eines Klicks (auch des ersten
+    /// Klicks eines Doppelklicks) ✋ und eine neue Stand-Nummer.
+    private static let dragThreshold: CGFloat = 3
+    /// Mausposition beim Drücken (Achse), solange der Zug die Schwelle noch nicht überschritten hat.
+    private var pressedAt: CGFloat?
+
     override func mouseDown(with event: NSEvent) {
-        if event.clickCount == 2 { onDoubleClick?(self); return }
-        dragging = true
-        onBegin?(self)
+        if event.clickCount == 2 { pressedAt = nil; onDoubleClick?(self); return }
+        pressedAt = axisPosition(event)
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard dragging, let host = superview else { return }
-        let point = host.convert(event.locationInWindow, from: nil)
-        onMove?(self, Double(divider.axis == .row ? point.x : point.y))
+        guard let position = axisPosition(event) else { return }
+        if !dragging {
+            guard let start = pressedAt, abs(position - start) >= Self.dragThreshold else { return }
+            pressedAt = nil
+            dragging = true
+            onBegin?(self)
+        }
+        onMove?(self, Double(position))
     }
 
     override func mouseUp(with event: NSEvent) {
+        pressedAt = nil
         guard dragging else { return }
         dragging = false
         onEnd?(self)
+    }
+
+    private func axisPosition(_ event: NSEvent) -> CGFloat? {
+        guard let host = superview else { return nil }
+        let point = host.convert(event.locationInWindow, from: nil)
+        return divider.axis == .row ? point.x : point.y
     }
 
     override func draw(_ dirtyRect: NSRect) {
