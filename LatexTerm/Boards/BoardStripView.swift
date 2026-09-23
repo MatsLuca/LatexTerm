@@ -27,10 +27,6 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
     var items: [Item] = [] {
         didSet { if items != oldValue { rebuildToolTips(); needsDisplay = true } }
     }
-    /// Brett, das nach × auf Bestätigung wartet, und warum.
-    var confirming: (id: ObjectIdentifier, reason: String)? {
-        didSet { needsDisplay = true }
-    }
     var onSelect: ((ObjectIdentifier) -> Void)?
     var onClose: ((ObjectIdentifier) -> Void)?
     var onAdd: (() -> Void)?
@@ -58,10 +54,7 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
 
     // MARK: Geometrie
 
-    private func label(for item: Item) -> String {
-        if let confirming, confirming.id == item.id { return "schließen? (\(confirming.reason))" }
-        return item.name
-    }
+    private func label(for item: Item) -> String { item.name }
 
     private func textWidth(_ string: String) -> CGFloat {
         min(Self.maxNameWidth, (string as NSString).size(withAttributes: [.font: Self.font]).width.rounded(.up))
@@ -95,7 +88,7 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
 
     private func target(at point: NSPoint) -> Target? {
         for (i, rect) in itemRects().enumerated() where rect.contains(point) {
-            let showsClose = hovered == .item(i) || hovered == .close(i) || confirming?.id == items[i].id
+            let showsClose = hovered == .item(i) || hovered == .close(i)
             if showsClose, closeRect(in: rect).insetBy(dx: -3, dy: -3).contains(point) { return .close(i) }
             return .item(i)
         }
@@ -109,7 +102,6 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
         let accent = ThemeStore.shared.accentColor
         for (i, rect) in itemRects().enumerated() {
             let item = items[i]
-            let isConfirming = confirming?.id == item.id
             let hover = hovered == .item(i) || hovered == .close(i)
             if hover && !item.active {
                 theme.foreground.withAlphaComponent(0.07).setFill()
@@ -120,8 +112,7 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
                 NSBezierPath(roundedRect: NSRect(x: rect.minX + 3, y: rect.maxY - 2, width: rect.width - 6, height: 2),
                              xRadius: 1, yRadius: 1).fill()
             }
-            let color: NSColor = isConfirming ? theme.red
-                : theme.foreground.withAlphaComponent(item.active ? 0.92 : 0.5)
+            let color = theme.foreground.withAlphaComponent(item.active ? 0.92 : 0.5)
             let style = NSMutableParagraphStyle()
             style.lineBreakMode = .byTruncatingTail
             let text = NSAttributedString(string: label(for: item), attributes: [
@@ -132,7 +123,7 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
             text.draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
 
             let box = closeRect(in: rect)
-            if hover || isConfirming {
+            if hover {
                 if hovered == .close(i) {
                     theme.foreground.withAlphaComponent(0.14).setFill()
                     NSBezierPath(roundedRect: box, xRadius: 3, yRadius: 3).fill()
@@ -143,7 +134,7 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
                 cross.move(to: NSPoint(x: inset.maxX, y: inset.minY)); cross.line(to: NSPoint(x: inset.minX, y: inset.maxY))
                 cross.lineWidth = 1.3
                 cross.lineCapStyle = .round
-                (isConfirming ? theme.red : theme.foreground.withAlphaComponent(0.7)).setStroke()
+                theme.foreground.withAlphaComponent(0.7).setStroke()
                 cross.stroke()
             } else if let badge = item.badge {
                 drawBadge(badge, in: NSRect(x: box.midX - Self.badgeSize / 2, y: box.midY - Self.badgeSize / 2,

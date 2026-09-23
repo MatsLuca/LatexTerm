@@ -37,8 +37,6 @@ final class BoardHostView: NSView {
     private var closeObserver: NSObjectProtocol?
     private var windowClosed = false
     private var stripRefreshQueued = false
-    /// Brett, das nach einem × auf Bestätigung wartet (arbeitende Kacheln), mit Ablauf.
-    private var pendingClose: (board: ObjectIdentifier, until: Date)?
 
     /// Bretter in Leisten-Reihenfolge.
     var ordered: [TerminalSplitView] {
@@ -70,7 +68,7 @@ final class BoardHostView: NSView {
         }
         strip.onClose = { [weak self] id in
             guard let self, let board = self.boards.first(where: { ObjectIdentifier($0) == id }) else { return }
-            self.requestClose(board)
+            self.close(board)
         }
         strip.onAdd = { [weak self] in self?.addBoard(plan: nil, activate: true) }
 
@@ -153,30 +151,9 @@ final class BoardHostView: NSView {
         close(board)
     }
 
-    /// × oder ⇧⌘W: arbeitet dort noch etwas, fragt die Leiste zuerst (zweites × / ⇧⌘W binnen 4 s bestätigt).
-    private func requestClose(_ board: TerminalSplitView) {
-        let id = ObjectIdentifier(board)
-        if let pending = pendingClose, pending.board == id, pending.until > Date() {
-            pendingClose = nil
-            close(board)
-            return
-        }
-        if let concern = board.closeConcern {
-            pendingClose = (id, Date().addingTimeInterval(4))
-            strip.confirming = (id, concern)
-            DispatchQueue.main.asyncAfter(deadline: .now() + 4) { [weak self] in
-                guard let self, self.pendingClose?.board == id, self.pendingClose!.until <= Date() else { return }
-                self.pendingClose = nil
-                self.strip.confirming = nil
-            }
-            return
-        }
-        close(board)
-    }
-
+    /// × oder ⇧⌘W: sofort, ohne Rückfrage — was dort läuft, prüft Mats selbst (Entscheidung 23.09.).
     private func close(_ board: TerminalSplitView) {
         guard boards.contains(where: { $0 === board }) else { return }
-        if pendingClose?.board == ObjectIdentifier(board) { pendingClose = nil; strip.confirming = nil }
         let wasActive = board === activeBoard
         if wasActive { board.boardDidResignActive() }
         list.remove(ObjectIdentifier(board))
@@ -190,7 +167,7 @@ final class BoardHostView: NSView {
     private func perform(_ command: BoardCommand) {
         switch command {
         case .new: addBoard(plan: nil, activate: true)
-        case .close: if let board = activeBoard { requestClose(board) }
+        case .close: if let board = activeBoard { close(board) }
         case .next, .previous:
             guard let id = list.neighbor(command.isNext ? 1 : -1),
                   let board = boards.first(where: { ObjectIdentifier($0) == id }) else { NSSound.beep(); return }

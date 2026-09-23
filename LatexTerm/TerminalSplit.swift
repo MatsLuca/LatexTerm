@@ -251,15 +251,6 @@ final class TerminalSplitView: NSView {
         return badges.min { rank($0) < rank($1) }
     }
 
-    /// Grund, warum das Brett nicht ohne Rückfrage zugehen sollte (erste beschäftigte Kachel); nil = frei.
-    var closeConcern: String? {
-        for pane in panes {
-            if case .busy(let reason) = pane.closeGuard { return reason }
-            if info(for: pane).state == "working" { return "Agent arbeitet" }
-        }
-        return nil
-    }
-
     func boardDidBecomeActive() {
         isActiveBoard = true
         isHidden = false
@@ -270,6 +261,13 @@ final class TerminalSplitView: NSView {
         updateWindowTitle()
         updateTitlebarHUD()
         updateTabBarContents()
+    }
+
+    /// Tastatur an die zuletzt fokussierte Kachel (sonst die erste) — nach einem Fokus-Ausreißer in ein verdecktes Brett.
+    func restoreFocus() {
+        guard isActiveBoard else { return }
+        let target = lastFocused.flatMap { last in panes.first { $0 === last } } ?? displayPanes.first
+        if let target { takeFocus(target) }
     }
 
     func boardDidResignActive() {
@@ -507,7 +505,15 @@ final class TerminalSplitView: NSView {
     /// ⌘F-Suchleiste, flackert nicht), dann Fenstertitel und Titelleiste nachziehen.
     private func syncFocus() {
         for pane in panes { pane.container.hasFocus = isFocused(pane) }
-        if let focused = panes.first(where: { isFocused($0) }) { lastFocused = focused }
+        if let focused = panes.first(where: { isFocused($0) }) {
+            // Fokus in einem verdeckten Brett (eine Home-Kachel lädt dort und greift selbst zur Tastatur, ein
+            // Terminal startet …): zurück ins vordere Brett — sonst tippt Mats ins Unsichtbare (Live-Befund 23.09.).
+            if !isActiveBoard, let front = boardHost?.activeBoard, front !== self {
+                DispatchQueue.main.async { front.restoreFocus() }
+            } else {
+                lastFocused = focused
+            }
+        }
         updateWindowTitle()
         updateTitlebarHUD()
         updateTabBarContents()
