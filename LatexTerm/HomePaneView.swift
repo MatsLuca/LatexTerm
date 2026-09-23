@@ -279,6 +279,8 @@ struct LoaderError: Error { let message: String }
 /// vor dem Menü ab — die Menüeinträge sind Schaufenster + Mausweg (wie beim Home-Menü).
 enum PaneCommand {
     case split, close, zoom, find
+    /// Anordnung zurück an die Automatik (Kachel-Layout, 23.09.2026).
+    case rearrange
 }
 
 extension Notification.Name {

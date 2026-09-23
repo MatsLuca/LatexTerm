@@ -169,6 +169,12 @@ final class PaneContainerView: NSView {
     /// die per Animations-Tick eintrudelnden Zwischengrößen die Subviews.
     private var pinnedTargetSize: NSSize?
 
+    /// Trennlinie wird gezogen (Kachel-Layout): die Hülle folgt der Maus, der Inhalt behält seine
+    /// Größe bis zum Loslassen — sonst reflowte ein Terminal bei jedem Mausschritt den ganzen Scrollback
+    /// über Zwischenbreiten (verlustbehaftet, s. `pinContent`). Wächst die Kachel, zeigt sich solange der
+    /// Hüllen-Grund; beim Loslassen setzt die Split-View per `pinContent` die Endgröße (ein Resize).
+    var holdsContent = false
+
     /// Inhalt SOFORT auf die Ziel-Geometrie der Umsortierung setzen; die Hülle
     /// animiert hinterher und gibt den Inhalt progressiv frei (masksToBounds).
     /// Ohne das Pinning setzte `animator().frame` den Frame pro Animations-Tick
@@ -180,12 +186,15 @@ final class PaneContainerView: NSView {
         let inner = NSRect(origin: .zero, size: target)
             .insetBy(dx: Self.contentInset, dy: Self.contentInset)
         guard inner.width > 0, inner.height > 0 else { pinnedTargetSize = nil; return }
-        pinnedTargetSize = target
+        // Schon auf Zielgröße: kein Frame-Wechsel folgt, der den Pin wieder löste — ein stehen-
+        // gebliebener Pin schluckte sonst den nächsten echten Resize (Fenstergröße).
+        pinnedTargetSize = target == frame.size ? nil : target
         for sub in subviews { sub.frame = inner }
     }
 
     override func setFrameSize(_ newSize: NSSize) {
         super.setFrameSize(newSize)
+        if holdsContent { return }
         if let target = pinnedTargetSize {
             // Zwischengröße der Animation → Inhalt steht schon auf dem Ziel.
             // Ziel erreicht → Pin lösen (jede Umsortierung pinnt ohnehin neu).

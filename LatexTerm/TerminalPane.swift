@@ -1355,6 +1355,18 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         return .free
     }
 
+    /// Kachel-Layout: Breite in Spalten der aktuellen Schrift (fällt mit ⌘± mit) — unter 60 Spalten
+    /// bricht Claude Code seine Oberfläche um, ab 80 ist es bequem. Kein Seitenverhältnis: ein Terminal
+    /// füllt jede Form. Vor dem ersten Zeichnen (Zelle 0) aus der Schriftgröße geschätzt.
+    var layoutPreference: LayoutPreference {
+        let cell = view.cellSize()
+        let size = ThemeStore.shared.fontSize
+        let w = Double(cell.width > 0 ? cell.width : size * 0.6)
+        let h = Double(cell.height > 0 ? cell.height : size * 1.25)
+        let pad = Double(2 * PaneContainerView.contentInset)
+        return LayoutPreference(aspect: nil, minWidth: 60 * w + pad, minHeight: 8 * h + pad, comfortWidth: 80 * w + pad)
+    }
+
     /// ⌘F: Suchleiste (#9) — nur mit sichtbarem Terminal, Home hat keine.
     func handle(_ command: PaneCommand) -> Bool {
         guard command == .find, !isHome else { return false }

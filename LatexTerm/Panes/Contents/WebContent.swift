@@ -280,6 +280,11 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
 
     var view: NSView { root }
     var keyView: NSView { webView }
+    /// Web-Seiten brauchen Breite (Layouts brechen unter ~360 pt um), ein Format haben sie nicht.
+    var layoutPreference: LayoutPreference {
+        LayoutPreference(aspect: nil, minWidth: 360, minHeight: 240, comfortWidth: nil)
+    }
+
     var title: String {
         if let t = webView.title, !t.isEmpty { return t }
         return page.isFileURL ? page.lastPathComponent : pageLabel

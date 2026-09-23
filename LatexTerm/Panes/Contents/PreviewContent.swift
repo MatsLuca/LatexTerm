@@ -89,6 +89,8 @@ final class PreviewContent: NSObject, PaneContent {
     /// Wohin ⌘[ zurückführt (nach Sprung zur Änderung, `sync`, Gehe-zu).
     private var back: PDFDestination?
     private var sidebar: PreviewSidebar.Mode?
+    /// Format des Gezeigten (Breite/Höhe: erste PDF-Seite, Bild) — Wunschform fürs Kachel-Layout.
+    private var contentAspect: Double?
 
     // Ordner-Modus
     private(set) var folder: URL?
@@ -262,6 +264,7 @@ final class PreviewContent: NSObject, PaneContent {
         retries = 0
         problem = nil
         root.setMessage(nil)
+        updateContentAspect()
         if announce { root.pill.flash(note ?? ("↻ neu geladen · " + Self.clock.string(from: Date())), hold: note == nil ? 1.3 : 3) }
         delegate?.contentStyleChanged()
         updateToolbar()
@@ -1049,6 +1052,33 @@ final class PreviewContent: NSObject, PaneContent {
         }
     }
     var title: String { file.lastPathComponent }
+
+    /// Hochkant für PDF-Seiten, das echte Format bei Bildern; vor dem ersten Laden eine Seite geschätzt.
+    var layoutPreference: LayoutPreference {
+        LayoutPreference(aspect: type == .document ? nil : (contentAspect ?? 0.75), minWidth: 300, minHeight: 240, comfortWidth: nil)
+    }
+
+    /// Nach dem Laden: Format messen und dem Layout melden, wenn es sich geändert hat (das Layout ordnet
+    /// höchstens einmal danach neu — ein späteres PDF anderer Form verschiebt nichts mehr).
+    private func updateContentAspect() {
+        var aspect: Double?
+        switch type {
+        case .pdf:
+            if let page = pdfView.document?.page(at: 0) {
+                var size = page.bounds(for: .cropBox).size
+                if page.rotation % 180 != 0 { size = NSSize(width: size.height, height: size.width) }
+                if size.width > 0, size.height > 0 { aspect = Double(size.width / size.height) }
+            }
+        case .image:
+            let size = root.image.pointSize
+            if root.image.hasImage, size.width > 0, size.height > 0 { aspect = Double(size.width / size.height) }
+        case .document:
+            aspect = nil
+        }
+        guard let aspect, aspect != contentAspect else { return }
+        contentAspect = aspect
+        delegate?.contentLayoutPreferenceChanged()
+    }
     var directory: String? { (folder ?? file.deletingLastPathComponent()).path }
 
     var chip: StatusChip? {

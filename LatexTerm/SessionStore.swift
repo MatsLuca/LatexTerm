@@ -9,12 +9,16 @@ struct PaneSnapshot: Codable, Equatable {
     var id: String? = nil
     /// ID der Kachel, von der aus diese geöffnet wurde (Agent erkennt „seine“ Kacheln wieder).
     var openedBy: String? = nil
+    /// ID der Kachel, neben der sie steht (Kachel-Layout: Begleiter in deren Nebenspalte).
+    var companionOf: String? = nil
 
-    init(kind: String, args: [String: String] = [:], id: String? = nil, openedBy: String? = nil) {
+    init(kind: String, args: [String: String] = [:], id: String? = nil, openedBy: String? = nil,
+         companionOf: String? = nil) {
         self.kind = kind
         self.args = args
         self.id = id
         self.openedBy = openedBy
+        self.companionOf = companionOf
     }
 
     init(from decoder: Decoder) throws {
@@ -23,12 +27,14 @@ struct PaneSnapshot: Codable, Equatable {
         args = try c.decodeIfPresent([String: String].self, forKey: .args) ?? [:]
         id = try c.decodeIfPresent(String.self, forKey: .id)
         openedBy = try c.decodeIfPresent(String.self, forKey: .openedBy)
+        companionOf = try? c.decodeIfPresent(String.self, forKey: .companionOf)
     }
 }
 
 /// Session-Snapshot v2 (#11, Kachel-Protokoll §3.7): je Fenster die Kacheln in Reihenfolge
-/// plus Fokus und Zoom. Die Grid-Anordnung selbst ist eine reine Funktion der Kachelzahl und
-/// Fenstergröße (`TerminalSplitView.relayout`) und braucht keinen eigenen Zustand.
+/// plus Fokus und Zoom. Die automatische Anordnung ist eine reine Funktion der Kacheln und der
+/// Fenstergröße; nur eine angepasste (Mats zog eine Trennlinie, ein Agent ordnete an) liegt als
+/// `layout` bei (Kachel-Layout, 23.09.2026 — optionales Feld, v2 bleibt).
 ///
 /// Geschrieben bei jedem Beenden, als Startlayout benutzt aber nur einmal nach „Neu starten“ /
 /// „Beenden und Kacheln merken“ (`restoreOnce`). Sonst beginnt die App mit Home (Mats' Entscheidung
@@ -45,19 +51,36 @@ struct SessionSnapshot: Codable, Equatable {
         var tabGroup: Int?
         /// Der sichtbare Tab seiner Leiste.
         var selected: Bool?
+        /// Angepasste Anordnung; Blätter tragen die Kachel-IDs aus `panes`. nil = Automatik.
+        var layout: LayoutNode?
 
         init(panes: [PaneSnapshot], focused: Int? = nil, zoomed: Int? = nil,
-             tabGroup: Int? = nil, selected: Bool? = nil) {
+             tabGroup: Int? = nil, selected: Bool? = nil, layout: LayoutNode? = nil) {
             self.panes = panes
             self.focused = focused
             self.zoomed = zoomed
             self.tabGroup = tabGroup
             self.selected = selected
+            self.layout = layout
+        }
+
+        private enum CodingKeys: String, CodingKey { case panes, focused, zoomed, tabGroup, selected, layout }
+
+        init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            panes = try c.decode([PaneSnapshot].self, forKey: .panes)
+            focused = try c.decodeIfPresent(Int.self, forKey: .focused)
+            zoomed = try c.decodeIfPresent(Int.self, forKey: .zoomed)
+            tabGroup = try c.decodeIfPresent(Int.self, forKey: .tabGroup)
+            selected = try c.decodeIfPresent(Bool.self, forKey: .selected)
+            // Ein kaputtes Layout kostet nur die Anordnung, nie die Kacheln.
+            layout = try? c.decodeIfPresent(LayoutNode.self, forKey: .layout)
         }
 
         /// Aus den Kacheln eines Fensters: Kacheln ohne Snapshot fallen weg, Fokus- und
         /// Zoom-Index zählen danach (sonst zeigte der Index auf die falsche Kachel).
-        init(entries: [(snapshot: PaneSnapshot?, focused: Bool, zoomed: Bool)]) {
+        /// Das Layout behält nur Kacheln, die im Snapshot stehen.
+        init(entries: [(snapshot: PaneSnapshot?, focused: Bool, zoomed: Bool)], layout: LayoutNode? = nil) {
             var panes: [PaneSnapshot] = []
             var focused: Int?, zoomed: Int?
             for entry in entries {
@@ -66,7 +89,8 @@ struct SessionSnapshot: Codable, Equatable {
                 if entry.zoomed { zoomed = panes.count }
                 panes.append(snapshot)
             }
-            self.init(panes: panes, focused: focused, zoomed: zoomed)
+            let ids = Set(panes.compactMap { $0.id?.uppercased() })
+            self.init(panes: panes, focused: focused, zoomed: zoomed, layout: layout?.normalized(keeping: ids))
         }
     }
 

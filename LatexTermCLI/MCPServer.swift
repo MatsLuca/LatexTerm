@@ -51,6 +51,12 @@ final class MCPServer {
     private var kindInfos: [PaneKindInfo] = []
     /// Arten, die die laufende App nur beim Namen nennt (App älter als der Server).
     private var undescribed: Set<String> = []
+    /// Kachel-Layout: Stand-Nummer der Anordnung, die das Modell zuletzt gesehen hat — nur damit darf es
+    /// umordnen (die App lehnt einen veralteten Stand ab und schickt den aktuellen mit).
+    private var layoutSeen: Int?
+    /// Nummer → UUID, wie das Modell sie zuletzt gesehen hat. Verschieben sich die Nummern (Umordnen,
+    /// Kachel zu), wird eine alte Nummer abgelehnt statt still eine andere Kachel zu treffen.
+    private var shownIndex: [Int: String] = [:]
 
     init(environment: [String: String],
          transport: ControlTransport = SocketTransport(),
@@ -149,6 +155,11 @@ final class MCPServer {
         Änderungen an HTML, CSS, JS oder Daten lädt die Kachel von selbst. Soll ein Klick auf deiner Seite dich erreichen \
         (Auswahl, Knopf „erledigt“), ruft sie latexterm.send("…") auf — kommt als Prompt mit Herkunftszeile bei dir an. \
         Schickt der Nutzer Stellen daraus („Aus der Web-Kachel …“), stehen Selektor, Quellzeile und ein Ausschnitt-Bild dabei.
+        Anordnung: neue Kacheln landen von selbst neben dir (Nebenspalte rechts) in einer Form, die zum Inhalt passt (PDF hochkant). \
+        Umordnen mit layout — erst den aktuellen Stand lesen (panes oder layout ohne action), dann ändern; geändert wird nur auf \
+        dem Stand, den du zuletzt gelesen hast. Ordne von dir aus an, wenn es gerade hilft (arbeitest du am PDF: Vorschau groß; \
+        danach automatisch). Deine eigenen Kacheln frei; fremde und Aufteilungen mit ✋ (von Mats von Hand gesetzt) nur auf \
+        seinen Wunsch. Kacheln per UUID-Präfix ansprechen — Nummern verschieben sich beim Umordnen.
         """)
         return lines.joined(separator: "\n")
     }
@@ -157,7 +168,12 @@ final class MCPServer {
 
     private static let paneProperty: JSON = [
         "type": "string",
-        "description": "Ziel: Index aus panes (\"2\") oder UUID(-Präfix). Die UUID bleibt stabil, wenn Kacheln zugehen.",
+        "description": "Ziel: UUID-Präfix aus panes (erste 8 Zeichen, bleibt stabil) oder Nummer (\"2\") — Nummern verschieben sich, wenn Kacheln aufgehen, zugehen oder umgeordnet werden.",
+    ]
+
+    private static let placementProperty: JSON = [
+        "type": "string", "enum": ["neben_mich", "eigen"],
+        "description": "neben_mich (Default): in deine Nebenspalte rechts neben dir; eigen: eigenständige Kachel mit eigenem Platz (z. B. für ein anderes Projekt)",
     ]
 
     private static let staticTools: [JSON] = [
@@ -168,7 +184,8 @@ final class MCPServer {
              "Neue Shell-Kachel neben dir, optional mit Startbefehl — für alles, was lange läuft oder der Nutzer mitverfolgen soll (Dev-Server, Build, Log, Tests im Watch-Modus). Die Tastatur bleibt, wo sie ist.",
              ["cwd": ["type": "string", "description": "Ordner (absolut, ~ oder relativ zu deinem); Default: dein Ordner"],
               "command": ["type": "string", "description": "Befehl, der nach dem Shell-Start läuft"],
-              "focus": ["type": "boolean", "description": "Kachel fokussieren (Default false)"]], []),
+              "focus": ["type": "boolean", "description": "Kachel fokussieren (Default false)"],
+              "placement": placementProperty], []),
         tool("start_agent", "Agent in neuer Kachel starten",
              "Startet eine neue Claude- oder Codex-Session in einer eigenen Kachel, optional mit erstem Prompt — für echte Parallelarbeit oder eine zweite Meinung. Danach wait_session / ask_session. Nicht für kleine Teilaufgaben, die du selbst oder ein Subagent erledigst.",
              ["agent": ["type": "string", "enum": ["claude", "codex"]],
@@ -221,6 +238,14 @@ final class MCPServer {
               "look": ["type": "boolean", "description": "danach ein Bild (Default true)"],
               "full": ["type": "boolean", "description": "Bild der ganzen Seite statt des Ausschnitts"]],
              ["steps"]),
+        tool("layout", "Kacheln anordnen",
+             "Zeigt die Anordnung deines Fensters mit Stand-Nummer (Baum aus nebeneinander/übereinander, Anteile in %, ✋ = Aufteilung von Mats von Hand gesetzt) und ändert sie auf Absichts-Ebene. Ohne action: nur zeigen. Geändert wird nur auf dem Stand, den du zuletzt gelesen hast (hier oder in panes) — hat sich inzwischen etwas geändert, kommt der neue Stand zurück: prüfen, dann erneut. Kein Zoom, alles bleibt sichtbar. Eigene Kacheln (du und was du geöffnet hast) ordnest du frei um; fremde Kacheln und ✋-Aufteilungen nur, wenn der Nutzer es ausdrücklich will (auf_auftrag: true). automatisch = eigene Anpassungen verwerfen, die App ordnet wieder selbst.",
+             ["action": ["type": "string", "enum": ["zeigen", "gross", "groesser", "kleiner", "nebeneinander", "untereinander", "tauschen", "automatisch"],
+                         "description": "gross = pane groß, der Rest schmal · groesser/kleiner = um ein Stück · nebeneinander/untereinander = other rechts neben bzw. unter pane stellen · tauschen = Plätze von pane und other tauschen"],
+              "pane": paneProperty,
+              "other": ["type": "string", "description": "zweite Kachel (nebeneinander, untereinander, tauschen), UUID-Präfix oder Nummer"],
+              "auf_auftrag": ["type": "boolean", "description": "Nutzer hat ausdrücklich darum gebeten — erlaubt fremde Kacheln und ✋-Aufteilungen"]],
+             []),
         tool("close_pane", "Kachel schließen",
              "Schließt eine Kachel (wie ⌘W). Kacheln, die du in dieser Session geöffnet hast, schließt du nach getaner Arbeit selbst. Fremde nur, wenn der Nutzer es ausdrücklich will (dann foreign: true). Arbeitende Sessions und laufende Programme bleiben offen.",
              ["pane": paneProperty, "foreign": ["type": "boolean", "description": "Kachel wurde nicht von dir geöffnet; nur auf ausdrücklichen Auftrag"]],
@@ -267,7 +292,9 @@ final class MCPServer {
     private func openTool(_ info: PaneKindInfo) -> JSON {
         var properties: [String: JSON] = [:]
         for arg in info.args { properties[arg.name] = ["type": "string", "description": arg.summary] }
-        var description = info.summary + " Öffnet eine neue Kachel daneben, ohne Fokuswechsel; ist dieselbe schon offen, wird sie wiederverwendet."
+        properties["placement"] = ["type": "string", "enum": ["neben_mich", "eigen", "ersetzen"],
+                                   "description": "neben_mich (Default): in deine Nebenspalte rechts neben dir · eigen: eigenständige Kachel · ersetzen: statt einer neuen deine vorhandene Kachel dieser Art mit dem neuen Inhalt laden"]
+        var description = info.summary + " Öffnet eine neue Kachel neben dir, ohne Fokuswechsel; ist dieselbe schon offen, wird sie wiederverwendet."
         if !info.actions.isEmpty {
             description += " Danach per pane_action: " + info.actions.map { "\($0.name) (\($0.summary))" }.joined(separator: ", ") + "."
         }
@@ -275,7 +302,8 @@ final class MCPServer {
                             "required": info.args.filter(\.required).map(\.name)]
         if undescribed.contains(info.kind) {
             schema["properties"] = ["args": ["type": "object", "description": "Args der Kachelart als Schlüssel/Wert (Web: url)",
-                                             "additionalProperties": ["type": "string"]] as JSON]
+                                             "additionalProperties": ["type": "string"]] as JSON,
+                                    "placement": properties["placement"]!]
         } else {
             schema["additionalProperties"] = false
         }
@@ -304,6 +332,7 @@ final class MCPServer {
         case "pane_action": return try paneAction(a)
         case "focus_pane": return try focusPane(a)
         case "close_pane": return try closePane(a)
+        case "layout": return try layoutTool(a)
         case "scratch_draw": return try scratchDraw(a)
         case "scratch_clear": return try scratchClear(a)
         default:
@@ -317,9 +346,28 @@ final class MCPServer {
     // MARK: Werkzeug-Implementierungen
 
     private func panesTool() -> String {
-        guard let panes = try? listPanes() else { return "LatexTerm nicht erreichbar — läuft die App?" }
+        guard let response = try? checked(ControlRequest(cmd: "list-panes")) else { return "LatexTerm nicht erreichbar — läuft die App?" }
+        let panes = response.panes ?? []
         let own = selfPane(in: panes)
-        return panes.map { describe($0, own: own) }.joined(separator: "\n")
+        let list = panes.map { describe($0, own: own) }.joined(separator: "\n")
+        let layout = lagebild(response.layout, panes: panes)
+        return layout.isEmpty ? list : list + "\n\n" + layout
+    }
+
+    /// Stand der Anordnung nach einer Änderung (neue Kachel): eine frische Liste für Nummern und Namen.
+    private func currentLayout() -> String {
+        guard let response = try? checked(ControlRequest(cmd: "list-panes")) else { return "" }
+        let text = lagebild(response.layout, panes: response.panes ?? [])
+        return text.isEmpty ? "" : "\n\n" + text
+    }
+
+    private func placement(_ a: JSON, allowReplace: Bool) throws -> String? {
+        switch a["placement"] as? String {
+        case nil, "neben_mich": return "beside"
+        case "eigen": return "own"
+        case "ersetzen" where allowReplace: return "replace"
+        case let other: throw ToolFailure("placement „\(other ?? "")“ gibt es hier nicht (neben_mich, eigen\(allowReplace ? ", ersetzen" : "")).")
+        }
     }
 
     private func openTerminal(_ a: JSON) throws -> String {
@@ -327,9 +375,10 @@ final class MCPServer {
         request.cwd = try directory(a["cwd"] as? String)
         if let command = nonEmpty(a["command"]) { request.exec = command }
         request.focus = a["focus"] as? Bool ?? false
+        request.placement = try placement(a, allowReplace: false)
         let pane = try open(request)
         return "Terminal-Kachel \(pane.index) (\(pane.id.prefix(8))) in \(tilde(pane.cwd ?? request.cwd) ?? "?")"
-            + (request.exec.map { " — läuft: \($0)" } ?? "") + "."
+            + (request.exec.map { " — läuft: \($0)" } ?? "") + "." + currentLayout()
     }
 
     private func startAgent(_ a: JSON) throws -> String {
@@ -342,6 +391,7 @@ final class MCPServer {
         request.cwd = try directory(a["cwd"] as? String)
         request.exec = base
         request.focus = false
+        request.placement = "own"   // neue Session = eigener Platz, kein Begleiter
         let pane = try open(request)
         let head = "\(agent) startet in Kachel \(pane.index) (\(pane.id.prefix(8))), \(tilde(request.cwd) ?? "")"
         guard let prompt else { return head + ". Prompt später per ask_session." }
@@ -461,7 +511,24 @@ final class MCPServer {
             if let value = a[arg.name] { args[arg.name] = normalizedPath("\(value)") }
             else if arg.required { throw ToolFailure("\(arg.name) fehlt: \(arg.summary)") }
         }
+        let placed = try placement(a, allowReplace: true)
         let panes = try listPanes()
+        if placed == "replace", let mine = panes.last(where: { $0.kind == info.kind && isMine($0) }),
+           args.isEmpty || !sameArgs(mine.args, args) {
+            // Ersetzen: eigene Kachel dieser Art weiterverwenden — neuer Inhalt per „load“, wenn die Art es kann.
+            if args.isEmpty { return "Deine \(info.kind)-Kachel \(mine.index) (\(mine.id.prefix(8))) bleibt — nichts Neues zu laden." }
+            if info.actions.contains(where: { $0.name.hasPrefix("load ") }),
+               let main = info.args.first(where: \.required) ?? info.args.first, let value = args[main.name] {
+                var request = ControlRequest(cmd: "send")
+                request.pane = mine.id
+                request.text = "load " + value
+                request.enter = false
+                _ = try checked(request)
+                shownIndex[mine.index] = mine.id.uppercased()
+                return "In deiner \(info.kind)-Kachel \(mine.index) (\(mine.id.prefix(8))) geladen: \(tilde(value) ?? value)."
+            }
+            // Art ohne „load“: dann eben eine neue Kachel daneben.
+        }
         if !args.isEmpty, let existing = panes.first(where: { $0.kind == info.kind && sameArgs($0.args, args) }) {
             if info.actions.contains(where: { $0.name == "reload" }) {
                 var request = ControlRequest(cmd: "send")
@@ -477,8 +544,94 @@ final class MCPServer {
         request.kind = info.kind
         request.args = args
         request.focus = false
+        request.placement = placed == "own" ? "own" : "beside"
         let pane = try open(request)
-        return "\(info.kind)-Kachel \(pane.index) (\(pane.id.prefix(8))) geöffnet."
+        return "\(info.kind)-Kachel \(pane.index) (\(pane.id.prefix(8))) geöffnet." + currentLayout()
+    }
+
+    // MARK: - Anordnung
+
+    private func layoutTool(_ a: JSON) throws -> String {
+        let action = (a["action"] as? String) ?? "zeigen"
+        let ops = ["zeigen": "show", "gross": "big", "groesser": "grow", "kleiner": "shrink", "nebeneinander": "beside",
+                   "untereinander": "below", "tauschen": "swap", "automatisch": "auto"]
+        guard let op = ops[action] else { throw ToolFailure("action „\(action)“ gibt es nicht (\(ops.keys.sorted().joined(separator: ", ")))") }
+        if op == "show" { return panesTool() }
+
+        var request = ControlRequest(cmd: "layout")
+        request.layoutOp = op
+        request.onBehalf = a["auf_auftrag"] as? Bool ?? false
+        let panes = try listPanes()
+        if op != "auto" {
+            guard a["pane"] != nil else { throw ToolFailure("pane fehlt — welche Kachel?") }
+            request.pane = try target(a).0.id
+        }
+        if ["beside", "below", "swap"].contains(op) {
+            guard let other = a["other"] else { throw ToolFailure("\(action) braucht other (die zweite Kachel)") }
+            request.otherPane = try target(["pane": other]).0.id
+        }
+        guard let seen = layoutSeen else {
+            // Nie gelesen: erst den Stand zeigen, nichts ändern.
+            throw ToolFailure("Erst den aktuellen Stand lesen, dann ändern:\n\n" + panesTool())
+        }
+        request.layoutRevision = seen
+        request.paneID = paneID
+        let response: ControlResponse
+        do { response = try transport.send(request) }
+        catch { throw ToolFailure(String(describing: error)) }
+        guard response.ok else {
+            let reason = response.error ?? "LatexTerm lehnt ab"
+            // Veralteter Stand: der neue kommt mit — gelesen gilt er als gesehen, der nächste Versuch trifft.
+            if let layout = response.layout { throw ToolFailure(reason + "\n\n" + lagebild(layout, panes: (try? listPanes()) ?? panes)) }
+            throw ToolFailure(reason)
+        }
+        let fresh = (try? checked(ControlRequest(cmd: "list-panes")))
+        return "Erledigt: \(action)." + (fresh.map { "\n\n" + lagebild($0.layout ?? response.layout, panes: $0.panes ?? panes) } ?? "")
+    }
+
+    /// Die Anordnung als Baum für das Modell — der aktuelle Stand, keine Geschichte.
+    ///
+    ///     Anordnung (Stand 7, automatisch, Fenster 1728×1079 pt):
+    ///     nebeneinander
+    ///     ├ 55 % · 1 · 3F2A91C0 · terminal · claude · ← du
+    ///     └ 45 % · übereinander ✋
+    ///        ├ 60 % · 2 · 8B1D22AA · preview „main.pdf“ · von dir geöffnet
+    ///        └ 40 % · 3 · 5C0E71B2 · web · von dir geöffnet
+    private func lagebild(_ report: LayoutReport?, panes: [PaneInfo]) -> String {
+        guard let report, let root = report.root else { return "" }
+        layoutSeen = report.revision
+        let byID = Dictionary(panes.map { ($0.id.uppercased(), $0) }, uniquingKeysWith: { a, _ in a })
+        let own = selfPane(in: panes)
+        var lines = ["Anordnung (Stand \(report.revision), \(report.automatic ? "automatisch" : "angepasst"), Fenster \(Int(report.width))×\(Int(report.height)) pt):"]
+        var locked = false
+        func label(_ node: LayoutNode) -> String {
+            if let id = node.pane {
+                guard let pane = byID[id] else { return String(id.prefix(8)) }
+                shownIndex[pane.index] = pane.id.uppercased()
+                var parts = ["\(pane.index)", String(pane.id.prefix(8)), pane.kind ?? "terminal"]
+                if let agent = pane.agent { parts.append(agent) }
+                if let title = pane.title, !title.isEmpty, (pane.kind ?? "terminal") != "terminal" { parts[parts.count - 1] += " „\(title.prefix(40))“" }
+                if pane.id == own?.id { parts.append("← du") }
+                else if isMine(pane) { parts.append("von dir geöffnet") }
+                return parts.joined(separator: " · ")
+            }
+            var text = node.axis == .column ? "übereinander" : "nebeneinander"
+            if node.setBy == .mats { text += " ✋"; locked = true }
+            return text
+        }
+        func walk(_ node: LayoutNode, indent: String, last: Bool, share: Double?) {
+            let connector = share == nil ? "" : (last ? "└ " : "├ ")
+            let percent = share.map { "\(Int(($0 * 100).rounded())) % · " } ?? ""
+            lines.append(indent + connector + percent + label(node))
+            let total = node.children.reduce(0) { $0 + $1.weight }
+            let childIndent = share == nil ? "" : indent + (last ? "   " : "│  ")
+            for (i, child) in node.children.enumerated() {
+                walk(child, indent: childIndent, last: i == node.children.count - 1, share: total > 0 ? child.weight / total : nil)
+            }
+        }
+        walk(root, indent: "", last: true, share: nil)
+        if locked { lines.append("✋ = Aufteilung hat Mats von Hand gesetzt — bleibt, außer er bittet ausdrücklich um etwas anderes.") }
+        return lines.joined(separator: "\n")
     }
 
     // MARK: - Vorschau
@@ -873,6 +1026,7 @@ final class MCPServer {
     private func open(_ request: ControlRequest) throws -> PaneInfo {
         guard let pane = try checked(request).pane else { throw ToolFailure("LatexTerm meldet keine neue Kachel") }
         opened.insert(pane.id.uppercased())
+        shownIndex[pane.index] = pane.id.uppercased()
         return pane
     }
 
@@ -889,6 +1043,12 @@ final class MCPServer {
         let matches: [PaneInfo]
         if let index = Int(selector) {
             matches = panes.filter { $0.index == index }
+            // Die Nummer, die das Modell gesehen hat, zeigt inzwischen auf eine andere Kachel (umgeordnet,
+            // Kachel zu): lieber ablehnen als still die falsche treffen — `run_in_pane` führt dort aus.
+            if let seen = shownIndex[index], matches.first?.id.uppercased() != seen {
+                let now = matches.first.map { "jetzt \($0.kind ?? "terminal") \($0.id.prefix(8))" } ?? "gibt es nicht mehr"
+                throw ToolFailure("Kachel-Nummern haben sich verschoben: Nr. \(index) war \(seen.prefix(8)), \(now). Nimm die UUID (erste 8 Zeichen) — aktueller Stand:\n\n" + panesTool())
+            }
         } else {
             matches = panes.filter { $0.id.uppercased().hasPrefix(selector.uppercased()) }
         }
@@ -925,6 +1085,7 @@ final class MCPServer {
     private func agentOf(_ pane: PaneInfo) -> String? { pane.runningAgent }
 
     private func describe(_ pane: PaneInfo, own: PaneInfo?) -> String {
+        shownIndex[pane.index] = pane.id.uppercased()
         var parts = ["\(pane.index)", String(pane.id.prefix(8)), pane.kind ?? "terminal"]
         // Wo die Kachel „ist“: Ordner der Shell, bei App-Kacheln ihr einziges Arg (Web: die Datei).
         let shown = pane.args.flatMap { $0.count == 1 ? $0.values.first : nil } ?? pane.cwd

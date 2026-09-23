@@ -27,6 +27,8 @@ protocol Pane: AnyObject {
     var currentDirectory: String? { get }
     /// Darf der Steuerkanal die Kachel ohne `--force` schließen?
     var closeGuard: CloseGuard { get }
+    /// Wie die Kachel am liebsten aussieht (Kachel-Layout): Seitenverhältnis, Mindestgröße.
+    var layoutPreference: LayoutPreference { get }
     /// Rückkanal zur Split-View; die Kachel hält ihn schwach.
     var host: PaneHost? { get set }
     /// Wer die Kachel geöffnet hat — `PaneOpener.user` (Menü, Tastatur, Home) oder die UUID der Kachel,
@@ -104,6 +106,8 @@ protocol PaneHost: AnyObject {
     func paneRequestsAttention(_ pane: any Pane, title: String, body: String?)
     /// Sieht gerade jemand diese Kachel an (App aktiv, Fenster vorn, Kachel fokussiert)?
     func paneIsObserved(_ pane: any Pane) -> Bool
+    /// Die Wunschform hat sich geändert (Inhalt geladen: PDF hochkant, Bild im Querformat).
+    func paneLayoutPreferenceChanged(_ pane: any Pane)
 
     // Terminal/Home: die Split-View legt die neue Kachel an, die anfragende startet darin.
 

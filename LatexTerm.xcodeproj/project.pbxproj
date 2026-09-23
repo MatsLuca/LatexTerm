@@ -26,6 +26,7 @@
 		D700000000000000000000B2 /* LatexTermDockTile.docktileplugin in Embed Dock Tile PlugIn */ = {isa = PBXBuildFile; fileRef = D700000000000000000000F2 /* LatexTermDockTile.docktileplugin */; settings = {ATTRIBUTES = (CodeSignOnCopy, ); }; };
 		D75D4BE25F948E58E7452A4A /* LaTeXReadable.swift in Sources */ = {isa = PBXBuildFile; fileRef = 87B17461A01627511CE814CD /* LaTeXReadable.swift */; };
 		DE7C16577FD1D0CEC0F41A44 /* MCPServer.swift in Sources */ = {isa = PBXBuildFile; fileRef = FB73F1331D78CD67DA565FA8 /* MCPServer.swift */; };
+		DF95235B8F7EBEEF98BB1CD1 /* PaneLayoutTree.swift in Sources */ = {isa = PBXBuildFile; fileRef = 114CC37ADFF46B16EA8FA202 /* PaneLayoutTree.swift */; };
 		E353DA6194B0929725C7266C /* LaTeXDetectorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 977EED528F0310FA6EFC07B0 /* LaTeXDetectorTests.swift */; };
 		EADA198C4EE2DABAD1D93F42 /* Cocoa.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 04835B2D13D44F2B9B6B788A /* Cocoa.framework */; };
 /* End PBXBuildFile section */
@@ -93,6 +94,7 @@
 /* Begin PBXFileReference section */
 		04835B2D13D44F2B9B6B788A /* Cocoa.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = Cocoa.framework; path = Platforms/MacOSX.platform/Developer/SDKs/MacOSX26.0.sdk/System/Library/Frameworks/Cocoa.framework; sourceTree = DEVELOPER_DIR; };
 		111ECD37CE79AF702ABF98CA /* PromptBoxLocatorTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PromptBoxLocatorTests.swift; path = LatexTermTests/PromptBoxLocatorTests.swift; sourceTree = SOURCE_ROOT; };
+		114CC37ADFF46B16EA8FA202 /* PaneLayoutTree.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = PaneLayoutTree.swift; path = LatexTerm/Control/PaneLayoutTree.swift; sourceTree = SOURCE_ROOT; };
 		1F65701A38414161A8C4306D /* ControlClient.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = ControlClient.swift; path = LatexTermCLI/ControlClient.swift; sourceTree = SOURCE_ROOT; };
 		2309BFE1D4C333D220190768 /* LaTeXReadableTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; name = LaTeXReadableTests.swift; path = LatexTermTests/LaTeXReadableTests.swift; sourceTree = SOURCE_ROOT; };
 		3C6EE11AF5CEA3FC69B0099C /* latexterm */ = {isa = PBXFileReference; includeInIndex = 0; path = latexterm; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -239,6 +241,7 @@
 				5F5490CD0233B73745FB519F /* ControlProtocol.swift */,
 				1F65701A38414161A8C4306D /* ControlClient.swift */,
 				FB73F1331D78CD67DA565FA8 /* MCPServer.swift */,
+				114CC37ADFF46B16EA8FA202 /* PaneLayoutTree.swift */,
 			);
 			name = LatexTermCLI;
 			sourceTree = SOURCE_ROOT;
@@ -442,6 +445,7 @@
 				845E18B3F3DD4D250DEA68BE /* ControlProtocol.swift in Sources */,
 				5950A2A9928726E72F836408 /* ControlClient.swift in Sources */,
 				DE7C16577FD1D0CEC0F41A44 /* MCPServer.swift in Sources */,
+				DF95235B8F7EBEEF98BB1CD1 /* PaneLayoutTree.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

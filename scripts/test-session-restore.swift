@@ -28,6 +28,26 @@ struct SessionRestoreTests {
         let owned = PaneSnapshot(kind: "web", args: ["url": "/tmp/a.html"], id: "AAAA-1", openedBy: "BBBB-2")
         check(try JSONDecoder().decode(PaneSnapshot.self, from: try JSONEncoder().encode(owned)) == owned,
               "id and openedBy survive the round trip")
+        // Kachel-Layout: Begleiter und angepasste Anordnung überleben; das Layout behält nur Kacheln des
+        // Snapshots; ein kaputtes Layout kostet nur die Anordnung, nie die Kacheln; alte Snapshots haben keins.
+        let companion = PaneSnapshot(kind: "preview", args: ["url": "/tmp/a.pdf"], id: "CCCC-3", openedBy: "AAAA-1",
+                                     companionOf: "AAAA-1")
+        check(try JSONDecoder().decode(PaneSnapshot.self, from: try JSONEncoder().encode(companion)) == companion,
+              "companionOf survives the round trip")
+        let arranged = LayoutNode.split(.row, [.leaf("AAAA-1", weight: 0.6), .leaf("CCCC-3", weight: 0.4)], setBy: .mats)
+        let laidOut = SessionSnapshot.Window(entries: [
+            (snapshot: PaneSnapshot(kind: "terminal", id: "AAAA-1"), focused: true, zoomed: false),
+            (snapshot: nil, focused: false, zoomed: false),
+            (snapshot: companion, focused: false, zoomed: false),
+        ], layout: .split(.row, [arranged, .leaf("GONE-9")]))
+        check(laidOut.layout == arranged, "layout keeps only snapshot panes: \(String(describing: laidOut.layout))")
+        let laidOutSnap = SessionSnapshot(windows: [laidOut], restoreOnce: true)
+        check(try JSONDecoder().decode(SessionSnapshot.self, from: JSONEncoder().encode(laidOutSnap)) == laidOutSnap,
+              "layout round trip")
+        let brokenLayout = try JSONDecoder().decode(SessionSnapshot.Window.self,
+            from: Data(#"{"panes":[{"kind":"home"}],"layout":{"children":"kaputt"}}"#.utf8))
+        check(brokenLayout.panes.count == 1 && brokenLayout.layout == nil, "broken layout drops only the layout")
+        check(window.layout == nil, "no layout = automatic")
         let v1 = try JSONDecoder().decode(SessionSnapshot.self,
             from: Data(##"{"version":1,"paneDirectories":["/tmp/a",null],"paneAccents":["#FFFFFF"]}"##.utf8))
         check(v1.windows == [SessionSnapshot.Window(panes: [PaneSnapshot(kind: "terminal", args: ["cwd": "/tmp/a"]),

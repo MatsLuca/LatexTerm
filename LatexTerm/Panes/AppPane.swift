@@ -52,6 +52,7 @@ final class AppPane: Pane, PaneContentDelegate {
     var accentName: String? { nil }
     var currentDirectory: String? { content.directory }
     var closeGuard: CloseGuard { content.closeGuard }
+    var layoutPreference: LayoutPreference { content.layoutPreference }
 
     func handle(_ command: PaneCommand) -> Bool { content.handle(command) }
     /// `enter`/`paste` gelten nur für Kacheln mit Eingabezeile — ein Inhalt bekommt den Text, wie er ist.
@@ -80,6 +81,8 @@ final class AppPane: Pane, PaneContentDelegate {
     func contentRequestsAttention(title: String, body: String?) {
         host?.paneRequestsAttention(self, title: title, body: body)
     }
+
+    func contentLayoutPreferenceChanged() { host?.paneLayoutPreferenceChanged(self) }
 
     var contentOpener: String? { openedBy }
 

@@ -25,7 +25,7 @@ enum ControlProtocol {
 }
 
 struct ControlRequest: Codable {
-    /// "list-panes" | "new-pane" | "send" | "call" | "zoom" | "focus" | "close-pane" | "status" | "pane-kinds"
+    /// "list-panes" | "new-pane" | "send" | "call" | "zoom" | "focus" | "close-pane" | "status" | "pane-kinds" | "layout"
     var cmd: String
     /// Ziel-Kachel: 1-basierter Index ("2") oder UUID(-Präfix). Fehlt er, nimmt
     /// die App bei zoom/focus/send die Kachel aus `paneID` (= LATEXTERM_PANE_ID
@@ -54,6 +54,18 @@ struct ControlRequest: Codable {
     /// close-pane: auch bei arbeitender Session oder Vordergrundprozess schließen.
     /// Default false: dann nur eine ruhende Shell ohne Vordergrundprozess.
     var force: Bool?
+    /// new-pane (Kachel-Layout, Capability `layout`): "beside" = neben die aufrufende Kachel (Default,
+    /// sobald es einen Aufrufer gibt), "own" = eigenständig (neue Agenten-Session).
+    var placement: String?
+    /// layout: Absicht "show" | "big" | "grow" | "shrink" | "beside" | "below" | "swap" | "auto";
+    /// Ziel in `pane`, zweite Kachel in `otherPane`.
+    var layoutOp: String?
+    var otherPane: String?
+    /// layout: Mats hat ausdrücklich darum gebeten — fremde Kacheln und seine Handarbeit dürfen geändert werden.
+    var onBehalf: Bool?
+    /// layout mit Absicht: Stand-Nummer (`LayoutReport.revision`), die der Aufrufer zuletzt gelesen hat.
+    /// Pflicht für Agenten; hat sich die Anordnung seitdem geändert, lehnt die App ab (erst Stand lesen).
+    var layoutRevision: Int?
     /// Optional precise status identity. Legacy status senders remain valid Claude senders.
     var agent: String?
     var sessionID: String?
@@ -85,6 +97,8 @@ struct PaneInfo: Codable {
     var foreground: String? = nil
     /// "user" = von Hand geöffnet; sonst UUID der Kachel, aus der ein Agent sie geöffnet hat.
     var openedBy: String? = nil
+    /// Kachel-Layout: UUID der Kachel, in deren Nebenspalte diese steht; nil = eigenständig.
+    var companionOf: String? = nil
 }
 
 /// Selbstbeschreibung einer Kachelart für Agenten (Capability `pane-kind-info`, 22.09.2026):
@@ -124,7 +138,7 @@ struct PaneKindAction: Codable, Equatable {
 struct ControlResponse: Codable {
     var ok: Bool
     var capabilities: [String]? = ["agent-sessions", "all-windows", "pane-kinds", "pane-kind-info", "pane-details", "mailbox",
-                                   "quiet-new-pane", "paste", "pane-call"]
+                                   "quiet-new-pane", "paste", "pane-call", "layout"]
     var error: String?
     /// list-panes: alle Kacheln.
     var panes: [PaneInfo]?
@@ -136,6 +150,8 @@ struct ControlResponse: Codable {
     var kindInfos: [PaneKindInfo]? = nil
     /// call: Antwort des Kachel-Inhalts (Capability `pane-call`; Scratchpad: JSON).
     var reply: String? = nil
+    /// list-panes / new-pane / layout mit Aufrufer: Anordnung seines Fensters (Capability `layout`).
+    var layout: LayoutReport? = nil
 
     static func failure(_ message: String) -> ControlResponse {
         ControlResponse(ok: false, error: message)

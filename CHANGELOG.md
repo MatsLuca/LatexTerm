@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Kachel-Layout (23.09.).** Panes are arranged by what they show instead of an equal-size grid: each pane kind
+  states a preferred shape (a PDF page stays portrait, an image keeps its format, a terminal keeps ~80 columns), and
+  panes an agent opens land in a side column next to that agent's session instead of halving it. Drag the gaps
+  between panes to resize (double-click = equal); *Pane → Arrange automatically* hands the layout back to the
+  automatic mode. Without side panes the automatic layout is pixel-identical to the old grid. The arrangement
+  (including dragged sizes) survives ⌥⌘R. Agents see the current arrangement in `panes` and can rearrange their own
+  panes with the MCP tool `layout` — only on the arrangement they last read, and never your hand-set sizes unless you
+  ask.
+
 ### Fixed
 - **Einzeilige `$$…$$`-Formel winzig (23.09., README-Dreh).** KaTeX' Display-Rand (1em oben/unten) zählte beim Einpassen mit; ohne leere Nachbarzeilen schrumpfte die Formel auf ~40 %. Der Rand ist im Overlay jetzt 0 (die Box zentriert selbst) — dieselbe Formel passt mit ~90 % in eine Zeile.
 

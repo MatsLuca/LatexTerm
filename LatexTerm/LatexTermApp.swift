@@ -343,6 +343,8 @@ struct LatexTermApp: App {
                 Divider()
                 Button("Zoomen / Zoom beenden") { paneCommand(.zoom) }
                     .keyboardShortcut(.return, modifiers: .command)
+                // Kachel-Layout: gezogene Trennlinien und Agenten-Anordnung verwerfen.
+                Button("Automatisch anordnen") { paneCommand(.rearrange) }
                 Button("Suchen…") { paneCommand(.find) }
                     .keyboardShortcut("f", modifiers: .command)
                 Divider()

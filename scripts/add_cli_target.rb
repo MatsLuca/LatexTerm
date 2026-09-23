@@ -18,7 +18,7 @@ PROJECT = "LatexTerm.xcodeproj"
 TARGET  = "LatexTermCLI"
 BINARY  = "latexterm"
 SOURCES = ["LatexTermCLI/main.swift", "LatexTermCLI/ControlClient.swift", "LatexTermCLI/MCPServer.swift",
-           "LatexTerm/Control/ControlProtocol.swift"]
+           "LatexTerm/Control/ControlProtocol.swift", "LatexTerm/Control/PaneLayoutTree.swift"]
 
 proj = Xcodeproj::Project.open(PROJECT)
 app  = proj.targets.find { |t| t.name == "LatexTerm" }

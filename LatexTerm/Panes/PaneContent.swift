@@ -38,6 +38,9 @@ protocol PaneContent: AnyObject {
     var directory: String? { get }
     /// Schließschutz für `close-pane` ohne `--force` (Default `.free`).
     var closeGuard: CloseGuard { get }
+    /// Wunschform für das Kachel-Layout (Default `.flexible`: egal, klein geht). Hängt sie vom
+    /// Inhalt ab, nach dem Laden `delegate?.contentLayoutPreferenceChanged()` rufen.
+    var layoutPreference: LayoutPreference { get }
     /// Rückkanal zum Wirt — im Inhalt als `weak var` deklarieren.
     var delegate: PaneContentDelegate? { get set }
 
@@ -62,6 +65,7 @@ extension PaneContent {
     var accent: NSColor? { nil }
     var directory: String? { nil }
     var closeGuard: CloseGuard { .free }
+    var layoutPreference: LayoutPreference { .flexible }
     func applyTheme(_ theme: TerminalTheme) {}
     func receive(_ text: String) -> Bool { false }
     func call(_ text: String) throws -> String {
@@ -80,6 +84,8 @@ protocol PaneContentDelegate: AnyObject {
     func contentRequestsClose()
     /// Notification, wenn niemand hinsieht.
     func contentRequestsAttention(title: String, body: String?)
+    /// Die Wunschform hat sich geändert (`layoutPreference`); das Layout ordnet höchstens einmal neu.
+    func contentLayoutPreferenceChanged()
     /// Wer die Kachel geöffnet hat (`Pane.openedBy`): Kachel-UUID eines Agenten, "user" oder nil.
     var contentOpener: String? { get }
     /// Kacheln mit laufender Claude-/Codex-Session (alle Fenster).

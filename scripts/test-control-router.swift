@@ -14,6 +14,11 @@ final class WindowFixture: ControlCommandHandler {
         received.append(request)
         return ControlResponse(ok: true, pane: controlPanes.first { $0.id == request.pane })
     }
+    var reportsAsked = 0
+    func layoutReport() -> LayoutReport? {
+        reportsAsked += 1
+        return LayoutReport(revision: controlPanes.count, automatic: true, root: nil, width: 100, height: 100)
+    }
 }
 
 @main
@@ -27,6 +32,10 @@ struct RouterTests {
         router.register(first)
         assert(router.panes.map(\.index) == [1, 2, 3])
         assert(router.route(ControlRequest(cmd: "list-panes")).panes?.count == 3)
+        // Lagebild: nur mit Aufrufer, aus dessen Fenster.
+        assert(router.route(ControlRequest(cmd: "list-panes")).layout == nil)
+        let listed = router.route(ControlRequest(cmd: "list-panes", paneID: "bbbb-1"))
+        assert(listed.layout?.revision == 1 && second!.reportsAsked == 1 && first.reportsAsked == 0)
         assert(router.route(ControlRequest(cmd: "focus", pane: "3")).ok)
         assert(second!.received.last?.pane == "BBBB-1")
         assert(router.route(ControlRequest(cmd: "focus", pane: "aaaa-2")).pane?.index == 2)

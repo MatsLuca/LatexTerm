@@ -1,11 +1,16 @@
 import AppKit
 import os
 
-/// Kachelt beliebig viele Kacheln (`any Pane`) in einem automatischen Grid. Cmd+T hängt eine
-/// Kachel an, Cmd+W/`exit` entfernt eine; bei jeder Änderung wird neu gekachelt. Die
-/// Grid-Form (Reihen × Spalten) wird abhängig von Fensterbreite UND -höhe gewählt, sodass
-/// die Zellen einem Ziel-Seitenverhältnis möglichst nahekommen. Reihen sind gleich hoch,
-/// jede Reihe teilt die Breite unabhängig auf (Masonry: obere Reihen ggf. eine Spalte mehr).
+/// Kachelt beliebig viele Kacheln (`any Pane`). Cmd+T hängt eine Kachel an, Cmd+W/`exit` entfernt
+/// eine; bei jeder Änderung wird neu angeordnet.
+///
+/// Kachel-Layout (23.09.2026, Bauplan claude-werkstatt `plans/kachel-layout_2026-09-23.md`): die
+/// Anordnung ist ein Baum (`LayoutNode`) — die eine Wahrheit für Frames, Lesereihenfolge (Index,
+/// Chips) und Trennlinien. Ohne eigenen Zustand rechnet ihn die Automatik (`AutoLayout.build`) aus
+/// Kacheln, Begleitern und Fenstergröße: ohne Begleiter exakt das frühere Raster, mit Begleitern
+/// steht jede Kachel ihres Agenten in einer Nebenspalte rechts neben ihm. Zieht Mats eine Trennlinie
+/// oder ordnet ein Agent an, wird der Baum angepasst (`manualLayout`) und neue Kacheln werden nur noch
+/// eingesetzt, ohne den Rest umzuwerfen; „Automatisch anordnen“ gibt ihn zurück.
 final class TerminalSplitView: NSView {
 
     /// Regel (Kachel-Protokoll): die Split-View spricht nur `Pane`. `as? TerminalPane` steht an
@@ -16,6 +21,23 @@ final class TerminalSplitView: NSView {
     /// Das Grid darunter bleibt unangetastet — Entzoomen ist ein normales relayout().
     /// Weak als Robustheitsnetz; jede Grid-Änderung entzoomt ohnehin explizit.
     private weak var zoomedPane: (any Pane)?
+
+    // Kachel-Layout
+    /// Angepasste Anordnung (Mats zog eine Trennlinie, ein Agent ordnete an); nil = Automatik.
+    private var manualLayout: LayoutNode?
+    /// Kachel → Kachel, neben der sie steht (Begleiter, meist: der Agent, der sie geöffnet hat).
+    private var companionOf: [UUID: UUID] = [:]
+    /// Kacheln, deren Wunschform nach dem Laden schon einmal gemeldet wurde — danach wird für sie
+    /// nicht mehr umgeordnet (ein neu geladenes PDF anderer Form lässt das Layout stehen).
+    private var settledPreferences: Set<UUID> = []
+    /// Stege, an denen Mats ziehen kann (je Teilungsgrenze einer).
+    private var dividerViews: [PaneDividerView] = []
+    /// Laufender Zug an einer Trennlinie: Ausgangsbaum und Linie.
+    private var dragOrigin: (tree: LayoutNode, divider: LayoutDivider)?
+    /// Stand-Nummer der Anordnung (`LayoutReport.revision`): wächst mit jeder Änderung. Agenten müssen
+    /// die zuletzt gelesene mitschicken, um umzuordnen — so ordnet keiner auf einem veralteten Bild um.
+    private var layoutRevision = 0
+
     private let vibrancyView = NSVisualEffectView()
     private var isFirstLayout = true
     private var newHomeObserver: NSObjectProtocol?
@@ -41,10 +63,8 @@ final class TerminalSplitView: NSView {
     private static var gapColor: NSColor { ThemeStore.shared.theme.gap }
     private var themeObserver: NSObjectProtocol?
 
-    /// Ziel-Seitenverhältnis (Breite/Höhe) einer Kachel. < 1 = leicht hochkant → erlaubt
-    /// mehr Spalten nebeneinander, bevor eine Reihe aufgemacht wird. Höher = früher umbrechen.
-    /// 0.82 ergibt auf ~3:2-Fenstern: bis 3 nebeneinander, ab 4 → 2×2, dann auffüllen.
-    private static let idealCellAspect: CGFloat = 0.82
+    /// Kleinste Kachelbreite/-höhe beim Ziehen einer Trennlinie (pt).
+    private static let dragMinimum: Double = 120
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
@@ -110,6 +130,7 @@ final class TerminalSplitView: NSView {
             case .close: self.paneRequestsClose(pane)
             case .zoom: self.paneRequestsZoom(pane)
             case .find: _ = pane.handle(.find)
+            case .rearrange: self.rearrangeAutomatically()
             }
         }
 
@@ -199,9 +220,11 @@ final class TerminalSplitView: NSView {
     private func windowSnapshot() -> SessionSnapshot.Window {
         SessionSnapshot.Window(entries: panes.map { pane in
             (snapshot: pane.snapshot().map {
-                var s = $0; s.id = pane.id.uuidString; s.openedBy = pane.openedBy; return s
+                var s = $0; s.id = pane.id.uuidString; s.openedBy = pane.openedBy
+                s.companionOf = companionOf[pane.id]?.uuidString
+                return s
             }, focused: isFocused(pane), zoomed: pane === zoomedPane)
-        })
+        }, layout: manualLayout)
     }
 
     /// Beim ersten Zugriff einmal von der Platte geholt, dann fensterweise verteilt.
@@ -217,9 +240,32 @@ final class TerminalSplitView: NSView {
 
     /// Kacheln eines gespeicherten Fensters in derselben Reihenfolge anlegen.
     private func restore(_ plan: SessionSnapshot.Window) {
-        let restored = plan.panes.map { restorePane($0) }
+        var idMap: [String: UUID] = [:]
+        let restored = plan.panes.map { saved -> any Pane in
+            let pane = restorePane(saved)
+            if let old = saved.id?.uppercased() { idMap[old] = pane.id }
+            return pane
+        }
+        restoreRelations(plan.panes, idMap: idMap)
+        // Angepasste Anordnung mit den (ggf. neuen) Kachel-IDs; was nicht zurückkam, fällt heraus.
+        if let saved = plan.layout,
+           let mapped = saved.mappingPanes({ idMap[$0.uppercased()]?.uuidString })?
+               .normalized(keeping: Set(panes.map { $0.id.uuidString })),
+           mapped.paneIDs.count > 1 {
+            manualLayout = mapped
+            layoutChanged()
+        }
         pendingRestoreLayout = (focused: plan.focused.flatMap { restored.indices.contains($0) ? restored[$0] : nil },
                                 zoomed: plan.zoomed.flatMap { restored.indices.contains($0) ? restored[$0] : nil })
+    }
+
+    /// Begleiter-Beziehungen aus dem Snapshot, übersetzt auf die wiederhergestellten Kachel-IDs.
+    private func restoreRelations(_ saved: [PaneSnapshot], idMap: [String: UUID]) {
+        for entry in saved {
+            guard let old = entry.id?.uppercased(), let pane = idMap[old],
+                  let target = entry.companionOf?.uppercased(), let anchor = idMap[target], anchor != pane else { continue }
+            companionOf[pane] = anchor
+        }
     }
 
     /// Eine Kachel wie gespeichert: Agenten-Session → Home, das sie per „Weiter“ fortsetzt
@@ -236,7 +282,8 @@ final class TerminalSplitView: NSView {
             pane = addPane(home: true, id: id)
         case .app(let kind, let args):
             // Art unbekannt (älterer Build) oder Args ungültig: der Platz bleibt als Home erhalten.
-            pane = (try? addAppPane(kind: kind, args: args, id: id)) ?? addPane(home: true, id: id)
+            // Begleiter-Beziehungen setzt der Aufrufer danach aus dem Snapshot (`restoreRelations`).
+            pane = (try? addAppPane(kind: kind, args: args, placement: .own, id: id)) ?? addPane(home: true, id: id)
         case .shell(let cwd):
             pane = addPane(startingIn: cwd, id: id)
         case .resume(let agent, let sessionID, let cwd, let accentName):
@@ -277,7 +324,16 @@ final class TerminalSplitView: NSView {
         let leftovers = Self.restoreQueue.drain()
         guard !leftovers.isEmpty else { return }
         let focused = panes.first(where: { isFocused($0) }), zoomed = zoomedPane
-        for window in leftovers { window.panes.forEach { restorePane($0) } }
+        for window in leftovers {
+            var idMap: [String: UUID] = [:]
+            for saved in window.panes {
+                let pane = restorePane(saved)
+                if let old = saved.id?.uppercased() { idMap[old] = pane.id }
+            }
+            restoreRelations(window.panes, idMap: idMap)
+        }
+        layoutChanged()
+        relayout(animated: false)
         // Nach den Fokus-Sprüngen der neuen Kacheln (addPane fokussiert im nächsten Durchlauf).
         DispatchQueue.main.async { [weak self] in self?.applyRestoredLayout(focused: focused, zoomed: zoomed) }
     }
@@ -441,12 +497,22 @@ final class TerminalSplitView: NSView {
         relayout(animated: false)
     }
 
+    /// Wohin eine neue Kachel kommt (Kachel-Layout).
+    enum PanePlacement {
+        /// Eigenständig: Terminal, Home, neue Agenten-Session, Wiederherstellen.
+        case own
+        /// Neben diese Kachel (ein Agent öffnete sie per Steuerkanal/MCP).
+        case beside(UUID)
+        /// Von Hand geöffnete App-Kachel: neben die fokussierte Kachel.
+        case besideFocused
+    }
+
     /// Terminal- oder Home-Kachel anhängen.
     @discardableResult
     func addPane(startingIn directory: String? = nil, home: Bool = false, focus: Bool = true,
-                 id: UUID = UUID()) -> TerminalPane {
+                 placement: PanePlacement = .own, id: UUID = UUID()) -> TerminalPane {
         let pane = TerminalPane(id: id)
-        mount(pane)
+        mount(pane, placement: placement)
         if home {
             pane.showHome()
         } else {
@@ -459,21 +525,32 @@ final class TerminalSplitView: NSView {
     /// App-Kachel (Scratchpad, …) aus der Registry anhängen; Fehler = unbekannte Art oder Args.
     @discardableResult
     func addAppPane(kind: String, args: [String: String] = [:], focus: Bool = true,
-                    id: UUID = UUID()) throws -> AppPane {
+                    placement: PanePlacement = .besideFocused, id: UUID = UUID()) throws -> AppPane {
         let pane = try PaneKindRegistry.makeAppPane(kind: kind, args: args, id: id)
-        mount(pane)
+        mount(pane, placement: placement)
         settle(pane, focus: focus)
         return pane
     }
 
     /// Einhängen, für jede Kachelart gleich. Grid-Änderung beendet einen aktiven Zoom: die neue
     /// Kachel soll sichtbar im Grid entstehen, nicht unsichtbar unter der gezoomten (⌘T/⌘1–9-Policy).
-    private func mount(_ pane: any Pane) {
+    private func mount(_ pane: any Pane, placement: PanePlacement) {
         pane.host = self
         // Standard: von Hand geöffnet. Steuerkanal (Agent) und Restore setzen es danach selbst.
         pane.openedBy = PaneOpener.user
+        cancelDividerDrag()
+        let focused = panes.first(where: { isFocused($0) })
         setZoomedPane(nil)
         panes.append(pane)
+        switch placement {
+        case .own: break
+        case .beside(let anchor):
+            if anchor != pane.id, panes.contains(where: { $0.id == anchor }) { companionOf[pane.id] = anchor }
+        case .besideFocused:
+            if let focused { companionOf[pane.id] = focused.id }
+        }
+        if manualLayout != nil { insertIntoManualLayout(pane, focused: focused) }
+        layoutChanged()
         updateTitlebarHUD()
         addSubview(pane.container)
     }
@@ -506,7 +583,15 @@ final class TerminalSplitView: NSView {
         // Auch wenn eine ANDERE (verdeckte) Kachel stirbt: das Grid darunter ändert
         // sich — Zoom beenden, damit der Nutzer den neuen Zustand sieht.
         setZoomedPane(nil)
+        cancelDividerDrag()
         panes.remove(at: idx)
+        // Layout: ihr Platz fällt an ihre Nachbarn im Block; ihre Begleiter werden eigenständig.
+        companionOf[pane.id] = nil
+        for (companion, anchor) in companionOf where anchor == pane.id { companionOf[companion] = nil }
+        settledPreferences.remove(pane.id)
+        if let root = manualLayout { manualLayout = LayoutEdit.remove(pane.id.uuidString, from: root) }
+        if panes.count <= 1 { manualLayout = nil }
+        layoutChanged()
         updateTitlebarHUD()
         pane.container.removeFromSuperview()
         guard !panes.isEmpty else { window?.close(); return }
@@ -584,9 +669,10 @@ final class TerminalSplitView: NSView {
         enum Level { case allLong, focusedLong, allShort, glyph }
         let levels: [Level] = [.allLong, .focusedLong, .allShort, .glyph]
         var specs: [(pane: any Pane, spec: PaneChipView.Spec)] = []
+        let ordered = displayPanes   // Chips in Lesereihenfolge des Layouts
         for level in levels {
             specs = []
-            for pane in panes {
+            for pane in ordered {
                 let chip = pane.statusChip
                 let focused = isFocused(pane)
                 let text: String?
@@ -731,98 +817,114 @@ final class TerminalSplitView: NSView {
         updateTitlebarHUD()
     }
 
-    // MARK: - Grid
+    // MARK: - Layout
 
-    /// Wählt die Reihenzahl für `n` Kacheln so, dass das Zellen-Seitenverhältnis dem Ziel
-    /// am nächsten kommt. Bei Gleichstand gewinnt die kleinere Reihenzahl (= mehr Spalten,
-    /// breiter). Für die Bewertung zählt die volle Spaltenzahl `ceil(n/rows)` (die schmalsten
-    /// Zellen sind der limitierende Faktor).
-    private func gridRows(for n: Int, width: CGFloat, height: CGFloat) -> Int {
-        guard n > 1, width > 0, height > 0 else { return 1 }
-        let targetLog = log(Self.idealCellAspect)
-        var bestRows = 1
-        var bestScore = CGFloat.greatestFiniteMagnitude
-        for rows in 1...n {
-            let cols = Int((Double(n) / Double(rows)).rounded(.up))
-            let cellAspect = (width / CGFloat(cols)) / (height / CGFloat(rows))
-            let score = abs(log(cellAspect) - targetLog)
-            if score < bestScore - 1e-9 {   // strikt besser → Gleichstand behält weniger Reihen
-                bestScore = score
-                bestRows = rows
-            }
-        }
-        return bestRows
-    }
-
-    /// Verteilt `n` Kacheln top-heavy auf `rows` Reihen (obere Reihen kriegen die Extra-Kachel).
-    private func rowCounts(n: Int, rows: Int) -> [Int] {
-        let base = n / rows, rem = n % rows
-        return (0..<rows).map { $0 < rem ? base + 1 : base }
-    }
-
-    /// Setzt die Frames aller Kacheln gemäß aktuellem Grid. Kanten werden pixelgerundet,
-    /// damit keine Lücken/Überlappungen durch Rundung entstehen; `gap` als dunkler Steg.
+    /// Setzt die Frames aller Kacheln gemäß aktuellem Layout-Baum.
     /// Fensterbreite entscheidet, wie ausführlich die Titelleisten-Chips sein dürfen.
     override func viewDidEndLiveResize() {
         super.viewDidEndLiveResize()
         updateTitlebarHUD()
     }
 
+    /// Der Baum, der gerade gilt: angepasst (bereinigt, jede Kachel drin) oder von der Automatik.
+    private func effectiveLayout() -> LayoutNode? {
+        let ids = Set(panes.map { $0.id.uuidString })
+        if var manual = manualLayout?.normalized(keeping: ids) {
+            // Sicherheitsnetz: jede Kachel steht im Baum — sonst läge sie unsichtbar unter den anderen.
+            for pane in panes where !manual.paneIDs.contains(pane.id.uuidString) {
+                manual = LayoutEdit.insert(pane.id.uuidString, companionOf: nil, anchorCompanions: [], focusBlock: [],
+                                           preference: pane.layoutPreference, anchorPreference: .flexible,
+                                           into: manual, bounds: bounds, gap: Double(Self.gap))
+            }
+            return manual
+        }
+        let items = panes.map { pane in
+            LayoutItem(id: pane.id.uuidString, companionOf: companionOf[pane.id]?.uuidString,
+                       preference: pane.layoutPreference)
+        }
+        return AutoLayout.build(items, width: Double(bounds.width), height: Double(bounds.height), gap: Double(Self.gap))
+    }
+
+    /// Kacheln in Lesereihenfolge des Layouts (links → rechts, oben → unten): Index im Steuerkanal,
+    /// Titelleisten-Chips. `panes` bleibt die Entstehungsreihenfolge (Snapshot, Fokus-Nachfolger).
+    private var displayPanes: [any Pane] {
+        guard panes.count > 1, let root = effectiveLayout() else { return panes }
+        var byID = Dictionary(panes.map { ($0.id.uuidString, $0) }, uniquingKeysWith: { a, _ in a })
+        let ordered = root.paneIDs.compactMap { byID.removeValue(forKey: $0) }
+        return ordered + panes.filter { byID[$0.id.uuidString] != nil }
+    }
+
+    /// Wurzel-Kachel einer Kachel: der Begleiter eines Begleiters gehört zu dessen Kachel.
+    private func rootAnchor(of id: UUID) -> UUID {
+        var current = id
+        var visited: Set<UUID> = [id]
+        while let next = companionOf[current], panes.contains(where: { $0.id == next }) {
+            guard visited.insert(next).inserted else { return id }
+            current = next
+        }
+        return current
+    }
+
+    /// Kacheln, die zu `anchor` gehören (sie selbst und alle ihre Begleiter), ohne `excluding`.
+    private func block(of anchor: UUID, excluding: UUID? = nil) -> Set<String> {
+        Set(panes.filter { $0.id != excluding && rootAnchor(of: $0.id) == anchor }.map { $0.id.uuidString })
+    }
+
+    /// Angepasstes Layout: neue Kachel einsetzen, ohne den Rest umzuwerfen (Begleiter in die Nebenspalte
+    /// ihrer Kachel, eigenständige neben den Block der fokussierten).
+    private func insertIntoManualLayout(_ pane: any Pane, focused: (any Pane)?) {
+        guard let root = manualLayout else { return }
+        let anchor = companionOf[pane.id].map { rootAnchor(of: $0) }
+        let anchorPane = anchor.flatMap { a in panes.first { $0.id == a } }
+        let companions = anchor.map { block(of: $0, excluding: pane.id).subtracting([$0.uuidString]) } ?? []
+        let focusBlock = focused.map { block(of: rootAnchor(of: $0.id), excluding: pane.id) } ?? []
+        manualLayout = LayoutEdit.insert(pane.id.uuidString, companionOf: anchor?.uuidString,
+                                         anchorCompanions: companions, focusBlock: focusBlock,
+                                         preference: pane.layoutPreference,
+                                         anchorPreference: anchorPane?.layoutPreference ?? .flexible,
+                                         into: root, bounds: bounds, gap: Double(Self.gap))
+    }
+
     private func relayout(animated: Bool = false) {
-        let n = panes.count
-        guard n > 0 else { return }
+        guard !panes.isEmpty else { return }
         let W = bounds.width, H = bounds.height
-        guard W > 0, H > 0 else { return }
-        let g = Self.gap
-        let rows = gridRows(for: n, width: W, height: H)
-        let counts = rowCounts(n: n, rows: rows)
+        guard W > 0, H > 0, let root = effectiveLayout() else { return }
+        if manualLayout != nil { manualLayout = root }   // bereinigte Fassung behalten
+        let (slots, lines) = LayoutGeometry.layout(root, in: bounds, gap: Self.gap)
+        let slotByID = Dictionary(slots.map { ($0.pane, $0) }, uniquingKeysWith: { a, _ in a })
 
         var frames: [NSRect] = []
         var cornerMasks: [CACornerMask] = []
         var cornerRadii: [CGFloat] = []
-        frames.reserveCapacity(n)
-        cornerMasks.reserveCapacity(n)
-        cornerRadii.reserveCapacity(n)
-        for r in 0..<rows {
-            let yTop = (H * CGFloat(r) / CGFloat(rows)).rounded()
-            let yBot = (H * CGFloat(r + 1) / CGFloat(rows)).rounded()
-            let c = counts[r]
-            for k in 0..<c {
-                let xL = (W * CGFloat(k) / CGFloat(c)).rounded()
-                let xR = (W * CGFloat(k + 1) / CGFloat(c)).rounded()
-                let left   = xL + (k == 0 ? 0 : g / 2)
-                let right  = xR - (k == c - 1 ? 0 : g / 2)
-                let top    = yTop + (r == 0 ? 0 : g / 2)
-                let bottom = yBot - (r == rows - 1 ? 0 : g / 2)
-                frames.append(NSRect(x: left, y: top,
-                                     width: max(0, right - left),
-                                     height: max(0, bottom - top)))
-
-                // Ecken-Regeln (AppKit flippt die Layer-Geometrie mit, isFlipped
-                // → minY = oben):
-                // - Obere Außenecken ECKIG: die Kachel sitzt unterhalb der
-                //   Titlebar, die Fenster-Rundung ist dort schon vorbei — ein
-                //   eigener Radius ergäbe die alte „Doppelabrundung".
-                // - Untere Außenecken RUNDEN, mit Fenster-Radius: die Kachel
-                //   liegt seit dem Wegfall des SwiftUI-Seitenpaddings IN der
-                //   unteren Fenster-Rundung; eine eckige Akzent-Outline würde
-                //   dort von der Fenster-Maske abgeschnitten.
-                // - Innen-Steg-Ecken runden wie gehabt (8px).
-                let topOuter = r == 0, bottomOuter = r == rows - 1
-                let leftOuter = k == 0, rightOuter = k == c - 1
-                var mask = CACornerMask()
-                if !(topOuter && leftOuter)     { mask.insert(.layerMinXMinYCorner) }
-                if !(topOuter && rightOuter)    { mask.insert(.layerMaxXMinYCorner) }
-                mask.insert(.layerMinXMaxYCorner)
-                mask.insert(.layerMaxXMaxYCorner)
-                cornerMasks.append(mask)
-                cornerRadii.append(bottomOuter ? Self.windowCornerRadius : 8)
+        for pane in panes {
+            guard let slot = slotByID[pane.id.uuidString] else {
+                // Kann nach `effectiveLayout` nicht vorkommen; dann lieber stehen lassen als springen.
+                frames.append(pane.container.frame)
+                cornerMasks.append(pane.container.layer?.maskedCorners ?? [])
+                cornerRadii.append(pane.container.layer?.cornerRadius ?? 8)
+                continue
             }
+            frames.append(slot.frame)
+            // Ecken-Regeln (AppKit flippt die Layer-Geometrie mit, isFlipped → minY = oben):
+            // - Obere Außenecken ECKIG: die Kachel sitzt unterhalb der Titlebar, die Fenster-Rundung
+            //   ist dort schon vorbei — ein eigener Radius ergäbe die alte „Doppelabrundung".
+            // - Untere Außenecken RUNDEN, mit Fenster-Radius: die Kachel liegt IN der unteren
+            //   Fenster-Rundung; eine eckige Akzent-Outline würde dort von der Fenster-Maske abgeschnitten.
+            // - Innen-Steg-Ecken runden wie gehabt (8px).
+            let topOuter = slot.outer.contains(.top), bottomOuter = slot.outer.contains(.bottom)
+            let leftOuter = slot.outer.contains(.left), rightOuter = slot.outer.contains(.right)
+            var mask = CACornerMask()
+            if !(topOuter && leftOuter)     { mask.insert(.layerMinXMinYCorner) }
+            if !(topOuter && rightOuter)    { mask.insert(.layerMaxXMinYCorner) }
+            mask.insert(.layerMinXMaxYCorner)
+            mask.insert(.layerMaxXMaxYCorner)
+            cornerMasks.append(mask)
+            cornerRadii.append(bottomOuter ? Self.windowCornerRadius : 8)
         }
 
-        // Zoom-Sonderfall (#26): die gezoomte Kachel bekommt statt ihres Grid-Frames
+        // Zoom-Sonderfall (#26): die gezoomte Kachel bekommt statt ihres Layout-Frames
         // die vollen Bounds und wird per Subview-Reorder über alle anderen gehoben;
-        // deren Grid-Frames bleiben unverändert darunter liegen. Alle Ecken sind
+        // deren Frames bleiben unverändert darunter liegen. Alle Ecken sind
         // dann Außenkanten → keine eigene Rundung, die Fenster-Rundung übernimmt.
         if let z = zoomedPane, let zi = panes.firstIndex(where: { $0 === z }) {
             frames[zi] = bounds
@@ -837,10 +939,13 @@ final class TerminalSplitView: NSView {
 
         // Terminals in beiden Zweigen VOR dem Frame-Set auf die Zielgröße pinnen:
         // genau EIN PTY-Resize (+ Scrollback-Reflow) pro Umsortierung, egal wie
-        // viele Zwischengrößen die Animation produziert.
-        for (pane, frame) in zip(panes, frames) { pane.container.pinContent(forTargetSize: frame.size) }
+        // viele Zwischengrößen die Animation produziert. Beim Ziehen einer Trennlinie nicht:
+        // da halten die Hüllen ihren Inhalt fest (`holdsContent`), gesetzt wird beim Loslassen.
+        if dragOrigin == nil {
+            for (pane, frame) in zip(panes, frames) { pane.container.pinContent(forTargetSize: frame.size) }
+        }
 
-        if animated && !isFirstLayout && window != nil {
+        if animated && !isFirstLayout && window != nil && dragOrigin == nil {
             NSAnimationContext.runAnimationGroup { context in
                 context.duration = 0.22
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
@@ -850,6 +955,91 @@ final class TerminalSplitView: NSView {
             for (pane, frame) in zip(panes, frames) { pane.container.frame = frame }
         }
         isFirstLayout = false
+        updateDividers(lines)
+    }
+
+    // MARK: Trennlinien (Mats zieht)
+
+    private func updateDividers(_ lines: [LayoutDivider]) {
+        while dividerViews.count > lines.count { dividerViews.removeLast().removeFromSuperview() }
+        for (i, line) in lines.enumerated() {
+            if i < dividerViews.count {
+                dividerViews[i].update(line)
+            } else {
+                let view = PaneDividerView(divider: line)
+                view.onBegin = { [weak self] in self?.dividerBegan($0) }
+                view.onMove = { [weak self] in self?.dividerMoved($0, to: $1) }
+                view.onEnd = { [weak self] in self?.dividerEnded($0) }
+                view.onDoubleClick = { [weak self] in self?.dividerDoubleClicked($0) }
+                addSubview(view)
+                dividerViews.append(view)
+            }
+            // Im Zoom verdeckt die gezoomte Kachel alles; eine einzelne Kachel hat keine Stege.
+            dividerViews[i].isHidden = zoomedPane != nil
+        }
+    }
+
+    private func dividerBegan(_ view: PaneDividerView) {
+        guard zoomedPane == nil, let root = manualLayout ?? effectiveLayout(),
+              LayoutEdit.exists(view.divider.path, in: root) else { return }
+        dragOrigin = (root, view.divider)
+        panes.forEach { $0.container.holdsContent = true }
+    }
+
+    private func dividerMoved(_ view: PaneDividerView, to position: Double) {
+        guard let origin = dragOrigin else { return }
+        // Kachel dazu oder weg während des Zugs: Linie gehört zu einem alten Stand → abbrechen.
+        guard Set(origin.tree.paneIDs) == Set(panes.map { $0.id.uuidString }) else { cancelDividerDrag(); return }
+        manualLayout = LayoutEdit.dragged(origin.tree, divider: origin.divider, to: position,
+                                          minimum: Self.dragMinimum, actor: .mats)
+        relayout(animated: false)
+    }
+
+    private func dividerEnded(_ view: PaneDividerView) {
+        guard let origin = dragOrigin else { return }
+        finishDividerDrag()
+        if manualLayout != origin.tree { layoutChanged() }
+    }
+
+    private func dividerDoubleClicked(_ view: PaneDividerView) {
+        guard zoomedPane == nil, dragOrigin == nil, let root = manualLayout ?? effectiveLayout() else { return }
+        let equal = LayoutEdit.equalized(root, divider: view.divider, actor: .mats)
+        guard equal != root else { return }
+        manualLayout = equal
+        relayout(animated: true)
+        layoutChanged()
+    }
+
+    /// Zug beenden: Hüllen geben den Inhalt frei, ein Relayout setzt die Endgröße (ein Resize je Kachel).
+    private func finishDividerDrag() {
+        dragOrigin = nil
+        panes.forEach { $0.container.holdsContent = false }
+        relayout(animated: false)
+    }
+
+    /// Kachel kam dazu oder ging während eines Zugs: der Zug gilt bis hierhin.
+    private func cancelDividerDrag() {
+        guard dragOrigin != nil else { return }
+        finishDividerDrag()
+        layoutChanged()
+    }
+
+    /// „Kachel 2 (preview)“ — Index in Lesereihenfolge.
+    private func layoutName(_ pane: any Pane) -> String {
+        let index = (displayPanes.firstIndex { $0 === pane } ?? 0) + 1
+        return "Kachel \(index) (\(pane.kind))"
+    }
+
+    /// Neue Stand-Nummer: jedes Lagebild, das ein Agent vorher gelesen hat, ist damit veraltet.
+    private func layoutChanged() { layoutRevision += 1 }
+
+    /// Menü „Automatisch anordnen“ / Agent mit Auftrag: Anordnung zurück an die Automatik.
+    fileprivate func rearrangeAutomatically() {
+        guard manualLayout != nil else { return }
+        cancelDividerDrag()
+        manualLayout = nil
+        relayout(animated: true)
+        layoutChanged()
     }
 }
 
@@ -879,6 +1069,15 @@ extension TerminalSplitView: PaneHost {
     }
 
     func paneIsObserved(_ pane: any Pane) -> Bool { isObserved(pane) }
+
+    /// Inhalt geladen, Wunschform steht fest (PDF hochkant …): einmal neu anordnen, danach nie wieder
+    /// für diese Kachel — ein später geladenes PDF anderer Form verschiebt nichts. Angepasste Layouts
+    /// und laufende Züge bleiben unberührt.
+    func paneLayoutPreferenceChanged(_ pane: any Pane) {
+        guard settledPreferences.insert(pane.id).inserted, manualLayout == nil, dragOrigin == nil else { return }
+        relayout(animated: true)
+        layoutChanged()
+    }
 
     func paneRequestsFreshTerminal(focus: Bool) -> TerminalPane {
         let fresh = addPane(home: true)
@@ -913,44 +1112,66 @@ extension TerminalSplitView: PaneHost {
 /// `ControlServer` ruft `handleControl` synchron auf dem Main-Thread.
 extension TerminalSplitView: ControlCommandHandler {
     var isActiveControlWindow: Bool { window?.isKeyWindow == true }
-    var controlPanes: [PaneInfo] { window == nil || windowClosed ? [] : panes.map { info(for: $0) } }
+    var controlPanes: [PaneInfo] { window == nil || windowClosed ? [] : displayPanes.map { info(for: $0) } }
+
+    func layoutReport() -> LayoutReport? {
+        guard window != nil, !windowClosed else { return nil }
+        return LayoutReport(revision: layoutRevision, automatic: manualLayout == nil, root: effectiveLayout(),
+                            width: Double(bounds.width), height: Double(bounds.height))
+    }
 
 
     func handleControl(_ request: ControlRequest) -> ControlResponse {
         switch request.cmd {
         case "list-panes":
-            return ControlResponse(ok: true, panes: panes.map { info(for: $0) })
+            return ControlResponse(ok: true, panes: displayPanes.map { info(for: $0) })
 
         case "pane-kinds":
             return ControlResponse(ok: true, kinds: PaneKindRegistry.kinds, kindInfos: PaneKindRegistry.infos)
 
         case "new-pane":
             // Wer öffnet: die Kachel des Aufrufers (CLI/MCP schicken ihre LATEXTERM_PANE_ID mit).
-            let opener = request.paneID.flatMap(UUID.init(uuidString:))?.uuidString
+            let openerID = request.paneID.flatMap(UUID.init(uuidString:))
+            let opener = openerID?.uuidString
             let kind = request.kind ?? "terminal"
             let args = request.args ?? [:]
             if kind != "terminal", request.cwd != nil || request.exec != nil {
                 return .failure("--cwd und --exec gibt es nur für terminal")
             }
+            // Kachel-Layout: neben die aufrufende Kachel (Default), eigenständig auf Wunsch ("own",
+            // neue Agenten-Session). Ohne Aufrufer im Fenster: App-Kacheln neben die fokussierte.
+            let placement: PanePlacement
+            switch request.placement {
+            case "own": placement = .own
+            case nil, "beside":
+                if let openerID, panes.contains(where: { $0.id == openerID }) { placement = .beside(openerID) }
+                else { placement = kind == "terminal" || kind == "home" ? .own : .besideFocused }
+            default: return .failure("placement „\(request.placement ?? "")“ unbekannt (beside | own)")
+            }
+            let layout = { self.layoutReport() }
             switch kind {
             case "terminal", "home":
                 guard args.isEmpty else { return .failure("\(kind) kennt kein --arg") }
-                let pane = addPane(startingIn: request.cwd, home: kind == "home", focus: request.focus ?? true)
+                let pane = addPane(startingIn: request.cwd, home: kind == "home", focus: request.focus ?? true,
+                                   placement: placement)
                 pane.openedBy = opener
                 if let exec = request.exec, !exec.isEmpty {
                     // Sofort in die PTY — der Kernel puffert, die Shell liest das
                     // Kommando, sobald sie bereit ist (kein Delay/Poll nötig).
                     pane.view.send(txt: exec + "\r")
                 }
-                return ControlResponse(ok: true, pane: info(for: pane))
+                return ControlResponse(ok: true, pane: info(for: pane), layout: layout())
             default:
                 do {
-                    let pane = try addAppPane(kind: kind, args: args, focus: request.focus ?? true)
+                    let pane = try addAppPane(kind: kind, args: args, focus: request.focus ?? true, placement: placement)
                     pane.openedBy = opener
-                    return ControlResponse(ok: true, pane: info(for: pane))
+                    return ControlResponse(ok: true, pane: info(for: pane), layout: layout())
                 }
                 catch { return .failure(String(describing: error)) }
             }
+
+        case "layout":
+            return handleLayout(request)
 
         case "close-pane":
             guard let pane = resolvePane(request.pane ?? request.paneID) else {
@@ -1035,7 +1256,7 @@ extension TerminalSplitView: ControlCommandHandler {
         case .awaitingInput: state = "awaitingInput"
         }
         return PaneInfo(id: pane.id.uuidString,
-                        index: (panes.firstIndex(where: { $0 === pane }) ?? 0) + 1,
+                        index: (displayPanes.firstIndex(where: { $0 === pane }) ?? 0) + 1,
                         cwd: pane.currentDirectory,
                         focused: isActiveControlWindow && isFocused(pane),
                         zoomed: pane === zoomedPane,
@@ -1047,7 +1268,78 @@ extension TerminalSplitView: ControlCommandHandler {
                         title: String(pane.title.prefix(120)),
                         args: terminal == nil ? pane.snapshot()?.args : nil,
                         foreground: terminal?.foregroundProcessName,
-                        openedBy: pane.openedBy)
+                        openedBy: pane.openedBy,
+                        companionOf: companionOf[pane.id]?.uuidString)
+    }
+
+    /// Steuerkanal `layout` (Kachel-Layout): Stand zeigen oder eine Absicht anwenden. Ein Agent ordnet
+    /// nur auf dem aktuellen Stand um: er schickt die Stand-Nummer mit, die er zuletzt gelesen hat —
+    /// passt sie nicht, lehnt die App ab (er liest neu und entscheidet dann). Rechte: eigene Kacheln
+    /// (die aufrufende und alles, was sie geöffnet hat) frei, fremde nur mit `onBehalf`; Teilungen, die
+    /// Mats von Hand gesetzt hat, ebenfalls nur mit `onBehalf` (Prüfung in `LayoutEdit`). Ohne Aufrufer
+    /// (CLI von Hand außerhalb einer Kachel) handelt Mats selbst.
+    private func handleLayout(_ request: ControlRequest) -> ControlResponse {
+        let caller = request.paneID?.uppercased()
+        let report = { self.layoutReport() }
+        let op = request.layoutOp ?? "show"
+        let onBehalf = request.onBehalf ?? false
+        let actor: LayoutActor = caller == nil ? .mats : .agent
+        func own(_ pane: any Pane) -> Bool {
+            guard let caller else { return true }
+            return pane.id.uuidString == caller || pane.openedBy?.uppercased() == caller
+        }
+        if op == "show" { return ControlResponse(ok: true, layout: report()) }
+        if actor == .agent, request.layoutRevision != layoutRevision {
+            var stale = ControlResponse.failure(request.layoutRevision == nil
+                ? "Erst den aktuellen Stand lesen (layout zeigen) und dessen Stand-Nummer mitschicken."
+                : "Die Anordnung hat sich geändert, seit du sie gelesen hast (Stand \(request.layoutRevision!) → \(layoutRevision)). Aktueller Stand anbei — prüfen, dann erneut.")
+            stale.layout = report()
+            return stale
+        }
+        if op == "auto" {
+            if let manual = manualLayout, manual.containsMatsLock, !onBehalf, actor == .agent {
+                return .failure("Mats hat die Anordnung von Hand angepasst — zurück zur Automatik nur auf seinen Wunsch (auf_auftrag: true).")
+            }
+            rearrangeAutomatically()
+            return ControlResponse(ok: true, layout: report())
+        }
+        guard let first = resolvePane(request.pane) else {
+            return .failure("Kachel nicht gefunden: „\(request.pane ?? "keine angegeben")“")
+        }
+        var targets = [first]
+        if let selector = request.otherPane {
+            guard let second = resolvePane(selector) else {
+                return .failure("Zweite Kachel „\(selector)“ steht nicht in diesem Fenster — umordnen geht nur innerhalb eines Fensters.")
+            }
+            targets.append(second)
+        }
+        if !onBehalf, let foreign = targets.first(where: { !own($0) }) {
+            return .failure("\(layoutName(foreign)) hast nicht du geöffnet — fremde Kacheln ordnest du nur auf ausdrücklichen Auftrag um (auf_auftrag: true).")
+        }
+        let a = first.id.uuidString, b = targets.count > 1 ? targets[1].id.uuidString : nil
+        let intent: LayoutOp
+        switch (op, b) {
+        case ("big", _): intent = .big(a)
+        case ("grow", _): intent = .grow(a)
+        case ("shrink", _): intent = .shrink(a)
+        case ("beside", let b?): intent = .beside(a, b)
+        case ("below", let b?): intent = .below(a, b)
+        case ("swap", let b?): intent = .swap(a, b)
+        case ("beside", nil), ("below", nil), ("swap", nil): return .failure("\(op) braucht eine zweite Kachel (otherPane)")
+        default: return .failure("Unbekannte Absicht „\(op)“ (show, big, grow, shrink, beside, below, swap, auto)")
+        }
+        guard zoomedPane == nil else { return .failure("Gerade ist eine Kachel gezoomt (⌘⏎) — erst danach umordnen.") }
+        guard let root = manualLayout ?? effectiveLayout() else { return .failure("Kein Layout") }
+        let changed: LayoutNode
+        do { changed = try LayoutEdit.apply(intent, to: root, actor: actor, overrideMats: onBehalf || actor == .mats) }
+        catch { return .failure(String(describing: error)) }
+        if changed != root {
+            cancelDividerDrag()
+            manualLayout = changed
+            relayout(animated: true)
+            layoutChanged()
+        }
+        return ControlResponse(ok: true, pane: info(for: first), layout: report())
     }
 
     /// Löst den Ziel-Selektor des CLI auf eine Kachel auf. Semantik: reine Ziffern
@@ -1058,8 +1350,9 @@ extension TerminalSplitView: ControlCommandHandler {
     private func resolvePane(_ selector: String?) -> (any Pane)? {
         guard let selector, !selector.isEmpty else { return nil }
         if let index = Int(selector) {
-            guard (1...panes.count).contains(index) else { return nil }
-            return panes[index - 1]
+            let ordered = displayPanes
+            guard (1...ordered.count).contains(index) else { return nil }
+            return ordered[index - 1]
         }
         let prefix = selector.uppercased()
         let matches = panes.filter { $0.id.uuidString.hasPrefix(prefix) }

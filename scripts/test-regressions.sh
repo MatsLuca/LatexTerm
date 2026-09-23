@@ -21,8 +21,9 @@ run_test launcher-search-focus LatexTerm/LauncherSearchField.swift
 run_test launcher-palette-input LatexTerm/LauncherSearch.swift LatexTerm/LauncherSearchField.swift LatexTerm/LauncherPalette.swift
 run_test vm-quit LatexTerm/VMQuitGuard.swift
 run_test agent-session LatexTerm/AgentSession.swift
-run_test control-router LatexTerm/Control/ControlProtocol.swift LatexTerm/Control/ControlRouter.swift
-run_test mcp-server LatexTerm/Control/ControlProtocol.swift LatexTermCLI/ControlClient.swift LatexTermCLI/MCPServer.swift
+run_test control-router LatexTerm/Control/ControlProtocol.swift LatexTerm/Control/PaneLayoutTree.swift LatexTerm/Control/ControlRouter.swift
+run_test mcp-server LatexTerm/Control/ControlProtocol.swift LatexTerm/Control/PaneLayoutTree.swift LatexTermCLI/ControlClient.swift LatexTermCLI/MCPServer.swift
+run_test pane-layout LatexTerm/Control/PaneLayoutTree.swift LatexTerm/Layout/PaneLayoutEngine.swift
 run_test scratch-svg LatexTerm/Panes/Contents/ScratchSVG.swift
-run_test session-restore LatexTerm/SessionStore.swift LatexTerm/AgentSession.swift LatexTerm/AppRelaunch.swift
+run_test session-restore LatexTerm/SessionStore.swift LatexTerm/Control/PaneLayoutTree.swift LatexTerm/AgentSession.swift LatexTerm/AppRelaunch.swift
 python3 -m unittest discover -s scripts/tests -v

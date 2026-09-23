@@ -14,6 +14,14 @@ final class FakeApp: ControlTransport {
     var details = true
     var received: [ControlRequest] = []
     var onList: (() -> Void)?
+    /// Kachel-Layout: Stand-Nummer und Baum (nil = alle nebeneinander, automatisch).
+    var revision = 1
+    var root: LayoutNode?
+
+    func report() -> LayoutReport {
+        LayoutReport(revision: revision, automatic: root == nil,
+                     root: root ?? .split(.row, panes.map { .leaf($0.id) }), width: 1000, height: 600)
+    }
 
     init(_ panes: [PaneInfo]) { self.panes = panes }
 
@@ -26,6 +34,17 @@ final class FakeApp: ControlTransport {
             onList?()
             var response = ControlResponse(ok: true, panes: panes)
             response.capabilities = caps
+            if request.paneID != nil { response.layout = report() }
+            return response
+        case "layout":
+            guard request.layoutRevision == revision else {
+                var stale = ControlResponse.failure("Die Anordnung hat sich geändert (Stand \(request.layoutRevision ?? -1) → \(revision)).")
+                stale.layout = report()
+                return stale
+            }
+            revision += 1
+            var response = ControlResponse(ok: true)
+            response.layout = report()
             return response
         case "pane-kinds":
             return ControlResponse(ok: true, kinds: ["terminal", "home", "scratchpad", "web"], kindInfos: details ? kindInfos : nil)
@@ -35,6 +54,7 @@ final class FakeApp: ControlTransport {
                                 state: "none", kind: request.kind ?? "terminal",
                                 args: request.kind == nil ? nil : request.args)
             panes.append(pane)
+            revision += 1
             return ControlResponse(ok: true, pane: pane)
         case "close-pane":
             panes.removeAll { $0.id == request.pane }
@@ -254,6 +274,70 @@ struct MCPServerTests {
         // Alte App ohne call: klare Meldung.
         pads.details = false
         assert(call(padServer, "scratch_clear", ["who": "all", "pane": "2"]).text.contains("neu starten"))
+
+        // Kachel-Layout: erst lesen, dann ändern — auf dem gelesenen Stand; Nummern, die sich verschoben
+        // haben, werden abgelehnt; Platzierung und Ersetzen.
+        let lay = FakeApp([pane("SELF-0000", 1, agent: "claude"), pane("WEB1-0000", 2, kind: "web", args: ["url": html]),
+                           pane("FREM-0000", 3)])
+        lay.panes[1].openedBy = "SELF-0000"
+        lay.kindInfos = [PaneKindInfo(kind: "web", displayName: "HTML", summary: "Lokale Datei",
+                                      args: [PaneKindArg(name: "url", summary: "Pfad", required: true)],
+                                      actions: [PaneKindAction(name: "reload", summary: "neu laden"),
+                                                PaneKindAction(name: "load <pfad>", summary: "andere Seite")])]
+        let layServer = makeServer(lay)
+        assert(toolNames(layServer).contains("layout"))
+        var r = call(layServer, "layout", ["action": "gross", "pane": "WEB1"])
+        assert(r.error && r.text.contains("Erst den aktuellen Stand") && r.text.contains("Anordnung (Stand 1") && lay.sent("layout").isEmpty, r.text)
+        r = call(layServer, "layout", ["action": "gross", "pane": "WEB1"])
+        assert(!r.error && lay.sent("layout").last?.layoutRevision == 1 && lay.sent("layout").last?.layoutOp == "big"
+               && lay.sent("layout").last?.pane == "WEB1-0000" && lay.sent("layout").last?.paneID == "SELF-0000", r.text)
+        assert(r.text.contains("Stand 2"), r.text)
+        lay.revision += 1   // Mats zieht eine Trennlinie: der gelesene Stand ist veraltet
+        r = call(layServer, "layout", ["action": "kleiner", "pane": "WEB1"])
+        assert(r.error && r.text.contains("geändert") && r.text.contains("Anordnung (Stand 3"), r.text)
+        r = call(layServer, "layout", ["action": "kleiner", "pane": "WEB1"])
+        assert(!r.error && lay.sent("layout").last?.layoutRevision == 3, r.text)
+        assert(call(layServer, "layout", ["action": "tauschen", "pane": "WEB1"]).error)
+        assert(call(layServer, "layout", ["action": "quer", "pane": "WEB1"]).error)
+        r = call(layServer, "layout", ["action": "nebeneinander", "pane": "SELF", "other": "WEB1", "auf_auftrag": true])
+        assert(!r.error && lay.sent("layout").last?.otherPane == "WEB1-0000" && lay.sent("layout").last?.onBehalf == true, r.text)
+        r = call(layServer, "layout", ["action": "automatisch"])
+        assert(!r.error && lay.sent("layout").last?.layoutOp == "auto" && lay.sent("layout").last?.pane == nil, r.text)
+        // Lagebild: Baum, Anteile, eigene/geöffnete Kacheln, Mats' Handarbeit.
+        lay.root = .split(.row, [.leaf("SELF-0000", weight: 3),
+                                 .split(.column, [.leaf("WEB1-0000"), .leaf("FREM-0000")], setBy: .mats)])
+        let shown = call(layServer, "layout").text
+        assert(shown.contains("angepasst") && shown.contains("├ 75 % · 1 · SELF-000 · terminal · claude · ← du")
+               && shown.contains("└ 25 % · übereinander ✋") && shown.contains("von dir geöffnet")
+               && shown.contains("✋ = Aufteilung"), shown)
+        assert(call(layServer, "panes").text.contains("Anordnung (Stand"))
+        // Nummern verschoben: die gesehene Nr. 2 ist jetzt eine andere Kachel → abgelehnt, danach gilt der neue Stand.
+        lay.panes.swapAt(1, 2)
+        lay.panes[1].index = 2
+        lay.panes[2].index = 3
+        r = call(layServer, "focus_pane", ["pane": "2"])
+        assert(r.error && r.text.contains("verschoben") && r.text.contains("WEB1-000"), r.text)
+        assert(!call(layServer, "focus_pane", ["pane": "2"]).error)
+        assert(lay.sent("focus").last?.pane == "FREM-0000")
+        // Platzierung: neben mich (Default), eigen; neue Agenten-Session immer eigen.
+        _ = call(layServer, "open_terminal")
+        assert(lay.sent("new-pane").last?.placement == "beside")
+        _ = call(layServer, "open_terminal", ["placement": "eigen"])
+        assert(lay.sent("new-pane").last?.placement == "own")
+        assert(call(layServer, "open_terminal", ["placement": "ersetzen"]).error)
+        _ = call(layServer, "start_agent", ["agent": "claude"])
+        assert(lay.sent("new-pane").last?.placement == "own")
+        // Ersetzen: die eigene Web-Kachel lädt die neue Seite, statt eine zweite zu öffnen.
+        let other = tmp.appendingPathComponent("other.html").path
+        try "<p>b</p>".write(toFile: other, atomically: true, encoding: .utf8)
+        let panesBefore = lay.sent("new-pane").count
+        r = call(layServer, "open_web", ["url": other, "placement": "ersetzen"])
+        assert(!r.error && lay.sent("new-pane").count == panesBefore && lay.sent("send").last?.text == "load " + other
+               && lay.sent("send").last?.pane == "WEB1-0000", r.text)
+        let third = tmp.appendingPathComponent("third.html").path
+        try "<p>c</p>".write(toFile: third, atomically: true, encoding: .utf8)
+        r = call(layServer, "open_web", ["url": third])
+        assert(!r.error && lay.sent("new-pane").last?.placement == "beside" && r.text.contains("Anordnung (Stand"), r.text)
 
         print("mcp-server: ok")
     }
