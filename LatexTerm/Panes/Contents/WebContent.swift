@@ -206,6 +206,10 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
             webView.load(URLRequest(url: LocalFolderServer.url(for: url)))
         } else if url.isFileURL {
             webView.loadFileURL(url, allowingReadAccessTo: rootFolder)
+        } else if let shown = webView.url, Self.sameServerPage(shown, url) {
+            // Neu laden derselben Server-Seite: die Cache-Policy des Requests gilt nur fürs Dokument,
+            // CSS/JS kämen weiter aus WebKits Speicher-Cache (Befund 23.09., http.server ohne Cache-Control).
+            webView.reloadFromOrigin()
         } else {
             webView.load(URLRequest(url: url, cachePolicy: .reloadIgnoringLocalCacheData))
         }
@@ -252,6 +256,12 @@ final class WebContent: NSObject, PaneContent, WKNavigationDelegate, WKUIDelegat
             return
         }
         reloadKeepingScroll(announce: "↻ " + names + " · " + Self.clock.string(from: Date()))
+    }
+
+    /// `http://localhost:8000` und `…:8000/` sind dieselbe Seite (WebKit hängt den Slash an).
+    private static func sameServerPage(_ a: URL, _ b: URL) -> Bool {
+        func key(_ u: URL) -> String { var s = u.absoluteString; while s.hasSuffix("/") { s.removeLast() }; return s }
+        return key(a) == key(b)
     }
 
     /// Neu laden, Scrollposition bleibt (bei HTML; PDF/Bild über file:// fangen oben an).

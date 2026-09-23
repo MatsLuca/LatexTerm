@@ -743,10 +743,12 @@ final class ScratchpadToolbar: NSView {
         updateToolTips()
     }
 
+    // Owner ist die Leiste selbst: AppKit hält Tooltip-Owner NICHT fest — ein temporärer
+    // NSString als Owner war beim Feuern des Tooltip-Timers schon freigegeben (Absturz 23.09.).
     private func updateToolTips() {
         removeAllToolTips()
-        for (item, rect) in zip(Self.items, frames) {
-            if let text = toolTip(for: item) { addToolTip(rect, owner: text as NSString, userData: nil) }
+        for (item, rect) in zip(Self.items, frames) where toolTip(for: item) != nil {
+            addToolTip(rect, owner: self, userData: nil)
         }
     }
 
@@ -877,5 +879,12 @@ final class ScratchpadToolbar: NSView {
         let size = image.size
         image.draw(in: NSRect(x: rect.midX - size.width / 2, y: rect.midY - size.height / 2, width: size.width, height: size.height),
                    from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+    }
+}
+
+extension ScratchpadToolbar: NSViewToolTipOwner {
+    func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint,
+              userData data: UnsafeMutableRawPointer?) -> String {
+        zip(Self.items, frames).first { $0.1.contains(point) }.flatMap { toolTip(for: $0.0) } ?? ""
     }
 }

@@ -677,7 +677,8 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
     <script src="katex.min.js"></script>
     <style>
     html,body{margin:0;padding:0;background:transparent;overflow:hidden;height:100%;width:100%;}
-    #m{position:absolute;left:0;top:0;white-space:nowrap;}
+    /* max-content: sonst misst shrink-to-fit an der Breite des VORIGEN Popovers → breite Formeln abgeschnitten */
+    #m{position:absolute;left:0;top:0;white-space:nowrap;width:max-content;}
     .katex{white-space:nowrap;}
     .fallback{font-family:ui-monospace,Menlo,monospace;font-style:italic;opacity:.7;}
     /* KaTeX-Fehleransicht: rohe Quelle + Meldung gestapelt, Meldung rot. */
