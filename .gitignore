@@ -45,3 +45,6 @@ demo-video/public/take1.mp4
 demo-video/public/takes/
 demo-video/rig/record
 demo-video/rig/input
+
+# Development diary (local only)
+HISTORIE.md

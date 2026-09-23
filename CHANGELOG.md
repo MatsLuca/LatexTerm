@@ -7,6 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-09-23
+
+LatexTerm grew from a LaTeX-rendering terminal into a terminal for working with Claude Code and Codex.
+
+### Highlights
+- **Pane kinds beyond the terminal** — *Scratchpad* (sketch, hand it to the agent with ➤ / `⇧⌘⏎`, the agent draws back),
+  *Preview* (PDF, images, Office files; reloads on change, SyncTeX jump, mark a passage and send it with page, source
+  line and crop), *Web* (local HTML or `http://localhost` dev server, browser-like; ⌥-click an element to send its
+  selector and source line).
+- **Built for agents** — `latexterm` CLI (bundled at `Contents/Helpers/latexterm`) and an MCP server (`latexterm mcp`):
+  agents open panes, start and ask other sessions, look at and operate web/preview/scratchpad panes.
+- **Home and ⌘K** — project launcher with sessions for Claude and Codex, quotas, pins, resume, search palette.
+- **Session state** — title-bar chips and notifications show what each agent pane is doing, when it is done or
+  needs input.
+- **Tabs and restart** — native tab bar; `⌥⌘R` / `⌥⌘Q` bring back every pane, tab and agent session.
+- **Looks** — themes in Ghostty format, Ghostty config import, bundled JetBrains Mono, settings window, new app icon,
+  optional sans-serif formulas.
+- **Formulas** — more robust detection in Claude Code output, export as vector PDF and Markdown, inline formula editing.
+- **Desktop widgets** for quotas, what's due and daily numbers.
+
+The detailed entries below are in German.
+
 ### Added
 - **Tab-Leiste als festes Feature (22.09.).** Die native macOS-Tab-Leiste ist ab dem ersten Fenster sichtbar; jeder Tab ist ein Fenster mit eigenen Kacheln. Neuer Tab per „+“ oder ⇧⌘T (Menü „Kachel“), beginnt mit Home; ⌘T bleibt die Terminal-Kachel. ⌥⌘R/⌥⌘Q bringen Leisten, Tab-Reihenfolge und den sichtbaren Tab zurück (die Fenster werden ausdrücklich angehängt — SwiftUI tabbt neue Fenster nicht von selbst). Einen Tab zu schließen beendet seine Kacheln wie ⌘W. `list-panes` liefert `tab`, das MCP-Lagebild nennt den Tab; neue Kacheln eines Agenten landen in seinem Tab.
 

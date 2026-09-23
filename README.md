@@ -63,7 +63,8 @@ The interface is German for now.
 ## Install
 
 Grab `LatexTerm.app` from [**Releases**](https://github.com/MatsLuca/LatexTerm/releases), unzip, drop into
-`/Applications`. The build is unsigned — right-click → **Open** on first launch, or:
+`/Applications`. The build is not notarized — on first launch open **System Settings → Privacy & Security → Open
+Anyway**, or:
 
 ```sh
 xattr -dr com.apple.quarantine /Applications/LatexTerm.app

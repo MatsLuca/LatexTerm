@@ -975,7 +975,7 @@ final class HomePaneView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    /// Fokusziel der Kachel (direkt, nie über becomeFirstResponder umleiten — siehe HISTORIE 24.08.).
+    /// Fokusziel der Kachel (direkt, nie über becomeFirstResponder umleiten).
     var keyView: NSView { launchOverlay ?? tree }
     override var acceptsFirstResponder: Bool { false }
     override func mouseDown(with event: NSEvent) {
