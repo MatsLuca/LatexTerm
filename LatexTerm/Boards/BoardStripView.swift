@@ -156,8 +156,8 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
         bar.stroke()
     }
 
-    /// Abzeichen ohne Puls (die Leiste zeichnet selbst): voller Punkt, „neu“ als Ring. Pulsieren kommt über
-    /// `pulseLayer` — ein Brett, das wartet, soll auch in der Leiste auffallen.
+    /// Abzeichen: voller Punkt, „neu“ als Ring. Wartet/arbeitet pulsiert über den Zeichen-Takt (`pulseTimer`) —
+    /// ein Brett, das wartet, soll auch in der Leiste auffallen.
     private func drawBadge(_ badge: PaneTabBarView.Badge, in rect: NSRect) {
         let path = NSBezierPath(ovalIn: rect)
         if case .news = badge {
