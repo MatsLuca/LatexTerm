@@ -17,6 +17,8 @@ protocol Pane: AnyObject {
     var focusTarget: NSView { get }
     /// Fenstertitel, solange die Kachel fokussiert ist.
     var title: String { get }
+    /// Kurzname auf dem Reiter (Kachel-Layout Stufe 2) — muss Kacheln an einem Platz unterscheiden.
+    var tabTitle: String { get }
     /// Chip in der Titelleiste.
     var statusChip: StatusChip { get }
     /// Farbe für Rahmen, Chip-Punkt und Zoom-Pille.

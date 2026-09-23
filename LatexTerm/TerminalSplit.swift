@@ -976,10 +976,14 @@ final class TerminalSplitView: NSView {
     }
 
     private func updateTabBarContents() {
+        guard !currentTabBars.isEmpty else { return }
+        let ordered = displayPanes
         for (view, bar) in zip(tabBarViews, currentTabBars) {
             view.tabs = bar.tabs.compactMap { id in
                 panes.first { $0.id.uuidString == id }.map { pane in
-                    PaneTabBarView.Tab(id: id, title: pane.title, accent: pane.effectiveAccent,
+                    let index = ordered.firstIndex { $0 === pane }.map { $0 + 1 }
+                    return PaneTabBarView.Tab(id: id, number: index.flatMap { $0 <= 9 ? $0 : nil },
+                                       title: pane.tabTitle, accent: pane.effectiveAccent,
                                        front: id == bar.front, focused: id == bar.front && isFocused(pane))
                 }
             }

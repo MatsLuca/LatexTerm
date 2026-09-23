@@ -1473,6 +1473,18 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         return isHome ? "LatexTerm — Projekte" : "LatexTerm"
     }
 
+    /// Reiter: Agent oder laufendes Programm, dann der Ordner — der Fenstertitel ist bei einer Shell ohne
+    /// eigenen Titel nur „LatexTerm“ und unterschiede keine zwei Reiter.
+    var tabTitle: String {
+        guard isStarted else { return isHome ? "Projekte" : "Terminal" }
+        let folder = currentDirectory.map { ($0 as NSString).lastPathComponent }
+        let lead: String?
+        if let agent = agentSession.identity?.agent { lead = agent == "codex" ? "Codex" : "Claude" }
+        else { lead = foregroundProcessName ?? (lastTitle.isEmpty ? nil : lastTitle) }
+        let parts = [lead, folder].compactMap { $0 }
+        return parts.isEmpty ? title : parts.joined(separator: " · ")
+    }
+
     func setTerminalTitle(source: LocalProcessTerminalView, title: String) {
         lastTitle = title
         host?.paneStyleChanged(self)

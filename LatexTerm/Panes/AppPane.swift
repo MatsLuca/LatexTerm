@@ -47,6 +47,7 @@ final class AppPane: Pane, PaneContentDelegate {
     var kind: String { type(of: content).kind }
     var focusTarget: NSView { content.keyView }
     var title: String { content.title }
+    var tabTitle: String { content.title }
     var statusChip: StatusChip { content.chip ?? StatusChip(tone: effectiveAccent, tooltip: content.title) }
     var effectiveAccent: NSColor { container.effectiveAccent }
     var accentName: String? { nil }

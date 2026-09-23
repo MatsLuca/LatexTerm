@@ -7,6 +7,8 @@ import AppKit
 final class PaneTabBarView: NSView, NSViewToolTipOwner {
     struct Tab: Equatable {
         var id: String
+        /// Kachelnummer in Lesereihenfolge (= ⌘n), gedimmt vor dem Titel.
+        var number: Int?
         var title: String
         var accent: NSColor
         var front: Bool
@@ -112,15 +114,17 @@ final class PaneTabBarView: NSView, NSViewToolTipOwner {
             let textRight = close ? closeRect(in: rect).minX - 4 : rect.maxX - 8
             let style = NSMutableParagraphStyle()
             style.lineBreakMode = .byTruncatingTail
-            let attributes: [NSAttributedString.Key: Any] = [
-                .font: Self.font,
-                .foregroundColor: theme.foreground.withAlphaComponent(tab.front ? 0.95 : 0.55),
-                .paragraphStyle: style,
-            ]
+            let text = NSMutableAttributedString()
+            if let number = tab.number {
+                text.append(NSAttributedString(string: "\(number)  ", attributes: [
+                    .font: Self.font, .foregroundColor: theme.foreground.withAlphaComponent(tab.front ? 0.5 : 0.35)]))
+            }
+            text.append(NSAttributedString(string: tab.title, attributes: [
+                .font: Self.font, .foregroundColor: theme.foreground.withAlphaComponent(tab.front ? 0.95 : 0.55)]))
+            text.addAttribute(.paragraphStyle, value: style, range: NSRange(location: 0, length: text.length))
             let lineHeight = ceil(Self.font.ascender - Self.font.descender)
             let textRect = NSRect(x: textX, y: rect.midY - lineHeight / 2, width: max(0, textRight - textX), height: lineHeight)
-            (tab.title as NSString).draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine],
-                                         attributes: attributes)
+            text.draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
 
             if close {
                 let box = closeRect(in: rect)
