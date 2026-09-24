@@ -89,6 +89,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var vmPanel: NSWindow?
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Ab hier schließen Fenster nur, weil die App geht — Kachel-Inhalte behalten ihre Dateien für den Restore.
+        AppLifecycle.isTerminating = true
         guard !vmQuitGuard.isPreparing else { return .terminateLater }
         vmQuitGuard.prepare(onSuspending: { [weak self] in
             qlog.notice("Beenden: Windows-VM läuft — halte sie erst an")
@@ -102,6 +104,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .cancel(let failure):
                 qlog.error("Beenden abgebrochen: \(failure.message, privacy: .public)")
                 self?.keepPanes = nil   // App bleibt offen → keine Marke fürs nächste Beenden
+                AppLifecycle.isTerminating = false
                 NSApp.reply(toApplicationShouldTerminate: false)
                 let alert = NSAlert()
                 alert.messageText = "LatexTerm bleibt geöffnet"
@@ -389,4 +392,10 @@ struct LatexTermApp: App {
             SettingsWindow()
         }
     }
+}
+
+/// App-weiter Zustand fürs Beenden: `willClose` läuft auch, wenn die Fenster beim Beenden/Neustart zugehen
+/// (Fenster-Beobachter in `TerminalSplit`) — dann darf ein Inhalt nichts wegwerfen, was der Restore braucht.
+enum AppLifecycle {
+    static var isTerminating = false
 }

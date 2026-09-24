@@ -279,13 +279,15 @@ final class ScratchpadContent: PaneContent {
         root.showNote("Skizze liegt in Kachel \(pane.index)")
     }
 
-    /// Kachel zu = Zeichnung weg (wie ein Terminal seinen Inhalt verliert). Nicht beim Beenden der App:
-    /// dort ruft niemand `willClose`, die Datei bleibt für den Restore.
+    /// Kachel zu = Zeichnung weg (wie ein Terminal seinen Inhalt verliert). Nicht beim Beenden der App: auch dann
+    /// kommt `willClose` (Fenster gehen zu), die Datei muss aber für den Restore bleiben — sonst war die Zeichnung
+    /// nach ⌥⌘R weg (Befund 24.09.). Verwaiste Dateien räumt `pruneOrphans`.
     func willClose() {
         root.canvas.onChange = nil
         root.canvas.onSaveRequest = nil
         root.canvas.onSendRequest = nil
         root.onSend = nil
+        guard !AppLifecycle.isTerminating else { return }
         try? FileManager.default.removeItem(at: file)
     }
 
