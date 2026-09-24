@@ -52,7 +52,7 @@ final class BoardHostView: NSView {
         if group.isEmpty {
             addBoard(plan: nil, activate: true)
         } else {
-            for plan in group { addBoard(plan: plan, activate: false) }
+            for plan in group { addBoard(plan: plan, activate: false, atEnd: true) }
             let selected = group.firstIndex { $0.selected == true } ?? 0
             activate(ordered[min(selected, ordered.count - 1)])
             // Nur das erste Fenster öffnet die übrigen; Nachzügler finden die Schlange leer.
@@ -71,6 +71,18 @@ final class BoardHostView: NSView {
             self.close(board)
         }
         strip.onAdd = { [weak self] in self?.addBoard(plan: nil, activate: true) }
+        strip.onRename = { [weak self] id, name in
+            guard let self, let board = self.boards.first(where: { ObjectIdentifier($0) == id }) else { return }
+            board.customName = name.isEmpty ? nil : name
+            self.refreshStrip()
+        }
+        strip.onMove = { [weak self] id, gap in
+            guard let self, let index = self.list.moveIndex(for: id, gap: gap) else { return }
+            self.list.move(id, to: index)
+            self.refreshStrip()
+        }
+        // Nach dem Umbenennen bekommt die Kachel die Tastatur zurück.
+        strip.onEditingEnded = { [weak self] in self?.activeBoard?.restoreFocus() }
 
         commandObserver = NotificationCenter.default.addObserver(
             forName: .latexTermBoardCommand, object: nil, queue: .main
@@ -113,19 +125,20 @@ final class BoardHostView: NSView {
 
     override func resizeSubviews(withOldSize oldSize: NSSize) {
         for board in boards { board.frame = bounds }
+        if abs(bounds.width - oldSize.width) > 0.5 { refreshStrip() }
     }
 
     // MARK: Bretter
 
     @discardableResult
-    private func addBoard(plan: SessionSnapshot.Window?, activate: Bool) -> TerminalSplitView {
+    private func addBoard(plan: SessionSnapshot.Window?, activate: Bool, atEnd: Bool = false) -> TerminalSplitView {
         let board = TerminalSplitView(plan: plan)
         board.boardHost = self
         board.frame = bounds
         board.isHidden = true
         addSubview(board)
         boards.append(board)
-        list.add(ObjectIdentifier(board), activate: false)
+        list.add(ObjectIdentifier(board), activate: false, atEnd: atEnd)
         if activate || boards.count == 1 { self.activate(board) }
         refreshStrip()
         return board
@@ -203,7 +216,7 @@ final class BoardHostView: NSView {
             let all = ordered
             guard all.indices.contains(n - 1) else { NSSound.beep(); return }
             activate(all[n - 1])
-        case .rename: break   // Scheibe 2
+        case .rename: if let board = activeBoard { strip.beginRename(ObjectIdentifier(board)) }
         case .newWindow: Self.openWindow?()
         }
     }
@@ -236,6 +249,9 @@ final class BoardHostView: NSView {
             BoardStripView.Item(id: ObjectIdentifier(board), name: board.displayName, active: board === active,
                                 badge: board === active ? nil : board.boardBadge)
         }
+        // Höchstens knapp die halbe Titelleiste — rechts brauchen die Chips Platz. In 10-pt-Stufen, damit Ziehen am
+        // Fensterrand das Accessory nicht bei jedem Punkt neu einhängt.
+        if let window { strip.maxWidth = max(160, (window.frame.width * 0.45 / 10).rounded(.down) * 10) }
         // Breite geändert: Accessory neu einhängen, sonst vergibt die Titelleiste den Platz nicht neu (wie bei den Chips).
         let width = strip.fittingWidth
         guard let window, let vc = stripAccessory, abs(strip.frame.width - width) > 0.5 else { return }

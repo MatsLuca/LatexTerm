@@ -36,6 +36,23 @@ struct BoardTests {
         moving.add(2, activate: true)
         check(moving.order.count == 4, "no duplicates")
 
+        var restored = BoardList<Int>()
+        for i in 1...5 { restored.add(i, activate: false, atEnd: true) }
+        check(restored.order == [1, 2, 3, 4, 5] && restored.active == 1, "restore keeps saved order (bug 24.09.)")
+        var gaps = BoardList<String>()
+        for id in ["a", "b", "c", "d"] { gaps.add(id, activate: false, atEnd: true) }
+        check(gaps.moveIndex(for: "a", gap: 0) == nil && gaps.moveIndex(for: "a", gap: 1) == nil, "drop on own place = no move")
+        check(gaps.moveIndex(for: "a", gap: 4) == 3, "drag first to the end")
+        check(gaps.moveIndex(for: "d", gap: 0) == 0, "drag last to the front")
+        check(gaps.moveIndex(for: "b", gap: 3) == 2, "drag right between c and d")
+
+        check(BoardStripFit.names(natural: [50, 60], active: 0, available: 200, minWidth: 30) == [50, 60], "fits: untouched")
+        check(BoardStripFit.names(natural: [100, 100, 40], active: 0, available: 200, minWidth: 30) == [100, 60, 40],
+              "hidden names shrink, active keeps its name, short ones stay")
+        check(BoardStripFit.names(natural: [100, 100, 100, 100], active: 1, available: 150, minWidth: 30) == nil, "too tight → numbers")
+        check(BoardStripFit.numbers(natural: [100, 100, 100], numberWidths: [8, 8, 8], active: 1, available: 80, minWidth: 30)
+              == [8, 64, 8], "numbers: active takes the rest")
+
         let home = "/Users/x"
         check(BoardName.automatic(agentDirectories: ["/Users/x/Projekte/werkstatt"], directories: ["/tmp"], home: home, number: 1) == "werkstatt", "agent folder wins")
         check(BoardName.automatic(agentDirectories: [], directories: ["/tmp/"], home: home, number: 1) == "tmp", "trailing slash")

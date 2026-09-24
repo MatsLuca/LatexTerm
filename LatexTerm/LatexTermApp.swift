@@ -341,6 +341,7 @@ struct LatexTermApp: App {
                     .keyboardShortcut("]", modifiers: [.command, .shift])
                 Button("Voriges Brett") { boardCommand(.previous) }
                     .keyboardShortcut("[", modifiers: [.command, .shift])
+                Button("Brett umbenennen …") { boardCommand(.rename) }
                 Menu("Brett wählen") {
                     ForEach(1...9, id: \.self) { n in
                         Button("Brett \(n)") { boardCommand(.select(n)) }

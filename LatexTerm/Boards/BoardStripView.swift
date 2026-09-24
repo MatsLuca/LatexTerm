@@ -3,8 +3,9 @@ import AppKit
 /// Brett-Leiste oben links in der Titelleiste (23.09.2026), Stil „Linie“ wie Chips und Reiter: Name ohne Fläche und
 /// Rand, vorderes Brett heller mit 2-pt-Strich in der Akzentfarbe, Hover = leise Fläche, × beim Hover rechts, dahinter
 /// „+“. Verdeckte Bretter tragen rechts das Abzeichen ihrer wichtigsten Kachel (wartet › arbeitet › Ergebnis › neu).
-/// Zeichnet selbst; Klicks meldet sie an `BoardHostView`.
-final class BoardStripView: NSView, NSViewToolTipOwner {
+/// Zeichnet selbst; Klicks meldet sie an `BoardHostView`. Scheibe 2 (24.09.): Doppelklick = umbenennen (Inline-Feld,
+/// ⏎/Esc, leer = automatischer Name), Ziehen = umsortieren (Einfügemarke), bei Enge kürzen, zuletzt nur Nummern.
+final class BoardStripView: NSView, NSViewToolTipOwner, NSTextFieldDelegate {
     struct Item: Equatable {
         var id: ObjectIdentifier
         var name: String
@@ -30,10 +31,24 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
     var onSelect: ((ObjectIdentifier) -> Void)?
     var onClose: ((ObjectIdentifier) -> Void)?
     var onAdd: (() -> Void)?
+    var onRename: ((ObjectIdentifier, String) -> Void)?
+    var onMove: ((ObjectIdentifier, Int) -> Void)?
+    /// Umbenennen beendet (⏎, Esc, Klick daneben) — die Tastatur gehört wieder dem Brett.
+    var onEditingEnded: (() -> Void)?
+    /// Platz, den die Leiste höchstens belegen darf (setzt `BoardHostView` aus der Fensterbreite).
+    var maxWidth: CGFloat = .greatestFiniteMagnitude {
+        didSet { if maxWidth != oldValue { rebuildToolTips(); needsDisplay = true } }
+    }
 
     private enum Target: Equatable { case item(Int), close(Int), plus }
     private var hovered: Target? { didSet { if hovered != oldValue { needsDisplay = true } } }
     private var pressed: Target?
+    private var pressPoint: NSPoint?
+    /// Laufender Zug: welcher Eintrag, und vor welchem Eintrag er landen würde (0 … count).
+    private var drag: (index: Int, gap: Int)? { didSet { needsDisplay = true } }
+    private static let dragThreshold: CGFloat = 4
+    private var editor: NSTextField?
+    private var editingID: ObjectIdentifier?
     private var trackingArea: NSTrackingArea?
     private var themeObserver: NSObjectProtocol?
 
@@ -54,20 +69,42 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
 
     // MARK: Geometrie
 
-    private func label(for item: Item) -> String { item.name }
-
-    private func textWidth(_ string: String) -> CGFloat {
-        min(Self.maxNameWidth, (string as NSString).size(withAttributes: [.font: Self.font]).width.rounded(.up))
+    private static func measure(_ string: String) -> CGFloat {
+        (string as NSString).size(withAttributes: [.font: font]).width.rounded(.up)
     }
 
     /// Rechts im Eintrag Platz fürs Abzeichen bzw. ×.
     private static let trailingSlot: CGFloat = closeSize + 4
+    /// Rahmen je Eintrag außer dem Text.
+    private static let itemChrome: CGFloat = padding + 4 + trailingSlot + 2
+    /// Kürzer wird ein verdeckter Name nicht — darunter zeigt die Leiste Nummern.
+    private static let minNameWidth: CGFloat = 44
 
-    private func itemRects() -> [NSRect] {
+    /// Beschriftung und Textbreite je Eintrag, passend zu `maxWidth` (einmal je Zeichnen/Klick gerechnet).
+    private func fitted() -> [(label: String, width: CGFloat)] {
+        guard !items.isEmpty else { return [] }
+        let natural = items.map { Double(min(Self.maxNameWidth, Self.measure($0.name))) }
+        let active = items.firstIndex { $0.active }
+        let chrome = Double(Self.leadingInset + Self.plusWidth + 6) + Double(Self.spacing) * Double(items.count)
+            + Double(Self.itemChrome) * Double(items.count)
+        let available = Double(maxWidth) - chrome
+        if let widths = BoardStripFit.names(natural: natural, active: active, available: available,
+                                            minWidth: Double(Self.minNameWidth)) {
+            return items.indices.map { (items[$0].name, CGFloat(widths[$0])) }
+        }
+        let numbers = items.indices.map { "\($0 + 1)" }
+        let widths = BoardStripFit.numbers(natural: natural, numberWidths: numbers.map { Double(Self.measure($0)) },
+                                           active: active, available: available, minWidth: Double(Self.minNameWidth))
+        return items.indices.map { ($0 == active ? items[$0].name : numbers[$0], CGFloat(widths[$0])) }
+    }
+
+    private func itemRects() -> [NSRect] { itemRects(fitted()) }
+
+    private func itemRects(_ fit: [(label: String, width: CGFloat)]) -> [NSRect] {
         var x = Self.leadingInset
         let y = ((Self.height - Self.itemHeight) / 2).rounded()
-        return items.map { item in
-            let width = Self.padding + textWidth(label(for: item)) + 4 + Self.trailingSlot + 2
+        return fit.map { entry in
+            let width = entry.width + Self.itemChrome
             defer { x += width + Self.spacing }
             return NSRect(x: x, y: y, width: width, height: Self.itemHeight)
         }
@@ -100,9 +137,12 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
     override func draw(_ dirtyRect: NSRect) {
         let theme = ThemeStore.shared.theme
         let accent = ThemeStore.shared.accentColor
-        for (i, rect) in itemRects().enumerated() {
+        let fit = fitted()
+        let rects = itemRects(fit)
+        for (i, rect) in rects.enumerated() {
             let item = items[i]
-            let hover = hovered == .item(i) || hovered == .close(i)
+            let hover = drag == nil && (hovered == .item(i) || hovered == .close(i))
+            let editing = editingID == item.id
             if hover && !item.active {
                 theme.foreground.withAlphaComponent(0.07).setFill()
                 NSBezierPath(roundedRect: rect, xRadius: 5, yRadius: 5).fill()
@@ -112,15 +152,16 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
                 NSBezierPath(roundedRect: NSRect(x: rect.minX + 3, y: rect.maxY - 2, width: rect.width - 6, height: 2),
                              xRadius: 1, yRadius: 1).fill()
             }
-            let color = theme.foreground.withAlphaComponent(item.active ? 0.92 : 0.5)
+            let dragged = drag?.index == i
+            let color = theme.foreground.withAlphaComponent(dragged ? 0.3 : item.active ? 0.92 : 0.5)
             let style = NSMutableParagraphStyle()
             style.lineBreakMode = .byTruncatingTail
-            let text = NSAttributedString(string: label(for: item), attributes: [
+            let text = NSAttributedString(string: fit[i].label, attributes: [
                 .font: Self.font, .foregroundColor: color, .paragraphStyle: style])
             let lineHeight = ceil(Self.font.ascender - Self.font.descender)
             let textRect = NSRect(x: rect.minX + Self.padding, y: rect.midY - lineHeight / 2,
-                                  width: textWidth(label(for: item)), height: lineHeight)
-            text.draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine])
+                                  width: fit[i].width, height: lineHeight)
+            if !editing { text.draw(with: textRect, options: [.usesLineFragmentOrigin, .truncatesLastVisibleLine]) }
 
             let box = closeRect(in: rect)
             if hover {
@@ -140,6 +181,14 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
                 drawBadge(badge, in: NSRect(x: box.midX - Self.badgeSize / 2, y: box.midY - Self.badgeSize / 2,
                                             width: Self.badgeSize, height: Self.badgeSize))
             }
+        }
+
+        // Einfügemarke beim Ziehen: 2-pt-Strich in der Akzentfarbe in der Lücke.
+        if let drag, drag.gap != drag.index, drag.gap != drag.index + 1, !rects.isEmpty {
+            let x = drag.gap < rects.count ? rects[drag.gap].minX - Self.spacing / 2 : rects[rects.count - 1].maxX + Self.spacing / 2
+            accent.setFill()
+            NSBezierPath(roundedRect: NSRect(x: x - 1, y: rects[0].minY + 2, width: 2, height: rects[0].height - 4),
+                         xRadius: 1, yRadius: 1).fill()
         }
 
         let plus = plusRect()
@@ -206,11 +255,30 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
     override func mouseExited(with event: NSEvent) { hovered = nil }
 
     override func mouseDown(with event: NSEvent) {
-        pressed = target(at: convert(event.locationInWindow, from: nil))
+        let point = convert(event.locationInWindow, from: nil)
+        pressed = target(at: point)
+        pressPoint = point
+        if event.clickCount == 2, case .item(let i) = pressed, items.indices.contains(i) {
+            pressed = nil
+            beginRename(items[i].id)
+        }
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard case .item(let i) = pressed, let start = pressPoint, items.count > 1 else { return }
+        let point = convert(event.locationInWindow, from: nil)
+        guard drag != nil || hypot(point.x - start.x, point.y - start.y) >= Self.dragThreshold else { return }
+        let gap = itemRects().filter { $0.midX < point.x }.count
+        drag = (i, gap)
     }
 
     override func mouseUp(with event: NSEvent) {
-        defer { pressed = nil }
+        defer { pressed = nil; pressPoint = nil }
+        if let finished = drag {
+            drag = nil
+            if items.indices.contains(finished.index) { onMove?(items[finished.index].id, finished.gap) }
+            return
+        }
         guard let pressed, pressed == target(at: convert(event.locationInWindow, from: nil)) else { return }
         switch pressed {
         case .item(let i) where items.indices.contains(i): onSelect?(items[i].id)
@@ -224,7 +292,61 @@ final class BoardStripView: NSView, NSViewToolTipOwner {
     override func hitTest(_ point: NSPoint) -> NSView? {
         guard let superview else { return nil }
         let local = convert(point, from: superview)
+        if let editor, editor.frame.contains(local) { return super.hitTest(point) }
         return target(at: local) == nil ? nil : self
+    }
+
+    // MARK: Umbenennen
+
+    /// Inline-Feld über dem Namen (Doppelklick, Menü „Brett umbenennen …“). ⏎ übernimmt, Esc bricht ab, leer =
+    /// zurück zum automatischen Namen; Klick daneben übernimmt wie ⏎.
+    func beginRename(_ id: ObjectIdentifier) {
+        guard editor == nil, let index = items.firstIndex(where: { $0.id == id }) else { return }
+        let rect = itemRects()[index]
+        let field = NSTextField(string: items[index].name)
+        field.font = Self.font
+        field.isBordered = false
+        field.drawsBackground = true
+        field.backgroundColor = ThemeStore.shared.theme.foreground.withAlphaComponent(0.1)
+        field.textColor = ThemeStore.shared.theme.foreground
+        field.focusRingType = .none
+        field.cell?.isScrollable = true
+        field.cell?.wraps = false
+        field.delegate = self
+        let lineHeight = ceil(Self.font.ascender - Self.font.descender) + 2
+        field.frame = NSRect(x: rect.minX + Self.padding - 2, y: rect.midY - lineHeight / 2,
+                             width: max(rect.width - Self.padding - Self.trailingSlot + 24, 120), height: lineHeight)
+        addSubview(field)
+        editor = field
+        editingID = id
+        needsDisplay = true
+        window?.makeFirstResponder(field)
+        field.currentEditor()?.selectAll(nil)
+    }
+
+    private var cancelRename = false
+
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy selector: Selector) -> Bool {
+        if selector == #selector(NSResponder.cancelOperation(_:)) {
+            cancelRename = true
+            window?.makeFirstResponder(nil)
+            return true
+        }
+        return false
+    }
+
+    func controlTextDidEndEditing(_ note: Notification) {
+        guard let field = editor, let id = editingID else { return }
+        let text = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cancelled = cancelRename
+        cancelRename = false
+        editor = nil
+        editingID = nil
+        field.delegate = nil
+        field.removeFromSuperview()
+        needsDisplay = true
+        if !cancelled { onRename?(id, text) }
+        onEditingEnded?()
     }
 
     // MARK: Tooltips
