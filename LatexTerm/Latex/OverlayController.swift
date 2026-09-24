@@ -80,6 +80,7 @@ final class OverlayController {
     func scheduleRescan(dirtyStart startY: Int, dirtyEnd endY: Int) {
         dirtyStart = min(dirtyStart, min(startY, endY))
         dirtyEnd   = max(dirtyEnd,   max(startY, endY))
+        followContentShift()
         armRescan()
     }
 
@@ -96,6 +97,9 @@ final class OverlayController {
             // am Text; den exakten Rescan macht `scrollSettled()` nach dem Scroll-Ende. Der
             // akkumulierte Dirty-Bereich bleibt erhalten (wird erst im rescan() konsumiert).
             if self.isScrolling { return }
+            // TUI-Scroll (s. `followContentShift`): erst rendern, wenn das Bild steht — außer der
+            // Inhalt wandert schon länger (Streaming), dann spätestens alle `shiftMaxDefer`.
+            if let start = self.shiftStart, Date().timeIntervalSince(start) < Self.shiftMaxDefer { return }
             self.rescan()
         }
     }
@@ -142,6 +146,63 @@ final class OverlayController {
         isScrolling = false
         needsScrollReset = true   // rescan() bündelt setScroll(0) + sync() in einen JS-Aufruf
         rescan()
+    }
+
+    // MARK: - TUI-Scroll (24.09.: Claude Code im Vollbild scrollt selbst)
+    //
+    // Eine Vollbild-TUI scrollt nicht über yDisp, sondern zeichnet den Schirm um k Zeilen versetzt
+    // neu — für uns nur „Inhalt geändert". Bisher folgten Formeln und ausgeblendete Quellzellen
+    // erst nach Debounce + Rescan + sync(): die Formeln hingen hinterher, und der rohe LaTeX-Text
+    // blitzte an den neuen Stellen auf (Maske noch an den alten). Jetzt: bei jeder Änderung die
+    // Zeilen gegen den Stand des letzten Rescans abgleichen; ist der Inhalt als Ganzes um k Zeilen
+    // gewandert, sofort den Formel-Block per translateY und die Maske um k Zeilen mitschieben —
+    // ohne Rendern. Neu gerendert wird erst, wenn das Bild `shiftIdle` still steht.
+    private var baseRowKeys: [Int?] = []           // Zeilen-Hash je Viewport-Zeile beim letzten Rescan
+    private var baseHidden: [Int: [Range<Int>]] = [:]
+    private var shiftRows = 0                       // aktuell angewandter Versatz (Inhalt um k nach oben)
+    private var shiftStart: Date?                   // erster Versatz seit dem letzten Rescan
+    private var shiftSettleWork: DispatchWorkItem?
+    private static let shiftIdle: TimeInterval = 0.12
+    private static let shiftMaxDefer: TimeInterval = 0.4
+
+    private static func rowKey(_ text: String) -> Int? {
+        let t = text.replacingOccurrences(of: "\u{0}", with: " ")
+        guard let last = t.lastIndex(where: { $0 != " " }) else { return nil }
+        return t[...last].hashValue
+    }
+
+    private func followContentShift() {
+        guard let terminal, !isScrolling, !lastEmpty, FormulaSettings.shared.formulasEnabled else { return }
+        let term = terminal.getTerminal()
+        let rows = term.rows
+        guard baseRowKeys.count == rows else { return }
+        var index: [Int: [Int]] = [:]
+        for (i, k) in baseRowKeys.enumerated() { if let k { index[k, default: []].append(i) } }
+        var votes: [Int: Int] = [:]
+        var nonBlank = 0
+        for r in 0..<rows {
+            guard let k = Self.rowKey(term.getLine(row: r)?.translateToString(trimRight: true) ?? "") else { continue }
+            nonBlank += 1
+            for i in index[k] ?? [] { votes[i - r, default: 0] += 1 }
+        }
+        guard let best = votes.max(by: { $0.value < $1.value || ($0.value == $1.value && abs($0.key) > abs($1.key)) }),
+              best.key != 0, best.value >= 3, best.value * 2 >= nonBlank,
+              best.value > votes[0, default: 0] else { return }
+        let k = best.key
+        if k != shiftRows {
+            shiftRows = k
+            setLayerOffset(-CGFloat(k) * terminal.cellSize().height)
+            var moved: [Int: [Range<Int>]] = [:]
+            for (row, ranges) in baseHidden { moved[row - k] = ranges }
+            hiddenCells = moved
+            onHiddenCellsChanged?()
+            if !preview.pinned { preview.hide() }
+        }
+        if shiftStart == nil { shiftStart = Date() }
+        shiftSettleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.rescan() }
+        shiftSettleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.shiftIdle, execute: work)
     }
 
     /// Verschiebt den Formel-Container als Block (Block-Translation beim Scrollen).
@@ -203,7 +264,9 @@ final class OverlayController {
     /// Versatz herausrechnen, sonst trifft ein Klick im Settle-Fenster die falsche
     /// (Vor-Scroll-)Position.
     private func scrollHitboxOffset() -> CGFloat {
-        guard isScrolling, let terminal else { return 0 }
+        guard let terminal else { return 0 }
+        if shiftRows != 0 { return -CGFloat(shiftRows) * terminal.cellSize().height }
+        guard isScrolling else { return 0 }
         let yDisp = terminal.getTerminal().buffer.yDisp
         return CGFloat(lastRenderedYDisp - yDisp) * terminal.cellSize().height
     }
@@ -300,6 +363,12 @@ final class OverlayController {
         needsFullScan = false
         let dStart = dirtyStart, dEnd = dirtyEnd
         dirtyStart = Int.max; dirtyEnd = -1
+
+        // TUI-Versatz endet mit diesem Rescan: translateY im selben JS-Aufruf wie sync() auf 0.
+        if shiftRows != 0 { needsScrollReset = true }
+        shiftRows = 0
+        shiftStart = nil
+        shiftSettleWork?.cancel(); shiftSettleWork = nil
 
         // Inhalt ändert sich → laufende Hover-Vorschau schließen (Hover triggert neu).
         // Ein GEPINNTES Panel überlebt jeden Rescan (#19, Option A): es dient dem
@@ -582,6 +651,8 @@ final class OverlayController {
 
         lastEmpty = items.isEmpty
 
+        baseRowKeys = rowTexts.map(Self.rowKey)
+        baseHidden = hidden
         if hidden != hiddenCells { hiddenCells = hidden; onHiddenCellsChanged?() }
 
         #if DEBUG
