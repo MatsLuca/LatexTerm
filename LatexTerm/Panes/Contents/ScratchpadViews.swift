@@ -153,7 +153,7 @@ final class ScratchpadCanvas: NSView {
     /// Farbe wählen heißt malen wollen: aus dem Radierer zurück zum Stift.
     func selectColor(_ index: Int) {
         colorIndex = max(0, min(index, palette.count - 1))
-        if tool.erases { tool = .pen }
+        if tool.erases || tool == .none { tool = .pen }
         stateChanged()
     }
 
@@ -492,7 +492,7 @@ final class ScratchpadCanvas: NSView {
             strokes.forEach { $0.offset(by: shift) }
         }
         nameCards()
-        tool = doc.tool
+        tool = .none   // Kachel startet ohne Fokus, also ohne Werkzeug
         colorIndex = max(0, min(doc.color, ScratchPalette.names.count - 1))
         sizeIndex = max(0, min(doc.size, Self.penWidths.count - 1))
         needsDisplay = true
@@ -626,7 +626,11 @@ final class ScratchpadCanvas: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        if takeFocusClick(event) { return }
+        // Ohne Werkzeug malt nichts — dann darf schon der Fokus-Klick ziehen (Karte oder Fläche).
+        if takeFocusClick(event) {
+            guard tool == .none else { return }
+            focusClick = false
+        }
         endEditing(commit: true)
         let p = point(event)
         if tool == .eraser { beginErase(at: p); return }
@@ -635,6 +639,10 @@ final class ScratchpadCanvas: NSView {
         if !event.modifierFlags.contains(.option), let index = strokes.lastIndex(where: { ($0.card || $0.isImage) && $0.touches(p, radius: 0) }) {
             if event.clickCount == 2, strokes[index].card { beginEditing(strokes[index]); return }
             beginObjectDrag(index, at: p)
+            return
+        }
+        if tool == .none {
+            panDrag = (convert(event.locationInWindow, from: nil), pan)
             return
         }
         let width = tool == .marker ? Self.markerWidths[sizeIndex] : Self.penWidths[sizeIndex]
@@ -647,6 +655,12 @@ final class ScratchpadCanvas: NSView {
         if focusClick { return }
         let p = point(event)
         if objectDrag != nil { continueObjectDrag(to: p); return }
+        if let drag = panDrag {
+            let now = convert(event.locationInWindow, from: nil)
+            springTimer?.invalidate(); springTimer = nil
+            setView(pan: CGPoint(x: drag.pan.x + now.x - drag.start.x, y: drag.pan.y + now.y - drag.start.y), zoom: zoom)
+            return
+        }
         if lastErasePoint != nil { continueErase(to: p); return }
         if cutting != nil { continueCut(to: p); return }
         guard let stroke = current else { return }
@@ -662,6 +676,7 @@ final class ScratchpadCanvas: NSView {
     override func mouseUp(with event: NSEvent) {
         if focusClick { focusClick = false; return }
         if objectDrag != nil { endObjectDrag(); return }
+        if panDrag != nil { panDrag = nil; return }
         if lastErasePoint != nil { endErase(); return }
         if cutting != nil { endCut(); return }
         guard let stroke = current else { return }
@@ -694,6 +709,8 @@ final class ScratchpadCanvas: NSView {
         var linked: [(index: Int, original: ScratchStroke)] = []
     }
     private var objectDrag: ObjectDrag?
+    /// Ohne Werkzeug: Ziehen auf freier Fläche verschiebt die Sicht (Start am Bildschirm, Sicht zu Beginn).
+    private var panDrag: (start: CGPoint, pan: CGPoint)?
 
     private func beginObjectDrag(_ index: Int, at p: CGPoint) {
         let original = strokes[index]
@@ -867,10 +884,10 @@ final class ScratchpadCanvas: NSView {
         view.string = (info.title.map { $0 + "\n" } ?? "") + (card.text ?? "")
         view.onFinish = { [weak self] commit in self?.endEditing(commit: commit) }
         addSubview(view)
-        window?.makeFirstResponder(view)
-        view.selectAll(nil)
         editor = view
         editing = card
+        window?.makeFirstResponder(view)
+        view.selectAll(nil)
     }
 
     /// Fertig: Text neu gesetzt (Titel = erste Zeile, falls die Karte einen hatte); leer = Karte weg.
@@ -965,6 +982,14 @@ final class ScratchpadCanvas: NSView {
     // Größenwechsel (⌘⏎ rein/raus) und Fokusverlust lassen die Sicht, wo sie ist (Mats, 24.09.) — der Weltpunkt in
     // der Kachelmitte bleibt in der Mitte. Zurück zur Mitte: Knopf in der Leiste, zweimal Leertaste, ⌘0, Doppeltipp.
 
+    /// Fokus weg = kein Werkzeug mehr (Mats, 24.09.): wer zurückklickt, um etwas zu ziehen, radiert nicht aus Versehen.
+    /// Ausnahme: der Fokus geht an das Eingabefeld einer Karte.
+    override func resignFirstResponder() -> Bool {
+        let ok = super.resignFirstResponder()
+        if ok, editor == nil, tool != .none { select(.none) }
+        return ok
+    }
+
     /// Zweimal Leertaste kurz hintereinander = zur Mitte.
     private var lastSpace: TimeInterval = 0
 
@@ -1012,7 +1037,16 @@ final class ScratchpadCanvas: NSView {
 
     private func endErase() {
         lastErasePoint = nil
-        let swaps = eraseSwaps.values.map { (old: $0.old, new: $0.live) }
+        var swaps: [(old: ScratchStroke, new: ScratchStroke)] = []
+        for pair in eraseSwaps.values {
+            // Nichts mehr übrig: die Karte geht ganz (Undo bringt die alte Fassung an ihren Platz).
+            if pair.live.isFullyErased, let index = strokes.firstIndex(where: { $0 === pair.live }) {
+                strokes.remove(at: index)
+                erased.append((index, pair.old))
+            } else {
+                swaps.append((old: pair.old, new: pair.live))
+            }
+        }
         eraseSwaps = [:]
         guard !erased.isEmpty || !swaps.isEmpty else { return }
         commit(Edit(removed: erased, swapped: swaps))
@@ -1036,19 +1070,22 @@ final class ScratchpadCanvas: NSView {
 
     private func eraseFromCard(_ index: Int, at p: CGPoint, radius r: CGFloat) {
         let card = strokes[index]
+        // Tintenflecken (Mats, 24.09.): was zusammenhängt und dieselbe Farbe hat, geht am Stück — jeder Buchstabe,
+        // der ganze Rahmen, die ganze Fläche. Buchstaben zuerst (sie liegen obenauf), dann Rahmen, dann Fläche.
         let reach = NSRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)
-        let hits = card.glyphRects.filter { $0.rect.intersects(reach) && !card.isCut(CGPoint(x: $0.rect.midX, y: $0.rect.midY)) }
+        let rect = card.cardRect
+        let glyphs = card.liveGlyphs.filter { $0.rect.intersects(reach) }
+        var cut: [ScratchCut] = glyphs.map { .chars($0.range) }
+        if cut.isEmpty, card.showsFrame, ScratchStroke.distanceToEdge(p, rect) <= r + 3 { cut = [ScratchCut(part: "frame")] }
+        if cut.isEmpty, card.showsFill, rect.contains(p) { cut = [ScratchCut(part: "fill")] }
+        guard !cut.isEmpty else { return }
         let live: ScratchStroke
         if let pair = eraseSwaps[card.uid] { live = pair.live } else {
             live = card.copy()
             strokes[index] = live
             eraseSwaps[card.uid] = (card, live)
         }
-        if hits.isEmpty {
-            live.cuts.append(ScratchCut(points: [p], radius: r))
-        } else {
-            for hit in hits { live.cuts.append(ScratchCut(rect: hit.rect.insetBy(dx: -1, dy: -1))) }
-        }
+        live.cuts += cut
         invalidate(card.bounds)
     }
 
@@ -1150,12 +1187,12 @@ final class ScratchpadCanvas: NSView {
         if let info = stroke.cardInfo, let text = stroke.text {
             let rect = stroke.cardRect
             let frame = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
-            if info.fill ?? true {
+            if stroke.showsFill {
                 color.withAlphaComponent(0.08).setFill()
                 frame.fill()
             }
             switch info.frame?.lowercased() {
-            case "none": break
+            case _ where !stroke.showsFrame: break
             case let style:
                 frame.lineWidth = style == "thick" ? 2.5 : stroke.width
                 if style == "dashed" { frame.setLineDash([5, 4], count: 2, phase: 0) }
@@ -1164,8 +1201,11 @@ final class ScratchpadCanvas: NSView {
             }
             let pad = ScratchStroke.cardPadding
             let ink = palette[max(0, min(info.textColor ?? 0, palette.count - 1))]
-            info.attributed(text: text, color: ink).draw(with: rect.insetBy(dx: pad.width, dy: pad.height),
-                                                        options: [.usesLineFragmentOrigin, .usesFontLeading])
+            let content = NSMutableAttributedString(attributedString: info.attributed(text: text, color: ink))
+            for range in stroke.erasedChars.rangeView where range.upperBound <= content.length {
+                content.addAttribute(.foregroundColor, value: NSColor.clear, range: NSRange(location: range.lowerBound, length: range.count))
+            }
+            content.draw(with: rect.insetBy(dx: pad.width, dy: pad.height), options: [.usesLineFragmentOrigin, .usesFontLeading])
         } else if let text = stroke.text {
             (text as NSString).draw(at: stroke.textRect.origin, withAttributes: [.font: stroke.font, .foregroundColor: ink])
         } else if stroke.filled {
@@ -1196,6 +1236,7 @@ final class ScratchpadCanvas: NSView {
         case .pen: diameter = max(Self.penWidths[sizeIndex] * zoom, 4)
         case .marker: diameter = min(Self.markerWidths[sizeIndex] * zoom, 120)
         case .eraser, .cutter: diameter = eraserRadius * 2   // Radierer: fest am Bildschirm
+        case .none: return .openHand
         }
         let side = ceil(diameter) + 4
         let (tool, ink, rim, paper) = (self.tool, inkColor, palette[0], self.paper)
@@ -1208,6 +1249,7 @@ final class ScratchpadCanvas: NSView {
             case .eraser:
                 paper.withAlphaComponent(0.5).setFill(); circle.fill()
                 rim.setStroke(); circle.stroke()
+            case .none: break
             case .cutter:
                 paper.withAlphaComponent(0.5).setFill(); circle.fill()
                 circle.setLineDash([2, 2], count: 2, phase: 0)
@@ -1300,8 +1342,9 @@ final class ScratchpadToolbar: NSView {
         switch item {
         case .tool(.pen): "Stift (P)"
         case .tool(.marker): "Marker (M)"
-        case .tool(.eraser): "Radierer (E): ganze Striche, bei Karten einzelne Buchstaben — Rechtsklick radiert immer"
+        case .tool(.eraser): "Radierer (E): nimmt ganze Tintenflecken — Striche, Bilder, bei Karten Buchstabe, Rahmen oder Fläche am Stück. Rechtsklick radiert immer"
         case .tool(.cutter): "Pixel-Radierer (X): schneidet aus allem, was er überfährt"
+        case .tool(.none): nil
         case .color(let i): "\(ScratchPalette.names[i]) (\(i + 1))"
         case .size: "Stärke (+ / −)"
         case .undo: "Rückgängig (⌘Z)"
@@ -1420,6 +1463,7 @@ final class ScratchpadToolbar: NSView {
         case .marker: "highlighter"
         case .eraser: "eraser"
         case .cutter: "eraser.line.dashed"
+        case .none: "hand.raised"
         }
     }
 

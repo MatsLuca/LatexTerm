@@ -420,9 +420,12 @@ final class ScratchpadContent: PaneContent {
 
 enum ScratchTool: String, Codable {
     case pen, marker, eraser, cutter
+    /// Kein Werkzeug (nach Fokusverlust, Mats 24.09.): Ziehen verschiebt Karten/Bilder oder die Fläche, malt nie.
+    case none
 
     var label: String {
         switch self {
+        case .none: "kein Werkzeug"
         case .pen: "Stift"
         case .marker: "Marker"
         case .eraser: "Radierer"
@@ -440,8 +443,16 @@ struct ScratchCut: Codable, Equatable {
     var points: [CGPoint] = []
     var radius: CGFloat = 0
     var rect: NSRect?
+    /// Ganzer Tintenfleck einer Karte weg (Radierer, Mats 24.09.): "fill" = Fläche, "frame" = Rahmen,
+    /// "chars" = Zeichen `location`..<`location+length` (ein Buchstabe = ein Fleck).
+    var part: String?
+    var location: Int?
+    var length: Int?
+
+    static func chars(_ range: NSRange) -> ScratchCut { ScratchCut(part: "chars", location: range.location, length: range.length) }
 
     func covers(_ p: CGPoint, slack: CGFloat = 0) -> Bool {
+        if part != nil { return false }
         if let rect { return rect.insetBy(dx: -slack, dy: -slack).contains(p) }
         guard let first = points.first else { return false }
         let reach = radius + slack
@@ -451,6 +462,7 @@ struct ScratchCut: Codable, Equatable {
     }
 
     var path: NSBezierPath {
+        if part != nil { return NSBezierPath() }
         if let rect { return NSBezierPath(rect: rect) }
         let path = NSBezierPath()
         path.lineWidth = radius * 2
@@ -863,10 +875,46 @@ final class ScratchStroke: Codable {
         let full = (cardInfo?.title.map { $0 + (text.isEmpty ? "" : "\n") } ?? "") + text
         var chars = Array(full.utf16)
         var changed = false
-        for (range, rect) in glyphRects where isCut(CGPoint(x: rect.midX, y: rect.midY)) {
+        for (range, rect) in glyphRects where isCut(CGPoint(x: rect.midX, y: rect.midY)) || erasedChars.contains(range.location) {
             for i in range.location..<min(NSMaxRange(range), chars.count) { chars[i] = 0xB7; changed = true }
         }
         return changed ? String(decoding: chars, as: UTF16.self) : nil
+    }
+
+    // MARK: Tintenflecken einer Karte
+
+    var erasedChars: IndexSet {
+        var set = IndexSet()
+        for cut in cuts where cut.part == "chars" {
+            if let l = cut.location, let n = cut.length { set.insert(integersIn: l..<(l + n)) }
+        }
+        return set
+    }
+    var showsFill: Bool { (cardInfo?.fill ?? true) && !cuts.contains { $0.part == "fill" } }
+    var showsFrame: Bool { cardInfo?.frame?.lowercased() != "none" && !cuts.contains { $0.part == "frame" } }
+    /// Buchstaben, die noch da sind (nicht als Fleck radiert).
+    var liveGlyphs: [(range: NSRange, rect: NSRect)] {
+        let gone = erasedChars
+        return glyphRects.filter { !gone.contains($0.range.location) }
+    }
+    /// Nichts mehr übrig — die Karte kann weg.
+    var isFullyErased: Bool { card && !showsFill && !showsFrame && liveGlyphs.isEmpty }
+
+    /// Treffer auf sichtbare Tinte der Karte: Fläche, Rahmen oder ein Buchstabe.
+    func cardTouches(_ p: CGPoint, radius r: CGFloat) -> Bool {
+        let rect = cardRect
+        guard rect.insetBy(dx: -r - 3, dy: -r - 3).contains(p), !isCut(p) else { return false }
+        if showsFill, rect.contains(p) { return true }
+        if showsFrame, Self.distanceToEdge(p, rect) <= r + 3 { return true }
+        let reach = NSRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)
+        return liveGlyphs.contains { $0.rect.intersects(reach) }
+    }
+
+    /// Abstand zum Rand eines Rechtecks (innen wie außen).
+    static func distanceToEdge(_ p: CGPoint, _ r: NSRect) -> CGFloat {
+        if r.contains(p) { return min(p.x - r.minX, r.maxX - p.x, p.y - r.minY, r.maxY - p.y) }
+        let dx = max(r.minX - p.x, 0, p.x - r.maxX), dy = max(r.minY - p.y, 0, p.y - r.maxY)
+        return hypot(dx, dy)
     }
 
     func append(_ p: CGPoint) {
@@ -983,6 +1031,7 @@ final class ScratchStroke: Codable {
     /// Beschriftungen auch innen.)
     func touches(_ p: CGPoint, radius: CGFloat) -> Bool {
         guard bounds.insetBy(dx: -radius, dy: -radius).contains(p) else { return false }
+        if card { return cardTouches(p, radius: radius) }
         if isCut(p) { return false }
         if isImage || text != nil { return true }
         if filled, path.contains(p) { return true }
