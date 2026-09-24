@@ -56,6 +56,9 @@ protocol PaneContent: AnyObject {
     func willClose()
     /// Args für den Session-Snapshot; nil = flüchtig, kommt nach ⌥⌘R nicht wieder.
     func snapshotArgs() -> [String: String]?
+    /// Fokus-Dimmung selbst zeichnen (z. B. nur den Grund, nicht die Tinte)? true = die Hülle blendet dann nicht
+    /// den ganzen Inhalt ab (Default false).
+    func setDimmed(_ dimmed: Bool) -> Bool
 }
 
 extension PaneContent {
@@ -74,6 +77,7 @@ extension PaneContent {
     func handle(_ command: PaneCommand) -> Bool { false }
     func willClose() {}
     func snapshotArgs() -> [String: String]? { nil }
+    func setDimmed(_ dimmed: Bool) -> Bool { false }
 }
 
 /// Was ein Inhalt vom Wirt will.

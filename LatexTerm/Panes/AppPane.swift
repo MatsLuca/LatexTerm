@@ -20,6 +20,7 @@ final class AppPane: Pane, PaneContentDelegate {
         view.autoresizingMask = [.width, .height]
         container.addSubview(view)
         container.pane = self
+        container.dimHandler = { [unowned content] dimmed in content.setDimmed(dimmed) }
         container.ownAccent = content.accent
         content.delegate = self
         content.applyTheme(ThemeStore.shared.theme)

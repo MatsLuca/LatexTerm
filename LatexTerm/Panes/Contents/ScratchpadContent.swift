@@ -358,6 +358,12 @@ final class ScratchpadContent: PaneContent {
 
     func snapshotArgs() -> [String: String]? { ["id": id.uuidString] }
 
+    /// Abgedunkelt wird nur das Papier (und die Leiste) — die Tinte bleibt voll lesbar (Mats, 24.09.).
+    func setDimmed(_ dimmed: Bool) -> Bool {
+        root.setDimmed(dimmed)
+        return true
+    }
+
     // MARK: Sichern
 
     private func canvasChanged() {

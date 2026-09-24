@@ -44,6 +44,14 @@ final class PaneContainerView: NSView {
         didSet { if fillsWindow != oldValue { restyle() } }
     }
 
+    /// Inhalt, der die Fokus-Dimmung selbst zeichnet (gibt true zurück) — dann bleibt die Hülle deckend.
+    var dimHandler: ((Bool) -> Bool)?
+
+    /// Grund einer abgedunkelten Kachel, die sich selbst dimmt: Richtung Steg-Farbe, wie die halb durchsichtige Hülle.
+    static func dimmedGround(_ base: NSColor) -> NSColor {
+        base.blended(withFraction: 0.35, of: ThemeStore.shared.theme.gap.withAlphaComponent(1)) ?? base
+    }
+
     /// Die Kachel, der diese Hülle gehört — Ziel der Kachel-Kürzel (über ihren Host).
     weak var pane: (any Pane)?
 
@@ -132,10 +140,13 @@ final class PaneContainerView: NSView {
     func restyle(animated: Bool = false) {
         let store = ThemeStore.shared
         let base = store.theme.background.withAlphaComponent(1)
-        let hull = store.paneBorders ? (ownAccent.map { base.blended(withFraction: 0.12, of: $0) ?? base } ?? base) : base
+        var hull = store.paneBorders ? (ownAccent.map { base.blended(withFraction: 0.12, of: $0) ?? base } ?? base) : base
+        let dimmed = !(hasFocus || !store.focusDimming)
+        let dimsItself = dimHandler?(dimmed) ?? false
+        if dimmed, dimsItself { hull = Self.dimmedGround(hull) }
         layer?.backgroundColor = hull.cgColor
 
-        let alpha: CGFloat = (hasFocus || !store.focusDimming) ? 1.0 : 0.65
+        let alpha: CGFloat = dimmed && !dimsItself ? 0.65 : 1.0
         // Fenster-füllend (gezoomt oder einzige Kachel): voller Akzent — der
         // Rahmen IST dann die Session-Kennung; sonst Fokus-Abstufung im Grid.
         var borderWidth: CGFloat = fillsWindow ? 2.0 : (showsFocusBorder ? (hasFocus ? 1.5 : 1.0) : 0)

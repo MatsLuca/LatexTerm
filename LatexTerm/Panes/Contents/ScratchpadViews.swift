@@ -24,6 +24,11 @@ final class ScratchpadView: NSView {
         addSubview(note)
     }
 
+    func setDimmed(_ dimmed: Bool) {
+        canvas.dimmed = dimmed
+        toolbar.alphaValue = dimmed ? 0.65 : 1
+    }
+
     /// Wo das Auswahlmenü des Senden-Knopfs aufgeht.
     var sendAnchor: (view: NSView, rect: NSRect) { (toolbar, toolbar.sendRect) }
 
@@ -68,6 +73,9 @@ final class ScratchpadCanvas: NSView {
     private(set) var sizeIndex = 1
     private(set) var palette = [NSColor](repeating: .white, count: ScratchPalette.names.count)
     private var paper: NSColor = .black
+    /// Kachel nicht fokussiert: Papier abgedunkelt, Tinte unverändert.
+    var dimmed = false { didSet { if dimmed != oldValue { needsDisplay = true } } }
+    private var ground: NSColor { dimmed ? PaneContainerView.dimmedGround(paper) : paper }
 
     private var strokes: [ScratchStroke] = []
     private var current: ScratchStroke?
@@ -900,8 +908,8 @@ final class ScratchpadCanvas: NSView {
 
     /// Die Zeichnung hängt an der Mitte der Kachel (Weltpunkt 0,0 = Kachelmitte in der Normalsicht): wird die
     /// Kachel größer oder kleiner, wächst bzw. schrumpft der Rand gleichmäßig rundherum. `pan`/`zoom` sind
-    /// die Abweichung von der Normalsicht (Trackpad: zwei Finger verschieben, Aufziehen zoomt). Jeder
-    /// Größenwechsel (⌘⏎, Raster) und das Verlassen der Kachel federn zurück in die Normalsicht.
+    /// die Abweichung von der Normalsicht (Trackpad: zwei Finger verschieben, Aufziehen zoomt). Seit 24.09. bleibt
+    /// die Sicht bei Größenwechsel (⌘⏎) und Fokusverlust stehen; zurück per Mitte-Knopf, ␣␣, ⌘0 oder Doppeltipp.
     private(set) var pan: CGPoint = .zero
     private(set) var zoom: CGFloat = 1
     static let zoomRange: ClosedRange<CGFloat> = 0.2...8
@@ -925,13 +933,15 @@ final class ScratchpadCanvas: NSView {
     /// Neu zeichnen, was ein Weltbereich am Bildschirm belegt.
     private func invalidate(_ world: NSRect) { setNeedsDisplay(toScreen(world).insetBy(dx: -2, dy: -2)) }
 
-    private var isNormalView: Bool { pan == .zero && zoom == 1 }
+    var isNormalView: Bool { pan == .zero && zoom == 1 }
 
     private func setView(pan: CGPoint, zoom: CGFloat) {
+        let wasNormal = isNormalView
         self.pan = pan
         self.zoom = zoom
         needsDisplay = true
         cursorChanged()
+        if wasNormal != isNormalView { onStateChange?() }   // Mitte-Knopf hell/blass
     }
 
     /// Zurück in die Normalsicht (Mitte, 100 %) — sanft, wenn gewünscht.
@@ -952,17 +962,11 @@ final class ScratchpadCanvas: NSView {
         springTimer = timer
     }
 
-    override func setFrameSize(_ newSize: NSSize) {
-        let changed = newSize != frame.size
-        super.setFrameSize(newSize)
-        if changed { resetView(animated: true) }
-    }
+    // Größenwechsel (⌘⏎ rein/raus) und Fokusverlust lassen die Sicht, wo sie ist (Mats, 24.09.) — der Weltpunkt in
+    // der Kachelmitte bleibt in der Mitte. Zurück zur Mitte: Knopf in der Leiste, zweimal Leertaste, ⌘0, Doppeltipp.
 
-    override func resignFirstResponder() -> Bool {
-        let ok = super.resignFirstResponder()
-        if ok { resetView(animated: true) }
-        return ok
-    }
+    /// Zweimal Leertaste kurz hintereinander = zur Mitte.
+    private var lastSpace: TimeInterval = 0
 
     /// Zwei Finger (oder Mausrad) verschieben die Fläche.
     override func scrollWheel(with event: NSEvent) {
@@ -1054,6 +1058,10 @@ final class ScratchpadCanvas: NSView {
     override func keyDown(with event: NSEvent) {
         guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
               let key = event.charactersIgnoringModifiers?.lowercased() else { return super.keyDown(with: event) }
+        if key == " " {
+            if event.timestamp - lastSpace < 0.4 { resetView(animated: true); lastSpace = 0 } else { lastSpace = event.timestamp }
+            return
+        }
         switch key {
         case "p": select(.pen)
         case "m": select(.marker)
@@ -1099,7 +1107,7 @@ final class ScratchpadCanvas: NSView {
     // MARK: Zeichnen
 
     override func draw(_ dirtyRect: NSRect) {
-        paper.setFill()
+        ground.setFill()
         dirtyRect.fill()
         NSGraphicsContext.saveGraphicsState()
         let view = NSAffineTransform()
@@ -1220,12 +1228,12 @@ final class ScratchpadToolbar: NSView {
     var vertical = true { didSet { if vertical != oldValue { needsDisplay = true; updateToolTips() } } }
 
     private enum Item {
-        case tool(ScratchTool), color(Int), size, undo, redo, clear, send, divider
+        case tool(ScratchTool), color(Int), size, undo, redo, clear, home, send, divider
     }
 
     private static let items: [Item] = [.tool(.pen), .tool(.marker), .tool(.eraser), .tool(.cutter), .divider]
         + ScratchPalette.names.indices.map { .color($0) }
-        + [.divider, .size, .divider, .undo, .redo, .clear, .divider, .send]
+        + [.divider, .size, .divider, .undo, .redo, .clear, .home, .divider, .send]
 
     static let cell: CGFloat = 26
     private static let dividerSize: CGFloat = 7
@@ -1299,6 +1307,7 @@ final class ScratchpadToolbar: NSView {
         case .undo: "Rückgängig (⌘Z)"
         case .redo: "Wiederholen (⇧⌘Z)"
         case .clear: "Leeren (⌘⌫) — ⌘S sichert als PNG, ⌘C kopiert als Bild"
+        case .home: "Zur Mitte (zweimal Leertaste, ⌘0, Doppeltipp mit zwei Fingern)"
         case .send: "An Claude/Codex schicken (⇧⌘⏎) — landet als Bild in deren Eingabe; ⌥-Klick: Ziel wählen"
         case .divider: nil
         }
@@ -1317,6 +1326,7 @@ final class ScratchpadToolbar: NSView {
         case .undo: canvas.undo()
         case .redo: canvas.redo()
         case .clear: canvas.clear()
+        case .home: canvas.resetView(animated: true)
         case .send: onSend?(event.modifierFlags.contains(.option))
         case .divider: break
         }
@@ -1388,6 +1398,7 @@ final class ScratchpadToolbar: NSView {
             case .undo: drawSymbol("arrow.uturn.backward", in: rect, color: canvas.canUndo ? dim : faint)
             case .redo: drawSymbol("arrow.uturn.forward", in: rect, color: canvas.canRedo ? dim : faint)
             case .clear: drawSymbol("trash", in: rect, color: canvas.strokeCount > 0 ? dim : faint)
+            case .home: drawSymbol("scope", in: rect, color: canvas.isNormalView ? faint : dim)
             case .send: drawSymbol("paperplane", in: rect, color: canvas.strokeCount > 0 ? foreground : faint)
             case .divider:
                 let line = vertical
