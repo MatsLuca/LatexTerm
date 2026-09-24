@@ -225,6 +225,74 @@ final class ScratchpadCanvas: NSView {
         onChange?()
     }
 
+    // MARK: Karten (Brainstorm-Pinnwand, 24.09.)
+
+    /// Karten anlegen, ein Undo-Schritt. Ohne Ort sucht `freeSpot` Platz (rechts oben zuerst, nicht über
+    /// Vorhandenem); Karten eines Aufrufs stapeln sich so untereinander.
+    @discardableResult
+    func addCards(_ specs: [(text: String, origin: CGPoint?, width: CGFloat?, color: Int)], author: String?,
+                  replacing layer: ScratchLayer? = nil) -> [ScratchStroke] {
+        let removed = layer.map(remove) ?? []
+        var placed: [ScratchStroke] = []
+        for spec in specs {
+            let width = spec.width.map { min(600, max(ScratchStroke.cardMinWidth, $0)) } ?? ScratchStroke.cardWidth(for: spec.text)
+            let size = ScratchStroke.cardSize(text: spec.text, width: width)
+            let origin = spec.origin ?? freeSpot(for: size, also: placed.map(\.bounds))
+            placed.append(ScratchStroke(card: spec.text, at: origin, width: width, color: spec.color, author: author))
+        }
+        guard !placed.isEmpty || !removed.isEmpty else { return [] }
+        strokes.append(contentsOf: placed)
+        commit(Edit(removed: removed, added: placed))
+        return placed
+    }
+
+    /// Obere linke Ecke für eine Karte `size` im sichtbaren Bereich, die nichts überdeckt: Spalten von rechts
+    /// nach links, darin von oben nach unten. Kein Platz → unter alles Vorhandene, rechts.
+    func freeSpot(for size: NSSize, also extra: [NSRect] = []) -> CGPoint {
+        let area = visibleWorldRect.insetBy(dx: 24, dy: 24)
+        let obstacles = (strokes.map(\.bounds) + extra).map { $0.insetBy(dx: -8, dy: -8) }
+        let step: CGFloat = 12
+        var x = area.maxX - size.width
+        while x >= area.minX {
+            var y = area.minY
+            while y + size.height <= area.maxY {
+                let rect = NSRect(origin: CGPoint(x: x, y: y), size: size)
+                if let hit = obstacles.first(where: { $0.intersects(rect) }) {
+                    y = max(y + step, hit.maxY + 1)
+                } else {
+                    return rect.origin
+                }
+            }
+            x -= step
+        }
+        let bottom = (strokes.map(\.bounds) + extra).map(\.maxY).max() ?? area.minY
+        return CGPoint(x: max(area.minX, area.maxX - size.width), y: max(area.minY, bottom + 16))
+    }
+
+    /// Karten für Agenten (`call look`): Text, Urheber, Rahmen.
+    var cards: [ScratchStroke] { strokes.filter(\.card) }
+
+    /// ⌘V: Text aus der Zwischenablage an den Zeiger (sonst in freien Platz). Eine Liste wird zu einer Karte je
+    /// Punkt, untereinander; `split: false` legt alles in eine Karte.
+    private func pasteCards(split: Bool) {
+        guard let raw = NSPasteboard.general.string(forType: .string) else { NSSound.beep(); return }
+        let items = split ? CardText.items(raw) : [CardText.unwrap(raw)].filter { !$0.isEmpty }
+        guard !items.isEmpty else { NSSound.beep(); return }
+        var origin: CGPoint?
+        if let window {
+            let local = convert(window.mouseLocationOutsideOfEventStream, from: nil)
+            if bounds.contains(local) { origin = toWorld(local) }
+        }
+        var specs: [(text: String, origin: CGPoint?, width: CGFloat?, color: Int)] = []
+        var y = origin?.y ?? 0
+        for item in items {
+            let width = ScratchStroke.cardWidth(for: item)
+            specs.append((item, origin.map { CGPoint(x: $0.x, y: y) }, width, colorIndex))
+            y += ScratchStroke.cardSize(text: item, width: width).height + 10
+        }
+        addCards(specs, author: nil)
+    }
+
     // MARK: Sichern
 
     func restore(_ doc: ScratchDocument) {
@@ -347,6 +415,8 @@ final class ScratchpadCanvas: NSView {
     /// Erstklick-Regel: Klick in eine Kachel, die nicht den Fokus hat, holt nur den Fokus und malt nicht —
     /// sonst hinterlässt jedes „reinklicken, um ⌘⏎ zu drücken" einen Punkt. Gilt bis zum Loslassen.
     private var focusClick = false
+    /// Laufender Zug an einer Karte: Index, Karte, Startpunkt, bisher verschoben (Welt).
+    private var cardDrag: (index: Int, stroke: ScratchStroke, start: CGPoint, moved: CGPoint)?
     /// Zeitstempel des Klicks, der uns den Fokus gebracht hat. AppKit macht die angeklickte View schon
     /// VOR `mouseDown` zum First Responder — in `mouseDown` ist der Fokus also immer schon da.
     private var focusedByClickAt: TimeInterval?
@@ -372,6 +442,11 @@ final class ScratchpadCanvas: NSView {
         if takeFocusClick(event) { return }
         let p = point(event)
         if tool == .eraser { beginErase(at: p); return }
+        // Auf einer Karte: ziehen verschiebt sie (⌥ = trotzdem malen, z. B. anstreichen).
+        if !event.modifierFlags.contains(.option), let index = strokes.lastIndex(where: { $0.card && $0.bounds.contains(p) }) {
+            cardDrag = (index, strokes[index], p, .zero)
+            return
+        }
         let width = tool == .marker ? Self.markerWidths[sizeIndex] : Self.penWidths[sizeIndex]
         let stroke = ScratchStroke(start: p, color: colorIndex, width: width, marker: tool == .marker)
         current = stroke
@@ -381,6 +456,14 @@ final class ScratchpadCanvas: NSView {
     override func mouseDragged(with event: NSEvent) {
         if focusClick { return }
         let p = point(event)
+        if let drag = cardDrag {
+            let total = CGPoint(x: p.x - drag.start.x, y: p.y - drag.start.y)
+            let before = drag.stroke.bounds
+            drag.stroke.offset(by: CGPoint(x: total.x - drag.moved.x, y: total.y - drag.moved.y))
+            cardDrag?.moved = total
+            invalidate(before.union(drag.stroke.bounds))
+            return
+        }
         if lastErasePoint != nil { continueErase(to: p); return }
         guard let stroke = current else { return }
         let before = stroke.bounds
@@ -394,6 +477,18 @@ final class ScratchpadCanvas: NSView {
 
     override func mouseUp(with event: NSEvent) {
         if focusClick { focusClick = false; return }
+        if let drag = cardDrag {
+            cardDrag = nil
+            // Zurück an den Ausgangsort; der Umzug selbst ist eine Kopie — so bleibt Undo/Redo identitätsbasiert.
+            drag.stroke.offset(by: CGPoint(x: -drag.moved.x, y: -drag.moved.y))
+            guard hypot(drag.moved.x, drag.moved.y) >= 2, strokes.indices.contains(drag.index),
+                  strokes[drag.index] === drag.stroke else { needsDisplay = true; return }
+            let copy = drag.stroke.moved(by: drag.moved)
+            strokes.remove(at: drag.index)
+            strokes.append(copy)
+            commit(Edit(removed: [(drag.index, drag.stroke)], added: [copy]))
+            return
+        }
         if lastErasePoint != nil { endErase(); return }
         guard let stroke = current else { return }
         current = nil
@@ -552,7 +647,8 @@ final class ScratchpadCanvas: NSView {
         }
     }
 
-    /// ⌘Z/⇧⌘Z, ⌘⌫ leeren, ⌘S als PNG sichern, ⌘C als Bild kopieren, ⇧⌘⏎ an Agent schicken. Kachel-Kürzel (⌘W …)
+    /// ⌘Z/⇧⌘Z, ⌘⌫ leeren, ⌘S als PNG sichern, ⌘C als Bild kopieren, ⌘V Text als Karten (Liste = je Punkt eine,
+    /// ⇧⌘V = alles in eine), ⇧⌘⏎ an Agent schicken. Kachel-Kürzel (⌘W …)
     /// verteilt vorher die Hülle.
     override func performKeyEquivalent(with event: NSEvent) -> Bool {
         let mods = event.modifierFlags.intersection([.command, .shift, .option, .control])
@@ -571,6 +667,8 @@ final class ScratchpadCanvas: NSView {
         case ("z", true): redo()
         case ("s", false): onSaveRequest?()
         case ("c", false): copyImage()
+        case ("v", false): pasteCards(split: true)
+        case ("v", true): pasteCards(split: false)
         case ("0", false): resetView(animated: true)
         default:
             guard event.keyCode == 51, !shift else { return super.performKeyEquivalent(with: event) }   // ⌫
@@ -604,7 +702,19 @@ final class ScratchpadCanvas: NSView {
     private func draw(_ stroke: ScratchStroke) {
         let color = palette[max(0, min(stroke.color, palette.count - 1))]
         let ink = stroke.marker ? color.withAlphaComponent(Self.markerAlpha) : color
-        if let text = stroke.text {
+        if stroke.card, let text = stroke.text {
+            let rect = stroke.cardRect
+            let frame = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+            color.withAlphaComponent(0.08).setFill()
+            frame.fill()
+            frame.lineWidth = stroke.width
+            color.withAlphaComponent(0.75).setStroke()
+            frame.stroke()
+            let pad = ScratchStroke.cardPadding
+            (text as NSString).draw(with: rect.insetBy(dx: pad.width, dy: pad.height),
+                                    options: [.usesLineFragmentOrigin, .usesFontLeading],
+                                    attributes: [.font: stroke.font, .foregroundColor: palette[0]])
+        } else if let text = stroke.text {
             (text as NSString).draw(at: stroke.textRect.origin, withAttributes: [.font: stroke.font, .foregroundColor: ink])
         } else if stroke.filled {
             ink.setFill()
@@ -870,5 +980,54 @@ extension ScratchpadToolbar: NSViewToolTipOwner {
     func view(_ view: NSView, stringForToolTip tag: NSView.ToolTipTag, point: NSPoint,
               userData data: UnsafeMutableRawPointer?) -> String {
         zip(Self.items, frames).first { $0.1.contains(point) }.flatMap { toolTip(for: $0.0) } ?? ""
+    }
+}
+
+/// Text aus dem Terminal für Karten aufbereiten: Terminal-Auswahl ist hart umbrochen und eingerückt — Zeilen
+/// wieder zu Absätzen fügen; Aufzählungen (1. / 1) / - / * / •) und Leerzeilen trennen Punkte.
+enum CardText {
+    private static let marker = try! NSRegularExpression(pattern: #"^\s*(\d{1,3}[.)]|[-*•–])\s+"#)
+
+    static func isItemStart(_ line: String) -> Bool {
+        marker.firstMatch(in: line, range: NSRange(line.startIndex..., in: line)) != nil
+    }
+
+    /// Punkte einer Liste (ein Satz davor wird eigene Karte); ohne Aufzählungszeichen die Absätze.
+    static func items(_ raw: String) -> [String] {
+        let lines = raw.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        let hasList = lines.filter(isItemStart).count >= 2
+        var items: [String] = []
+        var current: [String] = []
+        func flush() {
+            let text = current.joined(separator: " ").trimmingCharacters(in: .whitespaces)
+            if !text.isEmpty { items.append(text) }
+            current = []
+        }
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty { flush(); continue }
+            if hasList, isItemStart(line) { flush() }
+            current.append(trimmed)
+        }
+        flush()
+        return items
+    }
+
+    /// Alles als ein Text; Absätze bleiben getrennt, Zeilen darin werden gefügt.
+    static func unwrap(_ raw: String) -> String {
+        let lines = raw.replacingOccurrences(of: "\r\n", with: "\n").components(separatedBy: "\n")
+        var paragraphs: [String] = []
+        var current: [String] = []
+        for line in lines {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.isEmpty || isItemStart(line) {
+                if !current.isEmpty { paragraphs.append(current.joined(separator: " ")) }
+                current = trimmed.isEmpty ? [] : [trimmed]
+            } else {
+                current.append(trimmed)
+            }
+        }
+        if !current.isEmpty { paragraphs.append(current.joined(separator: " ")) }
+        return paragraphs.joined(separator: "\n")
     }
 }
