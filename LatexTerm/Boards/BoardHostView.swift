@@ -146,6 +146,33 @@ final class BoardHostView: NSView {
         return list.position(of: ObjectIdentifier(board))
     }
 
+    /// Kachel samt Begleitern auf ein anderes Brett dieses Fensters (Steuerkanal `layout` Absicht `board`).
+    /// `to` = "new" oder Brett-Nummer. Das Ziel entsteht bzw. steht fest, bevor das alte Brett leer werden kann —
+    /// sonst nähme das letzte Brett das Fenster mit. `activate` false: Mats bleibt auf seinem Brett.
+    func move(_ pane: any Pane, from source: TerminalSplitView, to: String, activate: Bool) throws -> TerminalSplitView {
+        let target: TerminalSplitView
+        if to.lowercased() == "new" || to.lowercased() == "neu" {
+            target = TerminalSplitView(plan: nil, empty: true)
+            target.boardHost = self
+            target.frame = bounds
+            target.isHidden = true
+            addSubview(target)
+            boards.append(target)
+            list.add(ObjectIdentifier(target), activate: false)
+        } else {
+            guard let n = Int(to), ordered.indices.contains(n - 1) else {
+                throw BoardMoveError("Brett „\(to)“ gibt es nicht (\"new\" oder 1–\(ordered.count))")
+            }
+            target = ordered[n - 1]
+            guard target !== source else { throw BoardMoveError("Die Kachel steht schon auf Brett \(n)") }
+        }
+        let moving = source.detachForMove(pane)
+        target.adopt(moving, focus: activate)
+        if activate { self.activate(target) }
+        refreshStrip()
+        return target
+    }
+
     /// Letzte Kachel eines Bretts zu (⌘W): das Brett geht mit, das letzte Brett nimmt das Fenster mit.
     func boardBecameEmpty(_ board: TerminalSplitView) {
         close(board)
@@ -255,4 +282,9 @@ final class BoardHostView: NSView {
 
 private extension BoardCommand {
     var isNext: Bool { if case .next = self { return true } else { return false } }
+}
+
+struct BoardMoveError: Error, CustomStringConvertible {
+    let description: String
+    init(_ description: String) { self.description = description }
 }

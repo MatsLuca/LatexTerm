@@ -16,6 +16,14 @@ import os
 /// Begleiter, `als_reiter`). Vorn liegt die zuletzt gezeigte (`shownAt`); die übrigen haben denselben
 /// Frame, sind aber verborgen. Wer eine verdeckte Kachel fokussiert (Reiter, Chip, ⌘1–9, Steuerkanal),
 /// holt sie vorher nach vorn (`reveal`).
+/// Eine Kachel auf dem Weg zwischen zwei Brettern: Öffner und Begleiter-Anker reisen mit.
+struct MovingPane {
+    let pane: any Pane
+    let openedBy: String?
+    /// Kachel, neben der sie stand (mitgezogene Begleiter); nil = die umziehende Kachel selbst.
+    let companion: UUID?
+}
+
 final class TerminalSplitView: NSView {
 
     /// Regel (Kachel-Protokoll): die Split-View spricht nur `Pane`. `as? TerminalPane` steht an
@@ -90,7 +98,8 @@ final class TerminalSplitView: NSView {
 
     /// Ein Brett (23.09.2026): `plan` = gespeicherte Kacheln beim Wiederherstellen, sonst beginnt es mit Home.
     /// Die Warteschlange des Snapshots verteilt `BoardHostView`.
-    init(plan: SessionSnapshot.Window?) {
+    /// `empty`: ohne erste Home-Kachel — nur für den Umzug einer Kachel auf ein neues Brett (`BoardHostView.move`).
+    init(plan: SessionSnapshot.Window?, empty: Bool = false) {
         super.init(frame: .zero)
         wantsLayer = true
         layer?.backgroundColor = Self.gapColor.cgColor   // scheint in den Kachel-Lücken durch
@@ -104,7 +113,7 @@ final class TerminalSplitView: NSView {
         if let plan {
             restore(plan)
             customName = plan.name
-        } else {
+        } else if !empty {
             addPane(home: true)
         }
 
@@ -283,6 +292,26 @@ final class TerminalSplitView: NSView {
         panes.forEach { $0.willClose() }
         removeTitlebarHUD()
         removeFromSuperview()
+    }
+
+    /// Brett-Umzug (Steuerkanal `layout` Absicht `board`): `pane` samt den Kacheln, die neben ihr stehen, lösen —
+    /// ohne sie zu beenden; die Prozesse laufen weiter. Ist das Brett danach leer, schließt es (wie beim letzten ⌘W).
+    func detachForMove(_ pane: any Pane) -> [MovingPane] {
+        let followers = panes.filter { $0 !== pane && companionOf[$0.id] == pane.id }
+        let moving = ([pane] + followers).map { p in
+            MovingPane(pane: p, openedBy: p.openedBy, companion: p === pane ? nil : pane.id)
+        }
+        for entry in moving.reversed() { removePane(entry.pane) }
+        return moving
+    }
+
+    /// Gegenstück zu `detachForMove`: Kacheln hier einhängen, Öffner und Begleiter wie vorher.
+    func adopt(_ moving: [MovingPane], focus: Bool) {
+        for entry in moving {
+            mount(entry.pane, placement: entry.companion.map { .beside($0) } ?? .own)
+            entry.pane.openedBy = entry.openedBy
+            settle(entry.pane, focus: focus && entry.companion == nil)
+        }
     }
 
     /// Die Brett-Leiste links hat ihre Breite geändert: Chips neu bemessen.
@@ -1695,6 +1724,9 @@ extension TerminalSplitView: ControlCommandHandler {
         }
     }
 
+    /// Steckbrief einer Kachel dieses Bretts (nach einem Umzug fragt das alte Brett das neue).
+    func controlInfo(for pane: any Pane) -> PaneInfo { info(for: pane) }
+
     private func info(for pane: any Pane) -> PaneInfo {
         // Terminal-Cast 3/3: Session-Zustand und Identität liefert nur ein Terminal.
         let terminal = pane as? TerminalPane
@@ -1768,6 +1800,14 @@ extension TerminalSplitView: ControlCommandHandler {
         if !onBehalf, let foreign = targets.first(where: { !own($0) }) {
             return .failure("\(layoutName(foreign)) hast nicht du geöffnet — fremde Kacheln ordnest du nur auf ausdrücklichen Auftrag um (auf_auftrag: true).")
         }
+        // Auf ein anderes Brett umziehen (samt Begleitern): `board` = "new" oder Brett-Nummer in diesem Fenster.
+        if op == "board" {
+            guard let boardHost else { return .failure("Kein Brett-Fenster") }
+            do {
+                let target = try boardHost.move(first, from: self, to: request.board ?? "new", activate: request.focus ?? false)
+                return ControlResponse(ok: true, pane: target.controlInfo(for: first), layout: target.layoutReport())
+            } catch { return .failure(String(describing: error)) }
+        }
         // Reiter nach vorn holen: ändert keine Aufteilung, also auch keinen Stand.
         if op == "front" {
             reveal(first)
@@ -1784,7 +1824,7 @@ extension TerminalSplitView: ControlCommandHandler {
         case ("swap", let b?): intent = .swap(a, b)
         case ("tab", let b?): intent = .tab(a, into: b)
         case ("beside", nil), ("below", nil), ("swap", nil), ("tab", nil): return .failure("\(op) braucht eine zweite Kachel (otherPane)")
-        default: return .failure("Unbekannte Absicht „\(op)“ (show, big, grow, shrink, beside, below, swap, tab, front, auto)")
+        default: return .failure("Unbekannte Absicht „\(op)“ (show, big, grow, shrink, beside, below, swap, tab, front, board, auto)")
         }
         guard zoomedPane == nil else { return .failure("Gerade ist eine Kachel gezoomt (⌘⏎) — erst danach umordnen.") }
         guard let root = manualLayout ?? effectiveLayout() else { return .failure("Kein Layout") }

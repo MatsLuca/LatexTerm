@@ -58,10 +58,13 @@ struct ControlRequest: Codable {
     /// sobald es einen Aufrufer gibt), "own" = eigenständig (neue Agenten-Session), "background" = als verdeckter
     /// Reiter bei der aufrufenden Kachel, ohne Platz zu nehmen.
     var placement: String?
-    /// layout: Absicht "show" | "big" | "grow" | "shrink" | "beside" | "below" | "swap" | "auto";
+    /// layout: Absicht "show" | "big" | "grow" | "shrink" | "beside" | "below" | "swap" | "tab" | "front" | "board" | "auto";
     /// Ziel in `pane`, zweite Kachel in `otherPane`.
     var layoutOp: String?
     var otherPane: String?
+    /// layout Absicht "board": Ziel-Brett — "new" (neues Brett) oder 1-basierte Brett-Nummer im Fenster der Kachel.
+    /// `focus` true holt das Ziel-Brett nach vorn; Default: es bleibt, wo Mats gerade ist.
+    var board: String?
     /// layout: Mats hat ausdrücklich darum gebeten — fremde Kacheln und seine Handarbeit dürfen geändert werden.
     var onBehalf: Bool?
     /// layout mit Absicht: Stand-Nummer (`LayoutReport.revision`), die der Aufrufer zuletzt gelesen hat.

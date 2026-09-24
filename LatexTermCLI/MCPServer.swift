@@ -162,7 +162,8 @@ final class MCPServer {
         seinen Wunsch. Kacheln per UUID-Präfix ansprechen — Nummern verschieben sich beim Umordnen. Reiter: ab dem vierten \
         Begleiter teilen sich Kacheln einen Platz (eine vorn, der Rest verdeckt, Reiterleiste darüber); eine neue kommt vorn \
         hin. Willst du eine verdeckte zeigen: layout vorholen; Platz sparen: layout reiter — oder gleich mit placement \
-        hintergrund öffnen, wenn der Nutzer die Kachel nicht sofort sehen muss (Log, Server, Nachschlagen).
+        hintergrund öffnen, wenn der Nutzer die Kachel nicht sofort sehen muss (Log, Server, Nachschlagen). Bittet der Nutzer, \
+        mit dieser Session auf ein eigenes/neues Brett umzuziehen: layout brett (pane = du, ziel neu) — die Session läuft weiter.
         """)
         return lines.joined(separator: "\n")
     }
@@ -243,10 +244,12 @@ final class MCPServer {
              ["steps"]),
         tool("layout", "Kacheln anordnen",
              "Zeigt die Anordnung deines Fensters mit Stand-Nummer (Baum aus nebeneinander/übereinander, Anteile in %, ✋ = Aufteilung von Mats von Hand gesetzt, Reiter = mehrere Kacheln an einem Platz, eine vorn) und ändert sie auf Absichts-Ebene. Ohne action: nur zeigen. Geändert wird nur auf dem Stand, den du zuletzt gelesen hast (hier oder in panes) — hat sich inzwischen etwas geändert, kommt der neue Stand zurück: prüfen, dann erneut. Kein Zoom. Eigene Kacheln (du und was du geöffnet hast) ordnest du frei um; fremde Kacheln und ✋-Aufteilungen nur, wenn der Nutzer es ausdrücklich will (auf_auftrag: true). automatisch = eigene Anpassungen verwerfen, die App ordnet wieder selbst.",
-             ["action": ["type": "string", "enum": ["zeigen", "gross", "groesser", "kleiner", "nebeneinander", "untereinander", "tauschen", "reiter", "vorholen", "automatisch"],
-                         "description": "gross = pane groß, der Rest schmal (holt einen verdeckten Reiter nach vorn) · groesser/kleiner = um ein Stück · nebeneinander/untereinander = other rechts neben bzw. unter pane stellen (löst ihn auch aus Reitern) · tauschen = Plätze von pane und other tauschen · reiter = pane als Reiter hinter other an dessen Platz legen (spart Platz, bleibt einen Klick entfernt) · vorholen = verdeckten Reiter pane nach vorn holen, ohne Fokus"],
+             ["action": ["type": "string", "enum": ["zeigen", "gross", "groesser", "kleiner", "nebeneinander", "untereinander", "tauschen", "reiter", "vorholen", "brett", "automatisch"],
+                         "description": "gross = pane groß, der Rest schmal (holt einen verdeckten Reiter nach vorn) · groesser/kleiner = um ein Stück · nebeneinander/untereinander = other rechts neben bzw. unter pane stellen (löst ihn auch aus Reitern) · tauschen = Plätze von pane und other tauschen · reiter = pane als Reiter hinter other an dessen Platz legen (spart Platz, bleibt einen Klick entfernt) · vorholen = verdeckten Reiter pane nach vorn holen, ohne Fokus · brett = pane samt ihren Begleitern auf ein anderes Brett umziehen (Session läuft weiter; ziel)"],
               "pane": paneProperty,
               "other": ["type": "string", "description": "zweite Kachel (nebeneinander, untereinander, tauschen, reiter), UUID-Präfix oder Nummer"],
+              "ziel": ["type": "string", "description": "brett: \"neu\" (Default) oder Brett-Nummer in deinem Fenster"],
+              "zeigen": ["type": "boolean", "description": "brett: Ziel-Brett nach vorn holen (Default false — der Nutzer bleibt, wo er ist)"],
               "auf_auftrag": ["type": "boolean", "description": "Nutzer hat ausdrücklich darum gebeten — erlaubt fremde Kacheln und ✋-Aufteilungen"]],
              []),
         tool("close_pane", "Kachel schließen",
@@ -558,7 +561,7 @@ final class MCPServer {
     private func layoutTool(_ a: JSON) throws -> String {
         let action = (a["action"] as? String) ?? "zeigen"
         let ops = ["zeigen": "show", "gross": "big", "groesser": "grow", "kleiner": "shrink", "nebeneinander": "beside",
-                   "untereinander": "below", "tauschen": "swap", "reiter": "tab", "vorholen": "front", "automatisch": "auto"]
+                   "untereinander": "below", "tauschen": "swap", "reiter": "tab", "vorholen": "front", "brett": "board", "automatisch": "auto"]
         guard let op = ops[action] else { throw ToolFailure("action „\(action)“ gibt es nicht (\(ops.keys.sorted().joined(separator: ", ")))") }
         if op == "show" { return panesTool() }
 
@@ -573,6 +576,10 @@ final class MCPServer {
         if ["beside", "below", "swap", "tab"].contains(op) {
             guard let other = a["other"] else { throw ToolFailure("\(action) braucht other (die zweite Kachel)") }
             request.otherPane = try target(["pane": other]).0.id
+        }
+        if op == "board" {
+            request.board = (a["ziel"] as? String) ?? (a["ziel"] as? Int).map(String.init) ?? "new"
+            request.focus = a["zeigen"] as? Bool ?? false
         }
         guard let seen = layoutSeen else {
             // Nie gelesen: erst den Stand zeigen, nichts ändern.
