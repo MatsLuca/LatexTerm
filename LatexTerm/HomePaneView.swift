@@ -712,7 +712,12 @@ final class HomePaneView: NSView {
                 sessions.append(["id": s.id, "agent": "codex", "path": s.path, "title": String(s.title.prefix(300)), "lastAt": s.lastAt])
             }
             sessions.sort { ($0["lastAt"] as? String ?? "") > ($1["lastAt"] as? String ?? "") }
-            var projects = d.projects.map { ["path": $0.path, "name": $0.name] }
+            // Recency and newest session per project, so the Lagebild also knows projects beyond the 160 sessions.
+            var projects: [[String: String]] = d.projects.map { p in
+                let newest = p.sessions.max { ($0.lastAt ?? "") < ($1.lastAt ?? "") }
+                return ["path": p.path, "name": p.name, "lastActivity": p.lastActivity ?? "",
+                        "lastSessionID": newest?.id ?? "", "lastSessionTitle": String((newest?.title ?? "").prefix(300))]
+            }
             if !projects.contains(where: { $0["path"] == self.agentPath }) {
                 projects.insert(["path": self.agentPath, "name": (self.agentPath as NSString).lastPathComponent], at: 0)
             }
