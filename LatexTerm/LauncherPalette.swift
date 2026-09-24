@@ -396,8 +396,8 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
     }
 
     private func updatePrompt() {
-        status.stringValue = "OpenAI · Codex-Kontingent"
-        status.toolTip = "Enter schickt den Prompt an das Launcher-Modell (Codex-Login). Je nach Auftrag gehen die Projektliste oder bis zu 48 Gesprächsausschnitte aus den 160 jüngsten Launcher-Sessions mit. Neue Kacheln brauchen eine weitere Startbestätigung."
+        status.stringValue = "Claude · Opus low"
+        status.toolTip = "Enter schickt den Prompt an das Launcher-Modell (Claude-Login, ohne Werkzeuge). Je nach Auftrag gehen die Projektliste oder bis zu 48 Gesprächsausschnitte aus den 160 jüngsten Launcher-Sessions mit. Neue Kacheln brauchen eine weitere Startbestätigung."
         if let r = aiResults {
             var sections: [Section] = []
             let hits = r.entries.filter { $0.kind == .session }
