@@ -329,4 +329,58 @@ final class LaTeXDetectorTests: XCTestCase {
         let ok = "\\begin{cases} a \\\\ b \\end{cases}"
         XCTAssertEqual(LaTeXDetector.repairMarkdownDamage(ok), ok)
     }
+
+    func testRepairOnlyInRowEnvironmentsAtTopDepth() {
+        // Nicht in `\text{…}`: dort ist `\ ` ein gewolltes Leerzeichen.
+        let text = "\\begin{cases} a & \\text{falls x\\ y} \\ b & sonst \\end{cases}"
+        XCTAssertEqual(LaTeXDetector.repairMarkdownDamage(text),
+                       "\\begin{cases} a & \\text{falls x\\ y} \\\\ b & sonst \\end{cases}")
+        // `equation` hat keine Zeilen.
+        let eq = "\\begin{equation} a\\ b \\end{equation}"
+        XCTAssertEqual(LaTeXDetector.repairMarkdownDamage(eq), eq)
+        // Innerstes Environment zählt: `aligned` in `equation` wird repariert.
+        XCTAssertEqual(LaTeXDetector.repairMarkdownDamage("\\begin{equation}\\begin{aligned} a \\ b \\end{aligned}\\end{equation}"),
+                       "\\begin{equation}\\begin{aligned} a \\\\ b \\end{aligned}\\end{equation}")
+        // Verschachteltes `array` mit Spaltenangabe.
+        XCTAssertEqual(LaTeXDetector.repairMarkdownDamage("\\left(\\begin{array}{cc} 1 & 2 \\ 3 & 4 \\end{array}\\right)"),
+                       "\\left(\\begin{array}{cc} 1 & 2 \\\\ 3 & 4 \\end{array}\\right)")
+        // Vor `\end` folgt keine Zeile mehr → bleibt.
+        XCTAssertEqual(LaTeXDetector.repairMarkdownDamage("\\begin{pmatrix} 1 \\ 2 \\ \\end{pmatrix}"),
+                       "\\begin{pmatrix} 1 \\\\ 2 \\ \\end{pmatrix}")
+    }
+
+    func testHeadingMarkerBeforeBlockOpener() {
+        // Codex-Reflow rendert den `$$`-Öffner als Überschrift `# $$`.
+        let blocks = LaTeXDetector.findBlocks(in: ["• # $$", "x^2 + y^2", "$$"])
+        XCTAssertEqual(blocks.map(\.body), ["x^2 + y^2"])
+        XCTAssertEqual(blocks.first?.startCol, 4)
+        // Ohne Schlusszeile kein Block.
+        XCTAssertTrue(LaTeXDetector.findBlocks(in: ["# $$", "text"]).isEmpty)
+    }
+
+    // MARK: - Falschtreffer-Korpus (Fälle aus folio-terminal, INLINE_FALSE_POSITIVE_CORPUS, MIT/Apache-2.0)
+
+    func testShellAndPriceLinesAreNotMath() {
+        let lines = [
+            "PATH=$HOME/bin:$PATH", "WHERE a=$1 AND b=$2", "Cost $5+$10", "tiers $5-$10-$20",
+            "awk '{print $1}' report.txt", "if [ $a -eq $b ]; then", "export FOO=$BAR:$BAZ",
+            "sed -i 's/$old/$new/g' f", "echo $$", "pid=$$", "$$broken", "$5 和 $10",
+            "echo $PATH:$HOME", "cp $SRC/a $DST/b",
+        ]
+        for line in lines {
+            XCTAssertEqual(LaTeXDetector.find(in: line), [], line)
+        }
+    }
+
+    func testIncompleteBodyRule() {
+        XCTAssertTrue(LaTeXDetector.looksIncomplete("HOME/bin:"))
+        XCTAssertTrue(LaTeXDetector.looksIncomplete("a+"))
+        XCTAssertTrue(LaTeXDetector.looksIncomplete("x ="))
+        XCTAssertFalse(LaTeXDetector.looksIncomplete("L^2_+"))
+        XCTAssertFalse(LaTeXDetector.looksIncomplete("="))
+        XCTAssertFalse(LaTeXDetector.looksIncomplete("a=b"))
+        // Echte Mathe bleibt erkannt.
+        XCTAssertEqual(LaTeXDetector.find(in: "$n$th und $X$ … $Y$ und $(a+b)$").map(\.body), ["n", "X", "Y", "(a+b)"])
+        XCTAssertEqual(LaTeXDetector.find(in: "das $=$-Zeichen").map(\.body), ["="])
+    }
 }

@@ -116,8 +116,11 @@ final class FormulaLayer: WKWebView, WKNavigationDelegate, WKScriptMessageHandle
     var els={};                 // key -> {wrap,bg,m,latex}
     var cfg={fontPx:13,cellH:16,fg:'rgb(230,225,225)',userScale:1,sans:false};
     // Serifenlos = Formel in \\mathsf{…}; verträgt ein Konstrukt das nicht, rendert es klassisch.
+    // Grenzen gegen pathologische Formeln (eine WebView trägt alle Formeln): Länge, Makro-
+    // Expansion, explizite Größen (\\rule, \\kern …). Überschreitung = normaler KaTeX-Fehler.
     function tex(latex,display){
-      var o={displayMode:display,throwOnError:true};
+      if(latex.length>8192) throw new Error('Formel zu lang ('+latex.length+' Zeichen)');
+      var o={displayMode:display,throwOnError:true,maxExpand:1000,maxSize:20};
       if(cfg.sans){ try{ return katex.renderToString('\\\\mathsf{'+latex+'}',o); }catch(_){} }
       return katex.renderToString(latex,o);
     }
@@ -690,7 +693,8 @@ final class FormulaPreview: NSView, WKNavigationDelegate, WKScriptMessageHandler
     var el=document.getElementById('m');
     function post(){ window.webkit.messageHandlers.size.postMessage({w:el.offsetWidth, h:el.offsetHeight}); }
     function tex(latex, sans){
-      var o={displayMode:true,throwOnError:true};
+      if(latex.length>8192) throw new Error('Formel zu lang ('+latex.length+' Zeichen)');
+      var o={displayMode:true,throwOnError:true,maxExpand:1000,maxSize:20};
       if(sans){ try{ return katex.renderToString('\\\\mathsf{'+latex+'}',o); }catch(_){} }
       return katex.renderToString(latex,o);
     }

@@ -48,7 +48,7 @@ enum LaTeXDetector {
                                          styles: styles, style: styles?[i]) {
                 let body = repairMarkdownDamage(
                     String(chars[open.contentStart..<closeIdx]).trimmingCharacters(in: .whitespaces))
-                if !body.isEmpty, !looksLikeProse(body) {
+                if !body.isEmpty, !looksLikeProse(body), !looksIncomplete(body) {
                     hits.append(LaTeXHit(
                         body: body,
                         startCol: i,
@@ -176,28 +176,81 @@ enum LaTeXDetector {
         return words.count >= 2
     }
 
+    /// Vollständigkeit statt Wohlgeformtheit (Idee aus folio-terminal, `inline_source_is_complete`):
+    /// eine Formel endet nicht auf einem Operator. Fängt Shell-Pfade, deren Variablen die Pandoc-
+    /// Regel passieren (`$HOME/bin:$PATH`, `$BAR:$BAZ`, `s/$old/$new/`). Unäres `+`/`-` hinter
+    /// `^`/`_`/`{` (`$L^2_+$`) und ein einzelnes Symbol (`das $=$-Zeichen`) bleiben Formeln.
+    static func looksIncomplete(_ body: String) -> Bool {
+        let c = Array(body)
+        guard c.count > 1, let last = c.last else { return false }
+        if last == "+" || last == "-" { return !["^", "_", "{"].contains(c[c.count - 2]) }
+        let operators: Set<Character> = ["/", ":", "=", "<", ">", "*", "^", "_", "&"]
+        return operators.contains(last)
+    }
+
     /// Claude Codes Markdown-Renderer entfernt den Backslash vor ASCII-Satzzeichen (CommonMark-
-    /// Escape): aus `\\` (Zeilenumbruch in Matrizen) wird `\` + Leerzeichen. Innerhalb eines
-    /// `\begin{…}`-Environments ist ein nacktes `\ ` (Control Space) praktisch nie gemeint —
-    /// wir stellen den Zeilenumbruch wieder her. Andere Schäden (`\,` → `,`, `\{` → `{`,
-    /// `\(` → `(`) sind nicht rekonstruierbar.
+    /// Escape): aus `\\` (Zeilenumbruch in Matrizen) wird `\` + Leerzeichen. Wir stellen den
+    /// Zeilenumbruch wieder her — aber nur dort, wo ein nacktes `\ ` (Control Space) praktisch nie
+    /// gemeint ist (Regeln nach folio-terminal, `restore_stripped_environment_newlines`):
+    /// im innersten Environment mit Zeilen (`rowEnvironments`, nicht `equation`), auf dessen
+    /// Klammertiefe (nicht in `\text{a\ b}`) und nur, wenn vor `\end` noch eine Zeile folgt.
+    /// Andere Schäden (`\,` → `,`, `\{` → `{`, `\(` → `(`) sind nicht rekonstruierbar.
     static func repairMarkdownDamage(_ body: String) -> String {
         guard body.contains("\\begin{") else { return body }
-        var out: [Character] = []
         let c = Array(body)
+        var out: [Character] = []
+        var depth = 0
+        var envs: [(name: String, depth: Int)] = []
         var i = 0
         while i < c.count {
-            if c[i] == "\\", i + 1 < c.count, c[i + 1] == " ", !(i > 0 && c[i - 1] == "\\") {
-                out.append(contentsOf: ["\\", "\\", " "]); i += 2; continue
+            if c[i] == "\\" {
+                if let name = environmentName(after: "\\begin{", at: i, in: c) {
+                    envs.append((name, depth))
+                } else if environmentName(after: "\\end{", at: i, in: c) != nil, !envs.isEmpty {
+                    envs.removeLast()
+                }
+                if i + 1 < c.count, c[i + 1] == " ", !(i > 0 && c[i - 1] == "\\"),
+                   let env = envs.last, rowEnvironments.contains(env.name), depth == env.depth,
+                   !nextRowIsEnd(after: i + 2, in: c) {
+                    out.append(contentsOf: ["\\", "\\", " "]); i += 2; continue
+                }
+                // Escapte Klammern ändern die Tiefe nicht.
+                if i + 1 < c.count { out.append(c[i]); out.append(c[i + 1]); i += 2; continue }
             }
+            if c[i] == "{" { depth += 1 } else if c[i] == "}" { depth = max(0, depth - 1) }
             out.append(c[i]); i += 1
         }
         return String(out)
     }
 
+    /// Environments, deren Inhalt aus Zeilen besteht — nur dort ist `\ ` ein gefressenes `\\`.
+    private static let rowEnvironments: Set<String> = [
+        "matrix", "pmatrix", "bmatrix", "Bmatrix", "vmatrix", "Vmatrix", "smallmatrix",
+        "cases", "dcases", "rcases", "array", "subarray",
+        "align", "align*", "aligned", "alignat", "alignat*", "alignedat",
+        "gather", "gather*", "gathered", "split", "multline", "multline*", "eqnarray",
+    ]
+
+    /// Name des Environments, wenn bei `i` das Präfix (`\begin{` / `\end{`) steht.
+    private static func environmentName(after prefix: String, at i: Int, in c: [Character]) -> String? {
+        let p = Array(prefix)
+        guard i + p.count <= c.count, Array(c[i..<(i + p.count)]) == p,
+              let close = c[(i + p.count)...].firstIndex(of: "}") else { return nil }
+        return String(c[(i + p.count)..<close])
+    }
+
+    /// Steht ab `j` (nach Leerraum) direkt `\end{`? Dann folgt keine Zeile mehr.
+    private static func nextRowIsEnd(after j: Int, in c: [Character]) -> Bool {
+        var k = j
+        while k < c.count, c[k] == " " { k += 1 }
+        return environmentName(after: "\\end{", at: k, in: c) != nil
+    }
+
     /// Zeichen, die vor einem Block-Öffner stehen dürfen, ohne dass die Zeile als Prosa
     /// gilt: Claude Codes Antwort-Marker `⏺`, Listen- und Zitatzeichen.
-    private static let blockMarkerChars: Set<Character> = ["⏺", "•", "·", "-", "*", ">", "⎿", "│"]
+    /// `#`: Markdown-Renderer (Codex-Reflow) machen aus einer `$$`-Zeile eine Überschrift `# $$` —
+    /// unbedenklich, weil `findBlocks` ohnehin eine eigene Schlusszeile verlangt.
+    private static let blockMarkerChars: Set<Character> = ["⏺", "•", "·", "-", "*", ">", "⎿", "│", "#"]
 
     /// Ist `line` eine Block-Öffnerzeile? Liefert den Delimiter (`$$` / `\[`) und seine Spalte.
     /// Erlaubt: nur Leerraum und Marker-Zeichen vor dem Delimiter, nichts dahinter.
