@@ -104,6 +104,7 @@ final class ScratchpadCanvas: NSView {
         case .all: true
         case .claude: stroke.isClaude
         case .mats: !stroke.isClaude
+        case .cards: stroke.card && stroke.isClaude
         }
     }
 
@@ -227,53 +228,134 @@ final class ScratchpadCanvas: NSView {
 
     // MARK: Karten (Brainstorm-Pinnwand, 24.09.)
 
-    /// Karten anlegen, ein Undo-Schritt. Ohne Ort sucht `freeSpot` Platz (rechts oben zuerst, nicht über
-    /// Vorhandenem); Karten eines Aufrufs stapeln sich so untereinander.
-    @discardableResult
-    func addCards(_ specs: [(text: String, origin: CGPoint?, width: CGFloat?, color: Int)], author: String?,
-                  replacing layer: ScratchLayer? = nil) -> [ScratchStroke] {
-        let removed = layer.map(remove) ?? []
-        var placed: [ScratchStroke] = []
-        for spec in specs {
-            let width = spec.width.map { min(600, max(ScratchStroke.cardMinWidth, $0)) } ?? ScratchStroke.cardWidth(for: spec.text)
-            let size = ScratchStroke.cardSize(text: spec.text, width: width)
-            let origin = spec.origin ?? freeSpot(for: size, also: placed.map(\.bounds))
-            placed.append(ScratchStroke(card: spec.text, at: origin, width: width, color: spec.color, author: author))
-        }
-        guard !placed.isEmpty || !removed.isEmpty else { return [] }
-        strokes.append(contentsOf: placed)
-        commit(Edit(removed: removed, added: placed))
-        return placed
+    /// Ein Auftrag an die Karten: neue anlegen (ohne `id`), bestehende ändern/verschieben (`id` + Felder) oder
+    /// entfernen (`id` + `remove`). Nicht angegebene Felder bleiben.
+    struct CardEntry {
+        var id: String?
+        var remove = false
+        var text: String?
+        var origin: CGPoint?
+        var width: CGFloat?
+        var color: Int?
+        /// Nur gesetzte Felder zählen (auf das bisherige Aussehen gelegt).
+        var style = ScratchCard()
     }
 
-    /// Obere linke Ecke für eine Karte `size` im sichtbaren Bereich, die nichts überdeckt: Spalten von rechts
-    /// nach links, darin von oben nach unten. Kein Platz → unter alles Vorhandene, rechts.
+    struct CardResult {
+        var added: [ScratchStroke] = []
+        var updated: [ScratchStroke] = []
+        var removed: [String] = []
+    }
+
+    /// Alle Einträge als EIN Undo-Schritt. Ohne Ort sucht `freeSpot` Platz; Karten eines Aufrufs stapeln sich.
+    func applyCards(_ entries: [CardEntry], author: String?, replacing layer: ScratchLayer? = nil) throws -> CardResult {
+        for entry in entries where entry.id != nil {
+            guard strokes.contains(where: { $0.cardInfo?.id == entry.id }) else {
+                throw PaneArgsError("Karte „\(entry.id!)“ gibt es nicht (ids aus scratch_look)")
+            }
+        }
+        var removed = layer.map(remove) ?? []
+        var result = CardResult()
+        var placedBoxes: [NSRect] = []
+        var nextNumber = cardNumbers().max().map { $0 + 1 } ?? 1
+        for entry in entries {
+            if let id = entry.id {
+                guard let index = strokes.firstIndex(where: { $0.cardInfo?.id == id }) else { continue }
+                let old = strokes.remove(at: index)
+                removed.append((index, old))
+                if entry.remove { result.removed.append(id); continue }
+                let info = merge(old.cardInfo ?? ScratchCard(), entry.style)
+                let copy = old.cardUpdated(text: entry.text, origin: entry.origin,
+                                           width: entry.width.map(Self.clampCardWidth), color: entry.color, info: info)
+                result.updated.append(copy)
+                continue
+            }
+            guard let text = entry.text, !text.isEmpty else { continue }
+            var info = entry.style
+            info.id = "k\(nextNumber)"
+            nextNumber += 1
+            let width = entry.width.map(Self.clampCardWidth) ?? ScratchStroke.cardWidth(for: text, info: info)
+            let size = ScratchStroke.cardSize(text: text, width: width, info: info)
+            let origin = entry.origin ?? freeSpot(for: size, also: placedBoxes + result.updated.map(\.bounds))
+            let card = ScratchStroke(card: text, at: origin, width: width, color: entry.color ?? colorIndex,
+                                     author: author, info: info)
+            placedBoxes.append(card.bounds)
+            result.added.append(card)
+        }
+        let added = result.updated + result.added
+        guard !added.isEmpty || !removed.isEmpty else { return result }
+        strokes.append(contentsOf: added)
+        commit(Edit(removed: removed, added: added))
+        return result
+    }
+
+    private static func clampCardWidth(_ w: CGFloat) -> CGFloat { min(800, max(ScratchStroke.cardMinWidth, w)) }
+
+    private func merge(_ base: ScratchCard, _ patch: ScratchCard) -> ScratchCard {
+        var r = base
+        if let v = patch.title { r.title = v.isEmpty ? nil : v }
+        if let v = patch.font { r.font = v }
+        if let v = patch.size { r.size = v }
+        if let v = patch.bold { r.bold = v }
+        if let v = patch.italic { r.italic = v }
+        if let v = patch.textColor { r.textColor = v }
+        if let v = patch.frame { r.frame = v }
+        if let v = patch.fill { r.fill = v }
+        if let v = patch.align { r.align = v }
+        return r
+    }
+
+    private func cardNumbers() -> [Int] {
+        strokes.compactMap { $0.cardInfo?.id }.compactMap { $0.hasPrefix("k") ? Int($0.dropFirst()) : nil }
+    }
+
+    /// Karten ohne Namen (erste Fassung, Mats' ⌘V) bekommen einen — sonst könnte kein Agent sie ansprechen.
+    private func nameCards() {
+        var next = cardNumbers().max().map { $0 + 1 } ?? 1
+        for stroke in strokes where stroke.card && stroke.cardInfo?.id == nil {
+            stroke.cardInfo?.id = "k\(next)"
+            next += 1
+        }
+    }
+
+    /// Obere linke Ecke für eine Karte `size`, die nichts überdeckt. Zuerst im sichtbaren Bereich (Spalten von rechts,
+    /// darin von oben); ist der voll, in Spalten rechts neben allem Vorhandenen — dort stapeln sich weitere Karten
+    /// untereinander, statt weit unter der Zeichnung zu landen.
     func freeSpot(for size: NSSize, also extra: [NSRect] = []) -> CGPoint {
         let area = visibleWorldRect.insetBy(dx: 24, dy: 24)
-        let obstacles = (strokes.map(\.bounds) + extra).map { $0.insetBy(dx: -8, dy: -8) }
-        let step: CGFloat = 12
-        var x = area.maxX - size.width
-        while x >= area.minX {
-            var y = area.minY
-            while y + size.height <= area.maxY {
-                let rect = NSRect(origin: CGPoint(x: x, y: y), size: size)
-                if let hit = obstacles.first(where: { $0.intersects(rect) }) {
-                    y = max(y + step, hit.maxY + 1)
-                } else {
-                    return rect.origin
+        let boxes = strokes.map(\.bounds) + extra
+        let obstacles = boxes.map { $0.insetBy(dx: -8, dy: -8) }
+        func scan(xs: [CGFloat], top: CGFloat, bottom: CGFloat) -> CGPoint? {
+            for x in xs {
+                var y = top
+                while y + size.height <= bottom {
+                    let rect = NSRect(origin: CGPoint(x: x, y: y), size: size)
+                    if let hit = obstacles.first(where: { $0.intersects(rect) }) {
+                        y = max(y + 12, hit.maxY + 1)
+                    } else {
+                        return rect.origin
+                    }
                 }
             }
-            x -= step
+            return nil
         }
-        let bottom = (strokes.map(\.bounds) + extra).map(\.maxY).max() ?? area.minY
-        return CGPoint(x: max(area.minX, area.maxX - size.width), y: max(area.minY, bottom + 16))
+        let visibleXs = Array(stride(from: area.maxX - size.width, through: area.minX, by: -12))
+        if let spot = scan(xs: visibleXs, top: area.minY, bottom: area.maxY) { return spot }
+        // Rechts daneben: Spalten ab dem rechten Rand der Zeichnung (ohne Karten), je eine Kartenbreite weiter.
+        let drawing = strokes.filter { !$0.card }.map(\.bounds)
+        let startX = max(area.minX, (drawing.map(\.maxX).max() ?? area.maxX) + 24)
+        let top = min(area.minY, boxes.map(\.minY).min() ?? area.minY)
+        let height = max(area.height, (boxes.map(\.maxY).max() ?? area.maxY) - top) + size.height + 48
+        let columns = (0..<40).map { startX + CGFloat($0) * (size.width + 16) }
+        if let spot = scan(xs: columns, top: top, bottom: top + height) { return spot }
+        return CGPoint(x: startX, y: (boxes.map(\.maxY).max() ?? area.minY) + 16)
     }
 
-    /// Karten für Agenten (`call look`): Text, Urheber, Rahmen.
+    /// Karten für Agenten (`call look`).
     var cards: [ScratchStroke] { strokes.filter(\.card) }
 
     /// ⌘V: Text aus der Zwischenablage an den Zeiger (sonst in freien Platz). Eine Liste wird zu einer Karte je
-    /// Punkt, untereinander; `split: false` legt alles in eine Karte.
+    /// Punkt, untereinander; `split: false` legt alles in eine Karte. Aussehen: Terminal-Look.
     private func pasteCards(split: Bool) {
         guard let raw = NSPasteboard.general.string(forType: .string) else { NSSound.beep(); return }
         let items = split ? CardText.items(raw) : [CardText.unwrap(raw)].filter { !$0.isEmpty }
@@ -283,14 +365,14 @@ final class ScratchpadCanvas: NSView {
             let local = convert(window.mouseLocationOutsideOfEventStream, from: nil)
             if bounds.contains(local) { origin = toWorld(local) }
         }
-        var specs: [(text: String, origin: CGPoint?, width: CGFloat?, color: Int)] = []
+        var entries: [CardEntry] = []
         var y = origin?.y ?? 0
         for item in items {
-            let width = ScratchStroke.cardWidth(for: item)
-            specs.append((item, origin.map { CGPoint(x: $0.x, y: y) }, width, colorIndex))
-            y += ScratchStroke.cardSize(text: item, width: width).height + 10
+            let width = ScratchStroke.cardWidth(for: item, info: ScratchCard())
+            entries.append(CardEntry(text: item, origin: origin.map { CGPoint(x: $0.x, y: y) }, width: width))
+            y += ScratchStroke.cardSize(text: item, width: width, info: ScratchCard()).height + 10
         }
-        addCards(specs, author: nil)
+        _ = try? applyCards(entries, author: nil)
     }
 
     // MARK: Sichern
@@ -303,6 +385,7 @@ final class ScratchpadCanvas: NSView {
             let shift = CGPoint(x: -box.midX, y: -box.midY)
             strokes.forEach { $0.offset(by: shift) }
         }
+        nameCards()
         tool = doc.tool
         colorIndex = max(0, min(doc.color, ScratchPalette.names.count - 1))
         sizeIndex = max(0, min(doc.size, Self.penWidths.count - 1))
@@ -702,18 +785,25 @@ final class ScratchpadCanvas: NSView {
     private func draw(_ stroke: ScratchStroke) {
         let color = palette[max(0, min(stroke.color, palette.count - 1))]
         let ink = stroke.marker ? color.withAlphaComponent(Self.markerAlpha) : color
-        if stroke.card, let text = stroke.text {
+        if let info = stroke.cardInfo, let text = stroke.text {
             let rect = stroke.cardRect
             let frame = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
-            color.withAlphaComponent(0.08).setFill()
-            frame.fill()
-            frame.lineWidth = stroke.width
-            color.withAlphaComponent(0.75).setStroke()
-            frame.stroke()
+            if info.fill ?? true {
+                color.withAlphaComponent(0.08).setFill()
+                frame.fill()
+            }
+            switch info.frame?.lowercased() {
+            case "none": break
+            case let style:
+                frame.lineWidth = style == "thick" ? 2.5 : stroke.width
+                if style == "dashed" { frame.setLineDash([5, 4], count: 2, phase: 0) }
+                color.withAlphaComponent(0.75).setStroke()
+                frame.stroke()
+            }
             let pad = ScratchStroke.cardPadding
-            (text as NSString).draw(with: rect.insetBy(dx: pad.width, dy: pad.height),
-                                    options: [.usesLineFragmentOrigin, .usesFontLeading],
-                                    attributes: [.font: stroke.font, .foregroundColor: palette[0]])
+            let ink = palette[max(0, min(info.textColor ?? 0, palette.count - 1))]
+            info.attributed(text: text, color: ink).draw(with: rect.insetBy(dx: pad.width, dy: pad.height),
+                                                        options: [.usesLineFragmentOrigin, .usesFontLeading])
         } else if let text = stroke.text {
             (text as NSString).draw(at: stroke.textRect.origin, withAttributes: [.font: stroke.font, .foregroundColor: ink])
         } else if stroke.filled {

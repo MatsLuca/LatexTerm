@@ -150,7 +150,7 @@ final class MCPServer {
         Pinnwand: Entsteht beim Brainstorming Stoff, den der Nutzer ordnen will (Optionen, Thesen, offene Fragen), und ist \
         neben dir ein Scratchpad offen, leg die Punkte mit scratch_cards zusätzlich als Karten dazu — knapp, eine Karte je \
         Gedanke, nicht jede Antwort; dafür kein Scratchpad ungefragt öffnen. Der Nutzer verschiebt, verbindet, ergänzt \
-        (⌘V legt markierten Text als Karten ab); scratch_look liefert die Kartentexte zurück.
+        (⌘V legt markierten Text als Karten ab); scratch_look liefert Kartentexte und ids, mit denen du umordnest.
         Vorschau (open_preview) = PDF/Bild neben dir: nach dem Kompilieren mit preview_look selbst prüfen, mit pane_action \
         sync <datei.tex>:<zeile> zeigen, wo eine Änderung gelandet ist. Schickt der Nutzer Stellen daraus („Aus der Vorschau …“), \
         stehen Seite, Quelltext-Zeile und ein Ausschnitt-Bild dabei.
@@ -228,20 +228,29 @@ final class MCPServer {
               "replace": ["type": "string", "enum": ["mats", "claude", "all"],
                           "description": "Vorher entfernen (im selben Undo-Schritt): mats = Skizze des Nutzers (z. B. „zeichne das sauber“), claude = deine vorige Version, all = alles"],
               "pane": paneProperty], ["svg"]),
-        tool("scratch_cards", "Karten ins Scratchpad legen",
-             "Legt Textkarten (umbrochener Text im Rahmen, deine Farbe Cyan) ins Scratchpad — Brainstorm-Pinnwand: Punkte, Optionen, Fragen, die der Nutzer dort verschieben, mit dem Stift verbinden und ergänzen kann. Ohne x/y sucht das Scratchpad selbst freien Platz (rechts oben zuerst, nichts überdecken), mehrere Karten stapeln sich untereinander. Kurz halten: ein Gedanke je Karte, 1–3 Zeilen. Ein Aufruf = ein Undo-Schritt.",
+        tool("scratch_cards", "Karten im Scratchpad",
+             "Textkarten im Scratchpad anlegen, ändern, verschieben, entfernen — Brainstorm-Pinnwand: Punkte, Optionen, Fragen, die der Nutzer verschiebt, mit dem Stift verbindet und ergänzt. Eintrag ohne id = neue Karte (text Pflicht; ohne x/y sucht das Scratchpad freien Platz: sichtbarer Bereich zuerst, sonst rechts neben der Zeichnung, mehrere stapeln sich). Mit id (aus scratch_look, z. B. \"k3\") = nur diese Karte ändern: x/y verschiebt, andere Felder ersetzen; remove: true entfernt sie. Aussehen: ohne Angaben Terminal-Look (Monoschrift, Terminalfarben, dünner Rahmen) — wirkt wie ein ausgeschnittenes Stück Terminal; das ist der Normalfall. Weiche frei ab, wo es trägt: Überschrift per title, größere/fette Schrift für Kernthesen, andere Rahmen-/Schriftfarbe zum Gruppieren, serif/system für Zitate, frame none für reine Beschriftung. Ein Gedanke je Karte. Ein Aufruf = ein Undo-Schritt.",
              ["cards": ["type": "array", "items": ["type": "object", "properties": [
+                            "id": ["type": "string", "description": "bestehende Karte ändern/verschieben/entfernen"],
+                            "remove": ["type": "boolean"],
                             "text": ["type": "string"],
-                            "x": ["type": "number", "description": "obere linke Ecke, Weltkoordinaten aus scratch_look (optional, nur mit y)"],
+                            "title": ["type": "string", "description": "fette erste Zeile (\"\" entfernt sie)"],
+                            "x": ["type": "number", "description": "obere linke Ecke, Weltkoordinaten aus scratch_look (nur mit y)"],
                             "y": ["type": "number"],
-                            "width": ["type": "number", "description": "Breite in pt (Default nach Text, max 300)"],
-                            "color": ["type": "string", "description": "Tinte, Rot, Gelb, Grün, Cyan, Blau, Violett (Default Cyan)"]] as JSON,
-                        "required": ["text"]] as JSON],
-              "replace": ["type": "string", "enum": ["claude"], "description": "claude = deine bisherigen Elemente vorher entfernen (neu sortieren)"],
+                            "width": ["type": "number", "description": "Breite in pt (Default nach Text, bis 360)"],
+                            "color": ["type": "string", "description": "Rahmen/Tönung: Tinte, Rot, Gelb, Grün, Cyan, Blau, Violett (neu: Cyan)"],
+                            "textColor": ["type": "string", "description": "Schriftfarbe (Default Tinte)"],
+                            "font": ["type": "string", "description": "mono (Default, Terminal), system, serif, rounded oder Name einer installierten Schrift"],
+                            "size": ["type": "number", "description": "Schriftgröße pt (Default 13, 8–72)"],
+                            "bold": ["type": "boolean"], "italic": ["type": "boolean"],
+                            "frame": ["type": "string", "enum": ["line", "dashed", "thick", "none"]],
+                            "fill": ["type": "boolean", "description": "Fläche leicht getönt (Default true)"],
+                            "align": ["type": "string", "enum": ["left", "center", "right"]]] as JSON] as JSON],
+              "replace": ["type": "string", "enum": ["cards"], "description": "cards = alle deine Karten vorher entfernen (Pinnwand neu legen); Zeichnungen bleiben"],
               "pane": paneProperty], ["cards"]),
         tool("scratch_clear", "Scratchpad leeren",
-             "Entfernt Elemente aus einem Scratchpad: who = claude (nur deine), mats (nur die Striche des Nutzers — nur auf seinen Wunsch), all. Rückgängig per pane_action undo.",
-             ["who": ["type": "string", "enum": ["claude", "mats", "all"]], "pane": paneProperty], ["who"], destructive: true),
+             "Entfernt Elemente aus einem Scratchpad: who = cards (nur deine Karten), claude (alles von dir), mats (nur die Striche des Nutzers — nur auf seinen Wunsch), all. Rückgängig per pane_action undo.",
+             ["who": ["type": "string", "enum": ["cards", "claude", "mats", "all"]], "pane": paneProperty], ["who"], destructive: true),
         tool("preview_look", "Vorschau ansehen",
              "Zeigt dir, was eine Vorschau-Kachel (open_preview) gerade zeigt: bei PDFs die aktuelle Seite als Bild samt Seitentext, sonst das Bild bzw. Dokument — dazu Seite, Zoom, sichtbarer Bereich und die Stellen, die der Nutzer markiert hat. Nach dem Kompilieren aufrufen, um Satz und Layout selbst zu prüfen (Umbrüche, Abbildungen, Formeln), statt nach Screenshots zu fragen. Ohne pane: die von dir geöffnete, sonst die fokussierte oder einzige.",
              ["pane": paneProperty, "page": ["type": "integer", "description": "PDF: diese Seite statt der aktuellen (ab 1)"]], [], readOnly: true),
@@ -913,11 +922,16 @@ final class MCPServer {
             lines.append(line + ".")
         }
         if let cards = info["cards"] as? [JSON], !cards.isEmpty {
-            lines.append("Karten (\(cards.count)):")
+            lines.append("Karten (\(cards.count); ändern/verschieben per scratch_cards mit id):")
             for card in cards {
                 let who = card["author"] as? String == "claude" ? "du" : "Nutzer"
                 let box = (card["bounds"] as? JSON).map(span) ?? "?"
-                lines.append("- [\(who), \(box)] " + ((card["text"] as? String) ?? "").replacingOccurrences(of: "\n", with: " / "))
+                var meta = "\(card["id"] as? String ?? "?"), \(who), \(box), \(card["color"] as? String ?? "")"
+                if let style = card["style"] as? JSON, !style.isEmpty {
+                    meta += ", " + style.keys.sorted().map { "\($0)=\(style[$0]!)" }.joined(separator: " ")
+                }
+                let title = (card["title"] as? String).map { "**\($0)** " } ?? ""
+                lines.append("- [\(meta)] " + title + ((card["text"] as? String) ?? "").replacingOccurrences(of: "\n", with: " / "))
             }
         }
         lines.append("Weltkoordinaten: 0,0 = Kachelmitte, y nach unten. Zeichnen mit scratch_draw (ohne viewBox in diesen Koordinaten).")
@@ -951,23 +965,27 @@ final class MCPServer {
         guard let cards = a["cards"] as? [JSON], !cards.isEmpty else { throw ToolFailure("cards fehlt (Liste mit {text})") }
         var head = "cards"
         if let replace = a["replace"] as? String {
-            guard replace == "claude" else { throw ToolFailure("replace kann nur claude sein") }
-            head += " replace=claude"
+            guard replace == "cards" else { throw ToolFailure("replace kann nur cards sein") }
+            head += " replace=cards"
         }
         guard let data = try? JSONSerialization.data(withJSONObject: cards) else { throw ToolFailure("cards ist kein JSON") }
         let pad = try scratchpad(a)
         let info = try callPane(pad, head + "\n" + String(decoding: data, as: UTF8.self))
-        let added = info["added"] as? Int ?? 0
-        var text = "Kachel \(pad.index): \(added) \(added == 1 ? "Karte" : "Karten") abgelegt"
-        if let boxes = info["cards"] as? [JSON], !boxes.isEmpty {
-            text += " (" + boxes.map(span).joined(separator: "; ") + ")"
+        func list(_ key: String) -> [String] {
+            ((info[key] as? [JSON]) ?? []).map { "\($0["id"] as? String ?? "?") \(($0["bounds"] as? JSON).map(span) ?? "")" }
         }
+        var parts: [String] = []
+        let added = list("added"), updated = list("updated"), removed = (info["removed"] as? [String]) ?? []
+        if !added.isEmpty { parts.append("neu: " + added.joined(separator: "; ")) }
+        if !updated.isEmpty { parts.append("geändert: " + updated.joined(separator: "; ")) }
+        if !removed.isEmpty { parts.append("entfernt: " + removed.joined(separator: ", ")) }
+        let text = "Kachel \(pad.index): " + (parts.isEmpty ? "nichts geändert" : parts.joined(separator: " · "))
         return text + ". Prüfen mit scratch_look; zurücknehmen mit pane_action undo."
     }
 
     private func scratchClear(_ a: JSON) throws -> String {
-        guard let who = a["who"] as? String, ["mats", "claude", "all"].contains(who) else {
-            throw ToolFailure("who muss claude, mats oder all sein")
+        guard let who = a["who"] as? String, ["cards", "mats", "claude", "all"].contains(who) else {
+            throw ToolFailure("who muss cards, claude, mats oder all sein")
         }
         let pad = try scratchpad(a)
         let info = try callPane(pad, "clear \(who)")

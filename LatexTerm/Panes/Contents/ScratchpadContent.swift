@@ -96,6 +96,7 @@ final class ScratchpadContent: PaneContent {
         case "all", "alles": return .all
         case "claude", "agent", "mine": return .claude
         case "mats", "user", "nutzer": return .mats
+        case "cards", "karten": return .cards
         default: return nil
         }
     }
@@ -128,7 +129,7 @@ final class ScratchpadContent: PaneContent {
             var replace: ScratchLayer?
             for option in words.dropFirst() {
                 guard option.hasPrefix("replace="), let layer = ScratchLayer(rawValue: String(option.dropFirst(8))) else {
-                    throw PaneArgsError("cards kennt nur replace=claude|mats|all, nicht „\(option)“")
+                    throw PaneArgsError("cards kennt nur replace=claude|cards|mats|all, nicht „\(option)“")
                 }
                 replace = layer
             }
@@ -161,7 +162,17 @@ final class ScratchpadContent: PaneContent {
             "mats": ["count": canvas.count(.mats), "bounds": Self.rectOrNull(canvas.contentBounds(.mats))],
             "claude": ["count": canvas.count(.claude), "bounds": Self.rectOrNull(canvas.contentBounds(.claude))],
             "cards": canvas.cards.map { card in
-                ["text": card.text ?? "", "author": card.isClaude ? "claude" : "mats", "bounds": Self.rect(card.bounds)] as [String: Any]
+                var entry: [String: Any] = ["id": card.cardInfo?.id ?? "", "text": card.text ?? "",
+                                            "author": card.isClaude ? "claude" : "mats", "bounds": Self.rect(card.bounds),
+                                            "color": ScratchPalette.names[max(0, min(card.color, ScratchPalette.names.count - 1))]]
+                if let info = card.cardInfo, let data = try? JSONEncoder().encode(info),
+                   var style = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
+                    style["id"] = nil
+                    if let title = style.removeValue(forKey: "title") { entry["title"] = title }
+                    if let t = info.textColor { style["textColor"] = ScratchPalette.names[max(0, min(t, ScratchPalette.names.count - 1))] }
+                    if !style.isEmpty { entry["style"] = style }
+                }
+                return entry
             },
             "colors": ScratchPalette.names,
             "claudeColor": ScratchPalette.names[ScratchPalette.claude],
@@ -191,34 +202,61 @@ final class ScratchpadContent: PaneContent {
                           "warnings": result.warnings])
     }
 
-    /// `cards` + JSON `[{"text", "x"?, "y"?, "width"?, "color"?}]` (oder `{"cards": [...]}`) → Karten des Agenten.
-    /// Ohne x/y sucht das Scratchpad freien Platz (rechts oben zuerst, nichts überdecken).
+    /// `cards` + JSON-Liste (oder `{"cards": [...]}`). Eintrag ohne `id` = neue Karte (`text` Pflicht), mit `id` = diese
+    /// Karte ändern/verschieben, mit `remove: true` = entfernen. Felder: text, title, x, y (obere linke Ecke), width,
+    /// color (Rahmen), textColor, font, size, bold, italic, frame, fill, align. Ohne x/y sucht das Scratchpad Platz.
     private func cards(_ body: String, replacing: ScratchLayer?) throws -> String {
         guard let data = body.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) else {
             throw PaneArgsError("cards braucht JSON: [{\"text\": \"…\"}]")
         }
         let list = (object as? [[String: Any]]) ?? ((object as? [String: Any])?["cards"] as? [[String: Any]]) ?? []
-        guard !list.isEmpty, list.count <= 60 else { throw PaneArgsError("cards: 1–60 Karten") }
-        var specs: [(text: String, origin: CGPoint?, width: CGFloat?, color: Int)] = []
-        for entry in list {
-            guard let text = (entry["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines), !text.isEmpty,
-                  text.count <= 2000 else { throw PaneArgsError("jede Karte braucht text (1–2000 Zeichen)") }
-            let x = (entry["x"] as? NSNumber).map { CGFloat($0.doubleValue) }
-            let y = (entry["y"] as? NSNumber).map { CGFloat($0.doubleValue) }
-            let origin = x.flatMap { x in y.map { CGPoint(x: x, y: $0) } }
-            let width = (entry["width"] as? NSNumber).map { CGFloat($0.doubleValue) }
-            var color = ScratchPalette.claude
-            if let name = entry["color"] as? String {
-                guard let index = ScratchPalette.index(named: name) else {
-                    throw PaneArgsError("Farbe „\(name)“ unbekannt (\(ScratchPalette.names.joined(separator: ", ")))")
-                }
-                color = index
+        guard !list.isEmpty, list.count <= 80 else { throw PaneArgsError("cards: 1–80 Einträge") }
+        func number(_ v: Any?) -> CGFloat? { (v as? NSNumber).map { CGFloat($0.doubleValue) } }
+        func color(_ v: Any?, _ key: String) throws -> Int? {
+            guard let name = v as? String else { return nil }
+            guard let index = ScratchPalette.index(named: name) else {
+                throw PaneArgsError("\(key) „\(name)“ unbekannt (\(ScratchPalette.names.joined(separator: ", ")))")
             }
-            specs.append((text, origin, width, color))
+            return index
         }
-        let placed = root.canvas.addCards(specs, author: ScratchStroke.claude, replacing: replacing)
+        var entries: [ScratchpadCanvas.CardEntry] = []
+        for raw in list {
+            var entry = ScratchpadCanvas.CardEntry()
+            entry.id = raw["id"] as? String
+            entry.remove = raw["remove"] as? Bool ?? false
+            entry.text = (raw["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            if entry.id == nil {
+                guard let text = entry.text, !text.isEmpty else { throw PaneArgsError("neue Karte braucht text") }
+                guard !entry.remove else { throw PaneArgsError("remove braucht eine id") }
+                _ = text
+            }
+            if let text = entry.text, text.count > 3000 { throw PaneArgsError("Kartentext zu lang (max 3000 Zeichen)") }
+            if let x = number(raw["x"]), let y = number(raw["y"]) { entry.origin = CGPoint(x: x, y: y) }
+            entry.width = number(raw["width"])
+            entry.color = try color(raw["color"], "color") ?? (entry.id == nil ? ScratchPalette.claude : nil)
+            entry.style.textColor = try color(raw["textColor"], "textColor")
+            entry.style.title = raw["title"] as? String
+            entry.style.font = raw["font"] as? String
+            entry.style.size = number(raw["size"]).map { max(8, min($0, 72)) }
+            entry.style.bold = raw["bold"] as? Bool
+            entry.style.italic = raw["italic"] as? Bool
+            entry.style.fill = raw["fill"] as? Bool
+            if let frame = raw["frame"] as? String {
+                guard ScratchCard.frames.contains(frame.lowercased()) else {
+                    throw PaneArgsError("frame „\(frame)“ unbekannt (\(ScratchCard.frames.joined(separator: ", ")))")
+                }
+                entry.style.frame = frame.lowercased()
+            }
+            if let align = raw["align"] as? String {
+                guard ["left", "center", "right"].contains(align.lowercased()) else { throw PaneArgsError("align: left, center, right") }
+                entry.style.align = align.lowercased()
+            }
+            entries.append(entry)
+        }
+        let result = try root.canvas.applyCards(entries, author: ScratchStroke.claude, replacing: replacing)
         delegate?.contentHasNews()
-        return Self.json(["added": placed.count, "cards": placed.map { Self.rect($0.bounds) },
+        func brief(_ card: ScratchStroke) -> [String: Any] { ["id": card.cardInfo?.id ?? "", "bounds": Self.rect(card.bounds)] }
+        return Self.json(["added": result.added.map(brief), "updated": result.updated.map(brief), "removed": result.removed,
                           "visible": Self.rect(root.canvas.visibleWorldRect)])
     }
 
@@ -359,9 +397,76 @@ enum ScratchTool: String, Codable {
     }
 }
 
-/// Wessen Elemente: alle, nur die des Nutzers, nur die des Agenten.
+/// Wessen Elemente: alle, nur die des Nutzers, nur die des Agenten, nur die Karten des Agenten.
 enum ScratchLayer: String {
-    case all, mats, claude
+    case all, mats, claude, cards
+}
+
+/// Name und Aussehen einer Karte. Alles optional — nil heißt Terminal-Look: Monoschrift der App, Terminal-Vordergrund
+/// auf Terminal-Grund, dünner Rahmen; die Karte sieht aus wie ein ausgeschnittenes Stück Terminal. Agenten dürfen frei
+/// abweichen (Schrift, Größe, Farben, Rahmen), um zu gewichten oder zu gruppieren.
+struct ScratchCard: Codable, Equatable {
+    /// Stabiler Name („k3“), über den Agenten eine Karte verschieben, ändern, entfernen.
+    var id: String?
+    /// Fette erste Zeile.
+    var title: String?
+    /// mono (Standard) | system | serif | rounded | Name einer installierten Schrift.
+    var font: String?
+    var size: CGFloat?
+    var bold: Bool?
+    var italic: Bool?
+    /// Palettenindex der Schrift; nil = Tinte.
+    var textColor: Int?
+    /// line (Standard) | dashed | thick | none.
+    var frame: String?
+    /// Fläche leicht in der Rahmenfarbe getönt (Standard true).
+    var fill: Bool?
+    /// left (Standard) | center | right.
+    var align: String?
+
+    static let defaultSize: CGFloat = 13
+    static let fonts = ["mono", "system", "serif", "rounded"]
+    static let frames = ["line", "dashed", "thick", "none"]
+
+    func font(bold forceBold: Bool = false) -> NSFont {
+        let size = max(8, min(size ?? Self.defaultSize, 72))
+        let weight: NSFont.Weight = (bold ?? false) || forceBold ? .semibold : .regular
+        var result: NSFont
+        switch self.font?.lowercased() {
+        case nil, "", "mono", "terminal", "monospace": result = AppFonts.mono(size: size, weight: weight)
+        case "system", "sans", "sans-serif": result = NSFont.systemFont(ofSize: size, weight: weight)
+        case "serif":
+            let base = NSFont.systemFont(ofSize: size, weight: weight)
+            result = base.fontDescriptor.withDesign(.serif).flatMap { NSFont(descriptor: $0, size: size) } ?? base
+        case "rounded":
+            let base = NSFont.systemFont(ofSize: size, weight: weight)
+            result = base.fontDescriptor.withDesign(.rounded).flatMap { NSFont(descriptor: $0, size: size) } ?? base
+        default:
+            result = NSFont(name: self.font!, size: size) ?? AppFonts.mono(size: size, weight: weight)
+            if weight != .regular { result = NSFontManager.shared.convert(result, toHaveTrait: .boldFontMask) }
+        }
+        if italic == true { result = NSFontManager.shared.convert(result, toHaveTrait: .italicFontMask) }
+        return result
+    }
+
+    /// Satz der Karte: Titel (fett) über dem Text, Ausrichtung, Farbe.
+    func attributed(text: String, color: NSColor) -> NSAttributedString {
+        let paragraph = NSMutableParagraphStyle()
+        switch align?.lowercased() {
+        case "center": paragraph.alignment = .center
+        case "right": paragraph.alignment = .right
+        default: paragraph.alignment = .left
+        }
+        paragraph.lineBreakMode = .byWordWrapping
+        let result = NSMutableAttributedString()
+        if let title, !title.isEmpty {
+            result.append(NSAttributedString(string: title + (text.isEmpty ? "" : "\n"), attributes: [
+                .font: font(bold: true), .foregroundColor: color, .paragraphStyle: paragraph]))
+        }
+        result.append(NSAttributedString(string: text, attributes: [
+            .font: font(), .foregroundColor: color, .paragraphStyle: paragraph]))
+        return result
+    }
 }
 
 /// Farben als Index ins Theme — ein Theme-Wechsel färbt die ganze Zeichnung mit um.
@@ -407,13 +512,15 @@ final class ScratchStroke: Codable {
     let bold: Bool
     /// Karte (24.09., Brainstorm-Pinnwand): umbrochener Text im Rahmen, `points[0]` = obere linke Ecke,
     /// `cardWidth` = Breite. Mats legt sie per ⌘V ab, Agenten per `call cards`; verschiebbar per Ziehen.
-    let card: Bool
+    /// `cardInfo` = Name (id) und Aussehen; nil = kein Karte.
+    var cardInfo: ScratchCard?
     let cardWidth: CGFloat
+    var card: Bool { cardInfo != nil }
     private var cachedPath: NSBezierPath?
     private var cachedTextRect: NSRect?
 
     private enum CodingKeys: String, CodingKey {
-        case points, color, width, marker, author, smooth, filled, dashed, text, fontSize, anchor, bold, card, cardWidth
+        case points, color, width, marker, author, smooth, filled, dashed, text, fontSize, anchor, bold, card, cardWidth, cardInfo
     }
 
     init(start: CGPoint, color: Int, width: CGFloat, marker: Bool) {
@@ -429,12 +536,12 @@ final class ScratchStroke: Codable {
         fontSize = 16
         anchor = .start
         bold = false
-        card = false
+        cardInfo = nil
         cardWidth = 0
     }
 
-    /// Karte mit oberer linker Ecke `origin`.
-    init(card text: String, at origin: CGPoint, width: CGFloat, color: Int, author: String?) {
+    /// Karte mit oberer linker Ecke `origin`; `color` = Rahmen, Aussehen sonst aus `info`.
+    init(card text: String, at origin: CGPoint, width: CGFloat, color: Int, author: String?, info: ScratchCard) {
         points = [origin]
         self.color = max(0, min(color, ScratchPalette.names.count - 1))
         self.width = 1.2
@@ -444,10 +551,10 @@ final class ScratchStroke: Codable {
         filled = false
         dashed = false
         self.text = text
-        fontSize = Self.cardFontSize
+        fontSize = info.size ?? ScratchCard.defaultSize
         anchor = .start
         bold = false
-        card = true
+        cardInfo = info
         cardWidth = width
     }
 
@@ -464,7 +571,7 @@ final class ScratchStroke: Codable {
         fontSize = shape.fontSize
         anchor = shape.anchor
         bold = shape.bold
-        card = false
+        cardInfo = nil
         cardWidth = 0
     }
 
@@ -483,7 +590,9 @@ final class ScratchStroke: Codable {
         fontSize = try c.decodeIfPresent(CGFloat.self, forKey: .fontSize) ?? 16
         anchor = try c.decodeIfPresent(ScratchTextAnchor.self, forKey: .anchor) ?? .start
         bold = try c.decodeIfPresent(Bool.self, forKey: .bold) ?? false
-        card = try c.decodeIfPresent(Bool.self, forKey: .card) ?? false
+        // Erste Karten (24.09. mittags) trugen nur `card: true`.
+        cardInfo = try c.decodeIfPresent(ScratchCard.self, forKey: .cardInfo)
+            ?? ((try c.decodeIfPresent(Bool.self, forKey: .card)) == true ? ScratchCard() : nil)
         cardWidth = try c.decodeIfPresent(CGFloat.self, forKey: .cardWidth) ?? 0
         guard !points.isEmpty else {
             throw DecodingError.dataCorruptedError(forKey: .points, in: c, debugDescription: "Element ohne Punkte")
@@ -505,8 +614,8 @@ final class ScratchStroke: Codable {
             try c.encode(fontSize, forKey: .fontSize)
             try c.encode(anchor, forKey: .anchor)
             if bold { try c.encode(bold, forKey: .bold) }
-            if card {
-                try c.encode(card, forKey: .card)
+            if let cardInfo {
+                try c.encode(cardInfo, forKey: .cardInfo)
                 try c.encode(cardWidth, forKey: .cardWidth)
             }
         }
@@ -567,30 +676,39 @@ final class ScratchStroke: Codable {
 
     var font: NSFont { NSFont.systemFont(ofSize: fontSize, weight: bold ? .semibold : .regular) }
 
-    static let cardFontSize: CGFloat = 14
     static let cardPadding = CGSize(width: 10, height: 8)
-    static let cardMaxWidth: CGFloat = 300
-    static let cardMinWidth: CGFloat = 120
+    static let cardMaxWidth: CGFloat = 360
+    static let cardMinWidth: CGFloat = 80
 
     /// Breite für eine neue Karte: kurzer Text so schmal wie nötig, langer umbrochen auf `cardMaxWidth`.
-    static func cardWidth(for text: String) -> CGFloat {
-        let font = NSFont.systemFont(ofSize: cardFontSize)
-        let longest = text.split(separator: "\n").map { (String($0) as NSString).size(withAttributes: [.font: font]).width }.max() ?? 0
-        return min(cardMaxWidth, max(cardMinWidth, (longest + 2 * cardPadding.width + 2).rounded(.up)))
+    static func cardWidth(for text: String, info: ScratchCard) -> CGFloat {
+        let content = info.attributed(text: text, color: .white)
+        var longest: CGFloat = 0
+        (content.string as NSString).enumerateSubstrings(in: NSRange(location: 0, length: content.length), options: .byLines) { _, range, _, _ in
+            longest = max(longest, content.attributedSubstring(from: range).size().width)
+        }
+        return min(cardMaxWidth, max(cardMinWidth, (longest + 2 * cardPadding.width + 4).rounded(.up)))
     }
 
-    static func cardSize(text: String, width: CGFloat) -> NSSize {
-        let inner = (text as NSString).boundingRect(
+    static func cardSize(text: String, width: CGFloat, info: ScratchCard) -> NSSize {
+        let inner = info.attributed(text: text, color: .white).boundingRect(
             with: NSSize(width: width - 2 * cardPadding.width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading],
-            attributes: [.font: NSFont.systemFont(ofSize: cardFontSize)])
+            options: [.usesLineFragmentOrigin, .usesFontLeading])
         return NSSize(width: width, height: (inner.height + 2 * cardPadding.height).rounded(.up))
     }
 
     /// Rahmen der Karte (Weltkoordinaten).
     var cardRect: NSRect {
-        let size = Self.cardSize(text: text ?? "", width: cardWidth)
+        let size = Self.cardSize(text: text ?? "", width: cardWidth, info: cardInfo ?? ScratchCard())
         return NSRect(origin: points[0], size: size)
+    }
+
+    /// Kopie mit anderem Text/Ort/Breite/Farbe/Aussehen (Karte ändern = alte raus, Kopie rein — ein Undo-Schritt).
+    func cardUpdated(text: String?, origin: CGPoint?, width: CGFloat?, color: Int?, info: ScratchCard) -> ScratchStroke {
+        let newText = text ?? self.text ?? ""
+        let newWidth = width ?? cardWidth
+        return ScratchStroke(card: newText, at: origin ?? points[0], width: newWidth, color: color ?? self.color,
+                             author: author, info: info)
     }
 
     /// Rechteck der Beschriftung: Anker auf der Grundlinie, links/mittig/rechts ausgerichtet.
