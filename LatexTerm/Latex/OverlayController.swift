@@ -8,6 +8,7 @@ final class OverlayController {
     private var observer: NSObjectProtocol?
     private var clickMonitor: Any?
     private var keyMonitor: Any?
+    private var wheelMonitor: Any?
 
     init(terminal: LatexTerminalView) {
         self.terminal = terminal
@@ -31,6 +32,11 @@ final class OverlayController {
         }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: [.keyDown]) { [weak self] event in
             self?.handleKeyDown(event) ?? event
+        }
+        // Scrollrad: Formeln während des Scrollens ausblenden (s. `hideWhileScrolling`).
+        wheelMonitor = NSEvent.addLocalMonitorForEvents(matching: [.scrollWheel]) { [weak self] event in
+            self?.hideWhileScrolling(event)
+            return event
         }
 
         // Editier-Loop (#7): bestätigter Ausdruck wird als Text in die PTY getippt
@@ -64,6 +70,7 @@ final class OverlayController {
         if let observer { NotificationCenter.default.removeObserver(observer) }
         if let clickMonitor { NSEvent.removeMonitor(clickMonitor) }
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        if let wheelMonitor { NSEvent.removeMonitor(wheelMonitor) }
     }
 
     /// Voller Rescan: alle Zeilen neu parsen. Für Settings/Font/Resize/Initial, wo sich
@@ -95,7 +102,7 @@ final class OverlayController {
             // Block-Translation kämpft → starkes Flackern. Die Translation hält die Formeln
             // am Text; den exakten Rescan macht `scrollSettled()` nach dem Scroll-Ende. Der
             // akkumulierte Dirty-Bereich bleibt erhalten (wird erst im rescan() konsumiert).
-            if self.isScrolling { return }
+            if self.isScrolling || self.scrollHidden { return }
             self.rescan()
         }
     }
@@ -141,6 +148,47 @@ final class OverlayController {
     private func scrollSettled() {
         isScrolling = false
         needsScrollReset = true   // rescan() bündelt setScroll(0) + sync() in einen JS-Aufruf
+        rescan()
+    }
+
+    // MARK: - Ausblenden beim Scrollrad (Mats, 24.09.)
+    //
+    // Claude Code im Vollbild scrollt per Neuzeichnen; Formeln, die dem Inhalt folgen sollen,
+    // kleben und flackern (Mitschieben per Zeilenabgleich war im Test schlechter, zurückgebaut).
+    // Deshalb: beim ersten Radereignis alle Formeln sofort unsichtbar und die Quellzellen wieder
+    // sichtbar (roher LaTeX-Text scrollt ruhig mit), nichts rendern; `wheelIdle` nach dem letzten
+    // Ereignis (Schwung-Phase zählt mit) ein sauberer Rescan, der im selben JS-Aufruf wieder einblendet.
+    private var scrollHidden = false
+    private var needsReveal = false
+    private var wheelIdleWork: DispatchWorkItem?
+    private static let wheelIdle: TimeInterval = 0.15
+
+    private func hideWhileScrolling(_ event: NSEvent) {
+        guard let terminal, FormulaSettings.shared.formulasEnabled,
+              let win = terminal.window, event.window === win else { return }
+        if let root = win.contentView?.superview ?? win.contentView,
+           let hit = root.hitTest(event.locationInWindow),
+           !hit.isDescendant(of: terminal) { return }
+        if !scrollHidden {
+            guard !lastEmpty else { return }   // keine Formeln → nichts zu verbergen
+            scrollHidden = true
+            layer.run("root.style.visibility='hidden';")
+            if !preview.pinned { preview.hide() }
+            if !hiddenCells.isEmpty { hiddenCells = [:]; onHiddenCellsChanged?() }
+        }
+        wheelIdleWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.revealAfterScrolling() }
+        wheelIdleWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.wheelIdle, execute: work)
+    }
+
+    private func revealAfterScrolling() {
+        scrollHidden = false
+        needsReveal = true
+        // Lief nebenher der yDisp-Pfad (#14), dessen Versatz im selben Aufruf zurücksetzen.
+        isScrolling = false
+        scrollIdleWork?.cancel()
+        needsScrollReset = true
         rescan()
     }
 
@@ -218,7 +266,7 @@ final class OverlayController {
     /// Klick: liegt er in einer Formel-Hitbox → pinnen und schlucken (kein Terminal-
     /// Select). Klick im gepinnten Panel → durchlassen (Buttons). Sonst → ggf. schließen.
     private func handleMouseDown(_ event: NSEvent) -> NSEvent? {
-        guard let terminal, FormulaSettings.shared.formulasEnabled,
+        guard let terminal, FormulaSettings.shared.formulasEnabled, !scrollHidden,
               let win = terminal.window, event.window === win else { return event }
         // Der Monitor sieht Klicks im ganzen Fenster. Nur reagieren, wenn der Klick wirklich in DIESEM
         // Terminal landet — sonst schluckten Formel-Hitboxen einer verdeckten Kachel (Zoom, ⌘⏎) die Klicks
@@ -261,7 +309,7 @@ final class OverlayController {
 
     private func handleHover(_ p: NSPoint) {
         guard let terminal, FormulaSettings.shared.formulasEnabled else { preview.hide(); return }
-        if preview.pinned { return }   // gepinnt: Hover ändert nichts
+        if preview.pinned || scrollHidden { return }   // gepinnt bzw. beim Scrollen verborgen
         let off = scrollHitboxOffset()   // Block-Translation beim Scrollen herausrechnen (#21)
         let q = NSPoint(x: p.x, y: p.y - off)
         for (key, hb) in hitboxes where hb.rect.contains(q) {
@@ -291,7 +339,7 @@ final class OverlayController {
     }
 
     func rescan() {
-        guard let terminal else { return }
+        guard let terminal, !scrollHidden else { return }
         let settings = FormulaSettings.shared
 
         // Dirty-Zustand dieses Durchlaufs übernehmen und zurücksetzen (ein während des
@@ -578,6 +626,7 @@ final class OverlayController {
         // mit dem alten translateY und meldet um dy verschobene Bounds (#21).
         if needsScrollReset { js += "setScroll(0);"; needsScrollReset = false }
         if configChanged || itemsJSON != lastItemsJSON { js += "sync(\(itemsJSON));" }
+        if needsReveal { js += "root.style.visibility='';"; needsReveal = false }
         if !js.isEmpty { layer.run(js); lastItemsJSON = itemsJSON }
 
         lastEmpty = items.isEmpty
