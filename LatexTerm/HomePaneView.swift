@@ -82,7 +82,11 @@ struct ProjekteData: Decodable {
             return h.hasPrefix("# ") ? String(h.dropFirst(2)) : h
         }
     }
-    struct ClaudeMd: Decodable { var exists: Bool; var header: String? }
+    struct ClaudeMd: Decodable {
+        var exists: Bool; var header: String?
+        /// Erste offene Punkte unter „HIER WEITERMACHEN“ (Datenschicht), für „Liegen geblieben“.
+        var open: [String]?
+    }
     struct Area: Decodable { var id: String }
     /// Einstieg je Höhe — kommt aus `projekte` (Verfassungs-Logik lebt dort, nicht in der App).
     struct ActionTemplate: Decodable {
@@ -683,6 +687,18 @@ final class HomePaneView: NSView {
         if !waiting.isEmpty { home.append(.init(title: "Wartet auf dich", entries: waiting)) }
         let due = (d.wiedervorlagen ?? []).filter { $0.daysLeft <= 0 }.sorted { $0.daysLeft < $1.daysLeft }.map(taskEntry)
         if !due.isEmpty { home.append(.init(title: "Fällig", entries: due)) }
+        // Liegen geblieben: offene Punkte, aber seit über 7 Tagen nicht angefasst — die zuletzt liegen gelassenen zuerst.
+        let weekAgo = Date().addingTimeInterval(-7 * 86_400)
+        let stale = d.projects.compactMap { p -> (ProjekteData.Project, Date, String)? in
+            guard let item = p.claudeMd?.open?.first, let last = Self.date(p.lastActivity), last < weekAgo else { return nil }
+            return (p, last, item)
+        }.sorted { $0.1 > $1.1 }.prefix(3).map { p, _, item -> LauncherPalette.Entry in
+            var e = projectEntry(p)
+            e.id = "l:" + p.path
+            e.subtitle = Self.age(p.lastActivity) + " · " + item
+            return e
+        }
+        if !stale.isEmpty { home.append(.init(title: "Liegen geblieben", entries: Array(stale))) }
         home.append(.init(title: "Zuletzt", entries: Array(sessions.prefix(6))))
         home.append(.init(title: "Hier · \(hereName)", entries: here))
         var pinnedEntries: [LauncherPalette.Entry] = projects.filter(\.pinned)

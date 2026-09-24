@@ -227,6 +227,7 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
     /// Einblenden: kurzes Aufhellen plus ein paar Punkte von oben — die Karte kommt aus der Kachel.
     private var slide: CGFloat = 0
     func present() {
+        Self.log("open")
         scrim.alphaValue = 0
         card.alphaValue = 0
         slide = 14
@@ -272,7 +273,7 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
 
     // MARK: Zustand
 
-    @objc private func dismiss() { stopAI(); onClose?() }
+    @objc private func dismiss() { Self.log("close"); stopAI(); onClose?() }
     private func stopAI() {
         generation += 1; cancelAI?(); cancelAI = nil
         aiTimer?.invalidate(); aiTimer = nil; aiStarted = nil
@@ -435,6 +436,7 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
 
     @objc private func askAI() {
         guard let prompt = LauncherSearch.prompt(field.stringValue), !prompt.isEmpty, cancelAI == nil, let onAI else { return }
+        Self.log("ai")
         generation += 1; let token = generation
         aiResults = nil; aiStarted = Date()
         aiTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.tickAI() }
@@ -530,12 +532,14 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
             toast("Antwort kopiert"); return
         }
         if e.kind == .status { return }
+        Self.log("pick", e)
         Self.remember(e.id)
         if e.closesPalette { stopAI(); onClose?() }
         e.action()
     }
     private func chooseSecondary() {
         guard let e = selected, let run = e.secondary else { NSSound.beep(); return }
+        Self.log("secondary", e)
         Self.remember(e.id)
         stopAI(); onClose?()
         run()
@@ -554,6 +558,27 @@ final class LauncherPalette: NSView, NSTextFieldDelegate, NSTableViewDataSource,
             guard let self else { return }
             self.hints.textColor = self.theme.dim
             self.hints.stringValue = keep
+        }
+    }
+
+    /// Nutzungszähler: eine JSONL-Zeile je Ereignis (öffnen, wählen, KI, abbrechen) — lokal, ohne Suchtext,
+    /// damit sich „nutze ich ⌘K regelmäßig?“ beantworten lässt. Einträge nur mit Art und Abschnitts-Präfix der ID.
+    private static let usageURL = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+        .appendingPathComponent("LatexTerm/cmdk-nutzung.jsonl")
+    private static func log(_ event: String, _ entry: Entry? = nil) {
+        var line: [String: String] = ["t": ISO8601DateFormatter().string(from: Date()), "ev": event]
+        if let entry {
+            line["kind"] = String(describing: entry.kind)
+            line["from"] = entry.id.split(separator: ":", maxSplits: 1).first.map(String.init) ?? ""
+        }
+        guard var data = try? JSONSerialization.data(withJSONObject: line, options: [.sortedKeys]) else { return }
+        data.append(0x0A)
+        try? FileManager.default.createDirectory(at: usageURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+        if let handle = try? FileHandle(forWritingTo: usageURL) {
+            defer { try? handle.close() }
+            _ = try? handle.seekToEnd(); try? handle.write(contentsOf: data)
+        } else {
+            try? data.write(to: usageURL)
         }
     }
 
