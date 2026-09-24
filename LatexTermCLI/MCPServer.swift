@@ -231,10 +231,11 @@ final class MCPServer {
                           "description": "Vorher entfernen (im selben Undo-Schritt): mats = Skizze des Nutzers (z. B. „zeichne das sauber“), claude = deine vorige Version, all = alles"],
               "pane": paneProperty], ["svg"]),
         tool("scratch_cards", "Karten im Scratchpad",
-             "Textkarten im Scratchpad anlegen, ändern, verschieben, entfernen — Brainstorm-Pinnwand: Punkte, Optionen, Fragen, die der Nutzer verschiebt, mit dem Stift verbindet und ergänzt. Eintrag ohne id = neue Karte (text Pflicht; ohne x/y sucht das Scratchpad freien Platz: sichtbarer Bereich zuerst, sonst rechts neben der Zeichnung, mehrere stapeln sich). Mit id (aus scratch_look, z. B. \"k3\") = nur diese Karte ändern: x/y verschiebt, andere Felder ersetzen; remove: true entfernt sie. Aussehen: ohne Angaben Terminal-Look (Monoschrift, Terminalfarben, dünner Rahmen) — wirkt wie ein ausgeschnittenes Stück Terminal; das ist der Normalfall. Weiche frei ab, wo es trägt: Überschrift per title, größere/fette Schrift für Kernthesen, andere Rahmen-/Schriftfarbe zum Gruppieren, serif/system für Zitate, frame none für reine Beschriftung. Ein Gedanke je Karte. Ein Aufruf = ein Undo-Schritt.",
+             "Textkarten im Scratchpad anlegen, ändern, verschieben, entfernen — Brainstorm-Pinnwand: Punkte, Optionen, Fragen, die der Nutzer verschiebt, mit dem Stift verbindet und ergänzt. Eintrag ohne id = neue Karte (text Pflicht; ohne x/y sucht das Scratchpad freien Platz: sichtbarer Bereich zuerst, sonst rechts neben der Zeichnung, mehrere stapeln sich). Mit bestehender id (aus scratch_look, z. B. \"k3\") = nur diese Karte ändern: x/y verschiebt (Pfeile ziehen mit), andere Felder ersetzen (neuer Text = neu gesetzt, Radierspuren weg); remove: true entfernt sie. Neue id + text = neue Karte unter diesem Namen, damit du sie im selben Aufruf per arrowTo verbinden kannst. arrowTo = eingerasteter Pfeil zu diesen Karten (wandert beim Verschieben mit). Karten sind Tinte wie alles: der Nutzer radiert einzelne Buchstaben oder schneidet mit dem Pixel-Radierer — scratch_look zeigt dann, was noch lesbar ist. Aussehen: ohne Angaben Terminal-Look (Monoschrift, Terminalfarben, dünner Rahmen) — wirkt wie ein ausgeschnittenes Stück Terminal; das ist der Normalfall. Weiche frei ab, wo es trägt: Überschrift per title, größere/fette Schrift für Kernthesen, andere Rahmen-/Schriftfarbe zum Gruppieren, serif/system für Zitate, frame none für reine Beschriftung. Ein Gedanke je Karte. Ein Aufruf = ein Undo-Schritt.",
              ["cards": ["type": "array", "items": ["type": "object", "properties": [
                             "id": ["type": "string", "description": "bestehende Karte ändern/verschieben/entfernen"],
                             "remove": ["type": "boolean"],
+                            "arrowTo": ["type": "array", "items": ["type": "string"] as JSON, "description": "ids der Karten, zu denen ein Pfeil gehen soll"],
                             "text": ["type": "string"],
                             "title": ["type": "string", "description": "fette erste Zeile (\"\" entfernt sie)"],
                             "x": ["type": "number", "description": "obere linke Ecke, Weltkoordinaten aus scratch_look (nur mit y)"],
@@ -934,7 +935,20 @@ final class MCPServer {
                 }
                 let title = (card["title"] as? String).map { "**\($0)** " } ?? ""
                 lines.append("- [\(meta)] " + title + ((card["text"] as? String) ?? "").replacingOccurrences(of: "\n", with: " / "))
+                if let visible = card["visible"] as? String {
+                    lines.append("  angeradiert, noch lesbar: " + visible.replacingOccurrences(of: "\n", with: " / "))
+                }
             }
+        }
+        if let links = info["links"] as? [JSON], !links.isEmpty {
+            lines.append("Pfeile (eingerastet): " + links.map {
+                "\($0["from"] as? String ?? "?") → \($0["to"] as? String ?? "?")\($0["by"] as? String == "claude" ? "" : " (Nutzer)")"
+            }.joined(separator: ", "))
+        }
+        if let images = info["images"] as? [JSON], !images.isEmpty {
+            lines.append("Bilder: " + images.map { img in
+                ((img["bounds"] as? JSON).map(span) ?? "?") + (img["cut"] as? Bool == true ? " (angeradiert)" : "")
+            }.joined(separator: "; "))
         }
         if let order = info["order"] as? [String], order.count > 1 {
             var line = "Lesereihenfolge der Karten: " + order.joined(separator: " → ")

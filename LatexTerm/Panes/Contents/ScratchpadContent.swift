@@ -17,7 +17,8 @@ final class ScratchpadContent: PaneContent {
         summary: "Gemeinsame Malfläche: der Nutzer skizziert mit Maus/Trackpad und schickt dir die Skizze per ➤ als Bild; "
             + "du siehst sie mit scratch_look (Bild mit Koordinatenraster) und zeichnest mit scratch_draw (SVG) sauber hinein "
             + "— eigene Ebene in Cyan, ⌘Z nimmt deinen Beitrag als einen Schritt zurück. Karten (Text im Rahmen, verschiebbar) "
-            + "legst du per scratch_cards ab, der Nutzer per ⌘V — gemeinsame Pinnwand fürs Brainstorming. Bleibt über einen Neustart erhalten.",
+            + "legst du per scratch_cards ab, der Nutzer per ⌘V (Text → Karten, Screenshot → Bild) — gemeinsame Pinnwand fürs Brainstorming. "
+            + "Alles ist Tinte: Radierer nimmt Striche/Buchstaben, Pixel-Radierer schneidet; Pfeile zwischen Karten rasten ein. Bleibt über einen Neustart erhalten.",
         actions: [PaneKindAction(name: "clear", summary: "Fläche leeren (rückgängig machbar)"),
                   PaneKindAction(name: "clear claude", summary: "nur deine Elemente entfernen"),
                   PaneKindAction(name: "clear mats", summary: "nur die Striche des Nutzers entfernen"),
@@ -165,6 +166,7 @@ final class ScratchpadContent: PaneContent {
             "claude": ["count": canvas.count(.claude), "bounds": Self.rectOrNull(canvas.contentBounds(.claude))],
             "cards": canvas.cards.map { card in
                 var entry: [String: Any] = ["id": card.cardInfo?.id ?? "", "text": card.text ?? "",
+                                            "visible": card.visibleText ?? NSNull(),
                                             "author": card.isClaude ? "claude" : "mats", "bounds": Self.rect(card.bounds),
                                             "color": ScratchPalette.names[max(0, min(card.color, ScratchPalette.names.count - 1))]]
                 if let info = card.cardInfo, let data = try? JSONEncoder().encode(info),
@@ -176,6 +178,13 @@ final class ScratchpadContent: PaneContent {
                 }
                 return entry
             },
+            "links": canvas.elements.compactMap { s -> [String: Any]? in
+                guard let link = s.link else { return nil }
+                let name = { (uid: String) in canvas.elements.first { $0.uid == uid }.map { $0.cardInfo?.id ?? "Bild" } ?? "?" }
+                return ["from": name(link.from), "to": name(link.to), "by": s.isClaude ? "claude" : "mats"]
+            },
+            "images": canvas.elements.filter(\.isImage).map { ["bounds": Self.rect($0.bounds), "by": $0.isClaude ? "claude" : "mats",
+                                                               "cut": !$0.cuts.isEmpty] as [String: Any] },
             "order": ScratchChanges.readingOrder(canvas.cards).compactMap { $0.cardInfo?.id },
             "groups": ScratchChanges.groups(canvas.cards).map { $0.compactMap { $0.cardInfo?.id } }.filter { $0.count > 1 },
             "changes": changes(for: viewer) ?? NSNull(),
@@ -247,10 +256,11 @@ final class ScratchpadContent: PaneContent {
                 guard !entry.remove else { throw PaneArgsError("remove braucht eine id") }
                 _ = text
             }
+            if let one = raw["arrowTo"] as? String { entry.arrowTo = [one] } else { entry.arrowTo = raw["arrowTo"] as? [String] ?? [] }
             if let text = entry.text, text.count > 3000 { throw PaneArgsError("Kartentext zu lang (max 3000 Zeichen)") }
             if let x = number(raw["x"]), let y = number(raw["y"]) { entry.origin = CGPoint(x: x, y: y) }
             entry.width = number(raw["width"])
-            entry.color = try color(raw["color"], "color") ?? (entry.id == nil ? ScratchPalette.claude : nil)
+            entry.color = try color(raw["color"], "color")
             entry.style.textColor = try color(raw["textColor"], "textColor")
             entry.style.title = raw["title"] as? String
             entry.style.font = raw["font"] as? String
@@ -403,15 +413,77 @@ final class ScratchpadContent: PaneContent {
 // MARK: - Modell
 
 enum ScratchTool: String, Codable {
-    case pen, marker, eraser
+    case pen, marker, eraser, cutter
 
     var label: String {
         switch self {
         case .pen: "Stift"
         case .marker: "Marker"
         case .eraser: "Radierer"
+        case .cutter: "Pixel-Radierer"
         }
     }
+
+    /// Beide Radierer: Zeiger als Kreis, Stärke = Radius.
+    var erases: Bool { self == .eraser || self == .cutter }
+}
+
+/// Radier-Schnitt am Element (Pinnwand Runde 3): Spur des Pixel-Radierers (Linienzug mit Radius) oder ein
+/// weggenommener Buchstabe einer Karte (Rechteck). Hängt am Element und wandert mit, wenn es verschoben wird.
+struct ScratchCut: Codable, Equatable {
+    var points: [CGPoint] = []
+    var radius: CGFloat = 0
+    var rect: NSRect?
+
+    func covers(_ p: CGPoint, slack: CGFloat = 0) -> Bool {
+        if let rect { return rect.insetBy(dx: -slack, dy: -slack).contains(p) }
+        guard let first = points.first else { return false }
+        let reach = radius + slack
+        if points.count == 1 { return hypot(first.x - p.x, first.y - p.y) <= reach }
+        for i in 1..<points.count where ScratchCut.distance(p, points[i - 1], points[i]) <= reach { return true }
+        return false
+    }
+
+    var path: NSBezierPath {
+        if let rect { return NSBezierPath(rect: rect) }
+        let path = NSBezierPath()
+        path.lineWidth = radius * 2
+        path.lineCapStyle = .round
+        path.lineJoinStyle = .round
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        if points.count == 1 { path.line(to: first) }
+        for p in points.dropFirst() { path.line(to: p) }
+        return path
+    }
+
+    func mapped(_ f: (CGPoint) -> CGPoint, scale: CGFloat) -> ScratchCut {
+        var c = self
+        c.points = points.map(f)
+        c.radius = radius * scale
+        if let rect {
+            // Rechteck-Schnitte (Buchstaben) sitzen nur auf Karten, die nie gedreht werden: verschieben reicht.
+            let o = f(rect.origin)
+            c.rect = NSRect(origin: o, size: rect.size)
+        }
+        return c
+    }
+
+    static func distance(_ p: CGPoint, _ a: CGPoint, _ b: CGPoint) -> CGFloat {
+        let dx = b.x - a.x, dy = b.y - a.y
+        let len2 = dx * dx + dy * dy
+        let t = len2 == 0 ? 0 : max(0, min(1, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2))
+        return hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy))
+    }
+}
+
+/// Eingerasteter Pfeil (Runde 3, B): ein Strich von Karte zu Karte. `a`/`b` = Anfang/Ende relativ zur oberen linken
+/// Ecke der jeweiligen Karte; wandert eine Karte, wird der Strich so gedreht und gestreckt, dass die Enden bleiben.
+struct ScratchLink: Codable, Equatable {
+    var from: String
+    var to: String
+    var a: CGPoint
+    var b: CGPoint
 }
 
 /// Wessen Elemente: alle, nur die des Nutzers, nur die des Agenten, nur die Karten des Agenten.
@@ -535,11 +607,21 @@ final class ScratchStroke: Codable {
     var card: Bool { cardInfo != nil }
     /// Stabiler Name des Elements über Verschieben/Ändern hinweg — für „seit deinem letzten Blick“ (`look as=…`).
     var uid = String(UUID().uuidString.prefix(8))
+    /// Radier-Schnitte (Pixel-Radierer, weggenommene Buchstaben).
+    var cuts: [ScratchCut] = []
+    /// Eingerasteter Pfeil zwischen zwei Karten.
+    var link: ScratchLink?
+    /// Pfeilspitze o. ä.: folgt dem Pfeil mit dieser uid.
+    var follows: String?
+    /// Bild (⌘V): PNG, `points[0]` = obere linke Ecke, Breite `cardWidth`, Höhe `imageHeight`.
+    var imageData: Data?
+    var imageHeight: CGFloat = 0
+    private var cachedImage: NSImage?
     private var cachedPath: NSBezierPath?
     private var cachedTextRect: NSRect?
 
     private enum CodingKeys: String, CodingKey {
-        case points, color, width, marker, author, smooth, filled, dashed, text, fontSize, anchor, bold, card, cardWidth, cardInfo, uid
+        case points, color, width, marker, author, smooth, filled, dashed, text, fontSize, anchor, bold, card, cardWidth, cardInfo, uid, cuts, link, follows, imageData, imageHeight
     }
 
     init(start: CGPoint, color: Int, width: CGFloat, marker: Bool) {
@@ -610,6 +692,11 @@ final class ScratchStroke: Codable {
         anchor = try c.decodeIfPresent(ScratchTextAnchor.self, forKey: .anchor) ?? .start
         bold = try c.decodeIfPresent(Bool.self, forKey: .bold) ?? false
         if let uid = try c.decodeIfPresent(String.self, forKey: .uid) { self.uid = uid }
+        cuts = try c.decodeIfPresent([ScratchCut].self, forKey: .cuts) ?? []
+        link = try c.decodeIfPresent(ScratchLink.self, forKey: .link)
+        follows = try c.decodeIfPresent(String.self, forKey: .follows)
+        imageData = try c.decodeIfPresent(Data.self, forKey: .imageData)
+        imageHeight = try c.decodeIfPresent(CGFloat.self, forKey: .imageHeight) ?? 0
         // Erste Karten (24.09. mittags) trugen nur `card: true`.
         cardInfo = try c.decodeIfPresent(ScratchCard.self, forKey: .cardInfo)
             ?? ((try c.decodeIfPresent(Bool.self, forKey: .card)) == true ? ScratchCard() : nil)
@@ -627,6 +714,14 @@ final class ScratchStroke: Codable {
         try c.encode(marker, forKey: .marker)
         try c.encodeIfPresent(author, forKey: .author)
         try c.encode(uid, forKey: .uid)
+        if !cuts.isEmpty { try c.encode(cuts, forKey: .cuts) }
+        try c.encodeIfPresent(link, forKey: .link)
+        try c.encodeIfPresent(follows, forKey: .follows)
+        if let imageData {
+            try c.encode(imageData, forKey: .imageData)
+            try c.encode(imageHeight, forKey: .imageHeight)
+            try c.encode(cardWidth, forKey: .cardWidth)
+        }
         if !smooth { try c.encode(smooth, forKey: .smooth) }
         if filled { try c.encode(filled, forKey: .filled) }
         if dashed { try c.encode(dashed, forKey: .dashed) }
@@ -654,8 +749,118 @@ final class ScratchStroke: Codable {
 
     func offset(by d: CGPoint) {
         points = points.map { CGPoint(x: $0.x + d.x, y: $0.y + d.y) }
+        cuts = cuts.map { $0.mapped({ CGPoint(x: $0.x + d.x, y: $0.y + d.y) }, scale: 1) }
         cachedPath = nil
         cachedTextRect = nil
+        cachedGlyphs = nil
+    }
+
+    fileprivate func withUID(_ uid: String, cuts: [ScratchCut]) -> ScratchStroke {
+        self.uid = uid
+        self.cuts = cuts
+        return self
+    }
+
+    /// Unabhängige Kopie (gleiche uid) — Grundlage aller Änderungen als Undo-Schritt „tauschen“.
+    func copy() -> ScratchStroke { moved(by: .zero) }
+
+    /// Kopie, abgebildet durch Drehung+Streckung+Verschiebung (eingerastete Pfeile folgen ihren Karten).
+    func transformed(_ f: (CGPoint) -> CGPoint, scale: CGFloat) -> ScratchStroke {
+        let c = copy()
+        c.points = points.map(f)
+        c.cuts = cuts.map { $0.mapped(f, scale: scale) }
+        c.cachedPath = nil
+        return c
+    }
+
+    /// Gerader Linienzug (Pfeile eines Agenten).
+    init(line: [CGPoint], color: Int, width: CGFloat, author: String?) {
+        points = line
+        self.color = max(0, min(color, ScratchPalette.names.count - 1))
+        self.width = width
+        marker = false
+        self.author = author
+        smooth = false
+        filled = false
+        dashed = false
+        text = nil
+        fontSize = 16
+        anchor = .start
+        bold = false
+        cardInfo = nil
+        cardWidth = 0
+    }
+
+    /// Bild (⌘V) mit oberer linker Ecke `origin` und Anzeigegröße `size`.
+    init(image png: Data, at origin: CGPoint, size: NSSize, author: String?) {
+        points = [origin]
+        color = 0
+        width = 0
+        marker = false
+        self.author = author
+        smooth = false
+        filled = false
+        dashed = false
+        text = nil
+        fontSize = 16
+        anchor = .start
+        bold = false
+        cardInfo = nil
+        cardWidth = size.width
+        imageData = png
+        imageHeight = size.height
+    }
+
+    var isImage: Bool { imageData != nil }
+    var imageRect: NSRect { NSRect(origin: points[0], size: NSSize(width: cardWidth, height: imageHeight)) }
+    var image: NSImage? {
+        if cachedImage == nil, let imageData { cachedImage = NSImage(data: imageData) }
+        return cachedImage
+    }
+
+    /// Liegt `p` in einem Radier-Schnitt? Dort ist vom Element nichts mehr zu sehen.
+    func isCut(_ p: CGPoint) -> Bool { cuts.contains { $0.covers(p) } }
+
+    // MARK: Buchstaben einer Karte
+
+    private var cachedGlyphs: [(range: NSRange, rect: NSRect)]?
+
+    /// Rechteck je Zeichen (Weltkoordinaten), wie die Karte es setzt — der Radierer nimmt einzelne Buchstaben weg.
+    var glyphRects: [(range: NSRange, rect: NSRect)] {
+        if let cachedGlyphs { return cachedGlyphs }
+        guard let info = cardInfo, let text else { return [] }
+        let content = info.attributed(text: text, color: .white)
+        let storage = NSTextStorage(attributedString: content)
+        let layout = NSLayoutManager()
+        let container = NSTextContainer(size: NSSize(width: cardWidth - 2 * Self.cardPadding.width, height: .greatestFiniteMagnitude))
+        container.lineFragmentPadding = 0
+        layout.addTextContainer(container)
+        storage.addLayoutManager(layout)
+        layout.ensureLayout(for: container)
+        let origin = CGPoint(x: points[0].x + Self.cardPadding.width, y: points[0].y + Self.cardPadding.height)
+        var result: [(range: NSRange, rect: NSRect)] = []
+        let glyphs = layout.glyphRange(for: container)
+        for g in glyphs.location..<NSMaxRange(glyphs) {
+            let chars = layout.characterRange(forGlyphRange: NSRange(location: g, length: 1), actualGlyphRange: nil)
+            let substring = (content.string as NSString).substring(with: chars)
+            guard !substring.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            let r = layout.boundingRect(forGlyphRange: NSRange(location: g, length: 1), in: container)
+            result.append((chars, r.offsetBy(dx: origin.x, dy: origin.y)))
+        }
+        cachedGlyphs = result
+        return result
+    }
+
+    /// Was von der Karte noch zu lesen ist (Titel + Text, radierte Buchstaben als „·“); nil = unversehrt.
+    var visibleText: String? {
+        guard card, !cuts.isEmpty, let text else { return nil }
+        let full = (cardInfo?.title.map { $0 + (text.isEmpty ? "" : "\n") } ?? "") + text
+        var chars = Array(full.utf16)
+        var changed = false
+        for (range, rect) in glyphRects where isCut(CGPoint(x: rect.midX, y: rect.midY)) {
+            for i in range.location..<min(NSMaxRange(range), chars.count) { chars[i] = 0xB7; changed = true }
+        }
+        return changed ? String(decoding: chars, as: UTF16.self) : nil
     }
 
     func append(_ p: CGPoint) {
@@ -728,6 +933,13 @@ final class ScratchStroke: Codable {
     func cardUpdated(text: String?, origin: CGPoint?, width: CGFloat?, color: Int?, info: ScratchCard) -> ScratchStroke {
         let newText = text ?? self.text ?? ""
         let newWidth = width ?? cardWidth
+        // Nur verschoben/umgefärbt: dieselbe Tinte samt Radier-Schnitten. Neuer Satz = neue Tinte (Mats, 24.09.).
+        if newText == self.text, newWidth == cardWidth, info == cardInfo {
+            let copy = moved(by: origin.map { CGPoint(x: $0.x - points[0].x, y: $0.y - points[0].y) } ?? .zero)
+            guard let color, color != self.color else { return copy }
+            return ScratchStroke(card: newText, at: copy.points[0], width: newWidth, color: color, author: author, info: info)
+                .withUID(uid, cuts: copy.cuts)
+        }
         let copy = ScratchStroke(card: newText, at: origin ?? points[0], width: newWidth, color: color ?? self.color,
                                  author: author, info: info)
         copy.uid = uid
@@ -756,6 +968,7 @@ final class ScratchStroke: Codable {
     }
 
     var bounds: NSRect {
+        if isImage { return imageRect }
         if text != nil { return textRect.insetBy(dx: -2, dy: -2) }
         return path.bounds.insetBy(dx: -width, dy: -width)
     }
@@ -764,7 +977,8 @@ final class ScratchStroke: Codable {
     /// Beschriftungen auch innen.)
     func touches(_ p: CGPoint, radius: CGFloat) -> Bool {
         guard bounds.insetBy(dx: -radius, dy: -radius).contains(p) else { return false }
-        if text != nil { return true }
+        if isCut(p) { return false }
+        if isImage || text != nil { return true }
         if filled, path.contains(p) { return true }
         let reach = radius + width / 2
         if points.count == 1 { return hypot(points[0].x - p.x, points[0].y - p.y) <= reach }
@@ -805,12 +1019,13 @@ enum ScratchChanges {
     static func snapshot(_ elements: [ScratchStroke]) -> [String: Snap] {
         var result: [String: Snap] = [:]
         for e in elements {
-            let kind = e.card ? "card" : e.text != nil ? "text" : e.isClaude ? "shape" : "stroke"
+            let kind = e.card ? "card" : e.isImage ? "image" : e.text != nil ? "text" : e.isClaude ? "shape" : "stroke"
             var look = "\(e.color)"
             if let info = e.cardInfo, let data = try? JSONEncoder().encode(info) { look += String(decoding: data, as: UTF8.self) }
             let title = e.cardInfo?.title.map { $0 + " — " } ?? ""
+            look += "|cuts\(e.cuts.count)"
             result[e.uid] = Snap(author: e.isClaude ? "claude" : "mats", kind: kind, bounds: e.bounds,
-                                 text: e.text.map { title + $0 }, cardID: e.cardInfo?.id, look: look)
+                                 text: e.visibleText ?? e.text.map { title + $0 }, cardID: e.cardInfo?.id, look: look)
         }
         return result
     }

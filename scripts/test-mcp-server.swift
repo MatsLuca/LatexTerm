@@ -65,7 +65,7 @@ final class FakeApp: ControlTransport {
             let text = request.text ?? ""
             var reply: String
             if text.hasPrefix("look ") {
-                FileManager.default.createFile(atPath: String(text.dropFirst(5)), contents: Data([0x89, 0x50, 0x4E, 0x47]))
+                FileManager.default.createFile(atPath: String(text.split(separator: " ")[1]), contents: Data([0x89, 0x50, 0x4E, 0x47]))
                 reply = #"{"grid":50,"pixelsPerUnit":1.75,"region":{"x":-400,"y":-300,"w":800,"h":600},"visible":{"x":-400,"y":-300,"w":800,"h":600},"mats":{"count":3,"bounds":{"x":-10,"y":-5,"w":20,"h":10}},"claude":{"count":0,"bounds":null}}"#
             } else if text.hasPrefix("draw") {
                 reply = #"{"added":4,"removed":3,"fitted":true,"bounds":{"x":0,"y":0,"w":10,"h":10},"warnings":["<foo> unbekannt, übergangen"]}"#
@@ -255,7 +255,9 @@ struct MCPServerTests {
         assert((look[0]["data"] as? String) == Data([0x89, 0x50, 0x4E, 0x47]).base64EncodedString())
         let lookText = look[1]["text"] as? String ?? ""
         assert(lookText.contains("x -400…400") && lookText.contains("Raster alle 50") && lookText.contains("Nutzer: 3 Striche"), lookText)
-        let lookPath = String(pads.sent("call").last!.text!.dropFirst(5))
+        let lookCall = pads.sent("call").last!.text!.split(separator: " ")
+        assert(lookCall.count == 3 && lookCall[2] == "as=SELF-000", "look nennt den Betrachter")
+        let lookPath = String(lookCall[1])
         assert(!FileManager.default.fileExists(atPath: lookPath), "Bild wird nach dem Lesen gelöscht")
         // Zwei Scratchpads: das von dieser Session geöffnete gewinnt, sonst Rückfrage.
         pads.panes.append(pane("PAD2-0000", 3, kind: "scratchpad"))
