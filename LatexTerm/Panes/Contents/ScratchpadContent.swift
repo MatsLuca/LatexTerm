@@ -112,10 +112,12 @@ final class ScratchpadContent: PaneContent {
         let words = head.split(separator: " ").map(String.init)
         switch words.first?.lowercased() {
         case "look":
-            let raw = head.dropFirst(4).trimmingCharacters(in: .whitespaces)
-            let path = (raw as NSString).expandingTildeInPath
+            // look <pfad> [as=<wer>] — mit `as` kommt dazu, was sich seit dem letzten Blick dieses Betrachters geändert hat.
+            guard words.count >= 2 else { throw PaneArgsError("look braucht einen absoluten Pfad für das PNG") }
+            let path = (words[1] as NSString).expandingTildeInPath
             guard path.hasPrefix("/") else { throw PaneArgsError("look braucht einen absoluten Pfad für das PNG") }
-            return try look(writingTo: path)
+            let viewer = words.dropFirst(2).first { $0.hasPrefix("as=") }.map { String($0.dropFirst(3)) }
+            return try look(writingTo: path, viewer: viewer)
         case "draw":
             var replace: ScratchLayer?
             for option in words.dropFirst() {
@@ -143,7 +145,7 @@ final class ScratchpadContent: PaneContent {
         }
     }
 
-    private func look(writingTo path: String) throws -> String {
+    private func look(writingTo path: String, viewer: String?) throws -> String {
         let canvas = root.canvas
         guard let shot = canvas.lookImage(maxSide: 1400) else { throw PaneArgsError("Scratchpad hat noch keine Größe") }
         let url = URL(fileURLWithPath: path)
@@ -174,9 +176,24 @@ final class ScratchpadContent: PaneContent {
                 }
                 return entry
             },
+            "order": ScratchChanges.readingOrder(canvas.cards).compactMap { $0.cardInfo?.id },
+            "groups": ScratchChanges.groups(canvas.cards).map { $0.compactMap { $0.cardInfo?.id } }.filter { $0.count > 1 },
+            "changes": changes(for: viewer) ?? NSNull(),
             "colors": ScratchPalette.names,
             "claudeColor": ScratchPalette.names[ScratchPalette.claude],
         ])
+    }
+
+    /// Letzter Stand, den ein Betrachter gesehen hat (nur im Speicher: nach einem Neustart beginnt der Vergleich neu).
+    private var seen: [String: [String: ScratchChanges.Snap]] = [:]
+
+    /// Änderungen seit dem letzten `look` dieses Betrachters; nil = erster Blick (oder ohne Betrachter).
+    private func changes(for viewer: String?) -> [String: Any]? {
+        guard let viewer else { return nil }
+        let now = ScratchChanges.snapshot(root.canvas.elements)
+        defer { seen[viewer] = now }
+        guard let before = seen[viewer] else { return nil }
+        return ScratchChanges.diff(before, now)
     }
 
     private func draw(_ svg: String, replacing: ScratchLayer?) throws -> String {
@@ -516,11 +533,13 @@ final class ScratchStroke: Codable {
     var cardInfo: ScratchCard?
     let cardWidth: CGFloat
     var card: Bool { cardInfo != nil }
+    /// Stabiler Name des Elements über Verschieben/Ändern hinweg — für „seit deinem letzten Blick“ (`look as=…`).
+    var uid = String(UUID().uuidString.prefix(8))
     private var cachedPath: NSBezierPath?
     private var cachedTextRect: NSRect?
 
     private enum CodingKeys: String, CodingKey {
-        case points, color, width, marker, author, smooth, filled, dashed, text, fontSize, anchor, bold, card, cardWidth, cardInfo
+        case points, color, width, marker, author, smooth, filled, dashed, text, fontSize, anchor, bold, card, cardWidth, cardInfo, uid
     }
 
     init(start: CGPoint, color: Int, width: CGFloat, marker: Bool) {
@@ -590,6 +609,7 @@ final class ScratchStroke: Codable {
         fontSize = try c.decodeIfPresent(CGFloat.self, forKey: .fontSize) ?? 16
         anchor = try c.decodeIfPresent(ScratchTextAnchor.self, forKey: .anchor) ?? .start
         bold = try c.decodeIfPresent(Bool.self, forKey: .bold) ?? false
+        if let uid = try c.decodeIfPresent(String.self, forKey: .uid) { self.uid = uid }
         // Erste Karten (24.09. mittags) trugen nur `card: true`.
         cardInfo = try c.decodeIfPresent(ScratchCard.self, forKey: .cardInfo)
             ?? ((try c.decodeIfPresent(Bool.self, forKey: .card)) == true ? ScratchCard() : nil)
@@ -606,6 +626,7 @@ final class ScratchStroke: Codable {
         try c.encode(width, forKey: .width)
         try c.encode(marker, forKey: .marker)
         try c.encodeIfPresent(author, forKey: .author)
+        try c.encode(uid, forKey: .uid)
         if !smooth { try c.encode(smooth, forKey: .smooth) }
         if filled { try c.encode(filled, forKey: .filled) }
         if dashed { try c.encode(dashed, forKey: .dashed) }
@@ -707,8 +728,10 @@ final class ScratchStroke: Codable {
     func cardUpdated(text: String?, origin: CGPoint?, width: CGFloat?, color: Int?, info: ScratchCard) -> ScratchStroke {
         let newText = text ?? self.text ?? ""
         let newWidth = width ?? cardWidth
-        return ScratchStroke(card: newText, at: origin ?? points[0], width: newWidth, color: color ?? self.color,
-                             author: author, info: info)
+        let copy = ScratchStroke(card: newText, at: origin ?? points[0], width: newWidth, color: color ?? self.color,
+                                 author: author, info: info)
+        copy.uid = uid
+        return copy
     }
 
     /// Rechteck der Beschriftung: Anker auf der Grundlinie, links/mittig/rechts ausgerichtet.
@@ -766,4 +789,106 @@ struct ScratchDocument: Codable {
     var tool: ScratchTool
     var color: Int
     var size: Int
+}
+
+/// „Seit deinem letzten Blick“ (Pinnwand E, 24.09.): Stand je Element, Vergleich, Lesereihenfolge und Gruppen der Karten.
+enum ScratchChanges {
+    struct Snap: Equatable {
+        var author: String
+        var kind: String
+        var bounds: NSRect
+        var text: String?
+        var cardID: String?
+        var look: String
+    }
+
+    static func snapshot(_ elements: [ScratchStroke]) -> [String: Snap] {
+        var result: [String: Snap] = [:]
+        for e in elements {
+            let kind = e.card ? "card" : e.text != nil ? "text" : e.isClaude ? "shape" : "stroke"
+            var look = "\(e.color)"
+            if let info = e.cardInfo, let data = try? JSONEncoder().encode(info) { look += String(decoding: data, as: UTF8.self) }
+            let title = e.cardInfo?.title.map { $0 + " — " } ?? ""
+            result[e.uid] = Snap(author: e.isClaude ? "claude" : "mats", kind: kind, bounds: e.bounds,
+                                 text: e.text.map { title + $0 }, cardID: e.cardInfo?.id, look: look)
+        }
+        return result
+    }
+
+    static func diff(_ before: [String: Snap], _ now: [String: Snap]) -> [String: Any] {
+        var moved: [[String: Any]] = [], edited: [[String: Any]] = [], addedCards: [[String: Any]] = [], removedCards: [[String: Any]] = []
+        var added: [String: [NSRect]] = [:], removed: [String: [NSRect]] = [:]
+        func label(_ s: Snap) -> String { s.cardID ?? s.kind }
+        for (uid, snap) in now {
+            guard let old = before[uid] else {
+                if snap.kind == "card" { addedCards.append(["id": label(snap), "by": snap.author, "text": snap.text ?? "", "bounds": rect(snap.bounds)]) }
+                else { added["\(snap.author)|\(snap.kind)", default: []].append(snap.bounds) }
+                continue
+            }
+            let dx = snap.bounds.midX - old.bounds.midX, dy = snap.bounds.midY - old.bounds.midY
+            if hypot(dx, dy) >= 4 {
+                moved.append(["what": snap.kind == "card" ? label(snap) : snap.kind, "from": rect(old.bounds), "to": rect(snap.bounds)])
+            }
+            if old.text != snap.text || old.look != snap.look {
+                var e: [String: Any] = ["what": label(snap)]
+                if old.text != snap.text { e["before"] = old.text ?? ""; e["after"] = snap.text ?? "" } else { e["look"] = true }
+                edited.append(e)
+            }
+        }
+        for (uid, old) in before where now[uid] == nil {
+            if old.kind == "card" { removedCards.append(["id": label(old), "text": old.text ?? ""]) }
+            else { removed["\(old.author)|\(old.kind)", default: []].append(old.bounds) }
+        }
+        func groups(_ d: [String: [NSRect]]) -> [[String: Any]] {
+            d.map { key, boxes in
+                let parts = key.split(separator: "|")
+                let box = boxes.dropFirst().reduce(boxes[0]) { $0.union($1) }
+                return ["by": String(parts[0]), "kind": String(parts[1]), "count": boxes.count, "bounds": rect(box)]
+            }
+        }
+        var result: [String: Any] = [:]
+        if !addedCards.isEmpty { result["cardsAdded"] = addedCards }
+        if !removedCards.isEmpty { result["cardsRemoved"] = removedCards }
+        if !moved.isEmpty { result["moved"] = moved }
+        if !edited.isEmpty { result["edited"] = edited }
+        if !added.isEmpty { result["added"] = groups(added) }
+        if !removed.isEmpty { result["erased"] = groups(removed) }
+        return result
+    }
+
+    /// Lesereihenfolge: Zeilen (Karten, deren Mitte in die Höhe der ersten passt), darin von links nach rechts.
+    static func readingOrder(_ cards: [ScratchStroke]) -> [ScratchStroke] {
+        var rest = cards.sorted { $0.bounds.minY < $1.bounds.minY }
+        var order: [ScratchStroke] = []
+        while let first = rest.first {
+            let row = rest.filter { $0.bounds.midY <= first.bounds.maxY }
+            order += row.sorted { $0.bounds.minX < $1.bounds.minX }
+            rest.removeAll { card in row.contains { $0 === card } }
+        }
+        return order
+    }
+
+    /// Karten, die nah beieinander liegen (≤ 28 pt Abstand), bilden eine Gruppe — in Lesereihenfolge.
+    static func groups(_ cards: [ScratchStroke]) -> [[ScratchStroke]] {
+        let ordered = readingOrder(cards)
+        var parent = Array(ordered.indices)
+        func find(_ i: Int) -> Int { parent[i] == i ? i : find(parent[i]) }
+        for i in ordered.indices { for j in ordered.indices where j > i {
+            if ordered[i].bounds.insetBy(dx: -14, dy: -14).intersects(ordered[j].bounds.insetBy(dx: -14, dy: -14)) {
+                parent[find(j)] = find(i)
+            }
+        } }
+        var buckets: [Int: [ScratchStroke]] = [:], keys: [Int] = []
+        for i in ordered.indices {
+            let root = find(i)
+            if buckets[root] == nil { keys.append(root) }
+            buckets[root, default: []].append(ordered[i])
+        }
+        return keys.map { buckets[$0]! }
+    }
+
+    private static func rect(_ r: NSRect) -> [String: Double] {
+        ["x": (Double(r.minX) * 10).rounded() / 10, "y": (Double(r.minY) * 10).rounded() / 10,
+         "w": (Double(r.width) * 10).rounded() / 10, "h": (Double(r.height) * 10).rounded() / 10]
+    }
 }

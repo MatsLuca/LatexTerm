@@ -351,6 +351,9 @@ final class ScratchpadCanvas: NSView {
         return CGPoint(x: startX, y: (boxes.map(\.maxY).max() ?? area.minY) + 16)
     }
 
+    /// Alle Elemente in Zeichenreihenfolge (für den Vergleich „seit dem letzten Blick“).
+    var elements: [ScratchStroke] { strokes }
+
     /// Karten für Agenten (`call look`).
     var cards: [ScratchStroke] { strokes.filter(\.card) }
 

@@ -149,8 +149,10 @@ final class MCPServer {
         und mit scratch_draw sauber hineinzeichnen; zum Erklären selbst eins öffnen (open_scratchpad) und zeichnen. \
         Pinnwand: Entsteht beim Brainstorming Stoff, den der Nutzer ordnen will (Optionen, Thesen, offene Fragen), und ist \
         neben dir ein Scratchpad offen, leg die Punkte mit scratch_cards zusätzlich als Karten dazu — knapp, eine Karte je \
-        Gedanke, nicht jede Antwort; dafür kein Scratchpad ungefragt öffnen. Der Nutzer verschiebt, verbindet, ergänzt \
-        (⌘V legt markierten Text als Karten ab); scratch_look liefert Kartentexte und ids, mit denen du umordnest.
+        Gedanke, nicht jede Antwort. Ist keins offen, darfst du im Chat einmal anbieten, den Stoff als Karten in ein \
+        Scratchpad daneben zu legen (öffnen erst auf ein Ja). Der Nutzer verschiebt, verbindet, ergänzt \
+        (⌘V legt markierten Text als Karten ab); scratch_look liefert Kartentexte und ids, Lesereihenfolge und Gruppen \
+        und was sich seit deinem letzten Blick geändert hat — schickt der Nutzer die Skizze per ➤, dort nachsehen, was er umgestellt hat.
         Vorschau (open_preview) = PDF/Bild neben dir: nach dem Kompilieren mit preview_look selbst prüfen, mit pane_action \
         sync <datei.tex>:<zeile> zeigen, wo eine Änderung gelandet ist. Schickt der Nutzer Stellen daraus („Aus der Vorschau …“), \
         stehen Seite, Quelltext-Zeile und ein Ausschnitt-Bild dabei.
@@ -898,7 +900,7 @@ final class MCPServer {
         let pad = try scratchpad(a)
         let file = (NSTemporaryDirectory() as NSString).appendingPathComponent("latexterm-look-\(UUID().uuidString).png")
         defer { try? FileManager.default.removeItem(atPath: file) }
-        let info = try callPane(pad, "look \(file)")
+        let info = try callPane(pad, "look \(file)" + (paneID.map { " as=\($0.prefix(8))" } ?? ""))
         guard let png = FileManager.default.contents(atPath: file), !png.isEmpty else {
             throw ToolFailure("Scratchpad hat kein Bild geliefert.")
         }
@@ -932,6 +934,37 @@ final class MCPServer {
                 }
                 let title = (card["title"] as? String).map { "**\($0)** " } ?? ""
                 lines.append("- [\(meta)] " + title + ((card["text"] as? String) ?? "").replacingOccurrences(of: "\n", with: " / "))
+            }
+        }
+        if let order = info["order"] as? [String], order.count > 1 {
+            var line = "Lesereihenfolge der Karten: " + order.joined(separator: " → ")
+            if let groups = info["groups"] as? [[String]], !groups.isEmpty {
+                line += " · Gruppen (nah beieinander): " + groups.map { "[" + $0.joined(separator: ", ") + "]" }.joined(separator: " ")
+            }
+            lines.append(line)
+        }
+        if let changes = info["changes"] as? JSON {
+            lines.append(changes.isEmpty ? "Seit deinem letzten Blick: nichts geändert." : "Seit deinem letzten Blick:")
+            func who(_ v: Any?) -> String { v as? String == "claude" ? "du" : "Nutzer" }
+            let kinds = ["stroke": "Striche", "shape": "Formen", "text": "Beschriftungen", "card": "Karten"]
+            for e in (changes["cardsAdded"] as? [JSON]) ?? [] {
+                lines.append("- neue Karte \(e["id"] as? String ?? "?") (\(who(e["by"]))) in \((e["bounds"] as? JSON).map(span) ?? "?"): \(e["text"] as? String ?? "")")
+            }
+            for e in (changes["cardsRemoved"] as? [JSON]) ?? [] {
+                lines.append("- Karte \(e["id"] as? String ?? "?") entfernt: \(e["text"] as? String ?? "")")
+            }
+            for e in (changes["moved"] as? [JSON]) ?? [] {
+                let what = e["what"] as? String ?? "?"
+                lines.append("- verschoben: \(kinds[what].map { "ein Element (\($0))" } ?? what) von \((e["from"] as? JSON).map(span) ?? "?") nach \((e["to"] as? JSON).map(span) ?? "?")")
+            }
+            for e in (changes["edited"] as? [JSON]) ?? [] {
+                if e["look"] as? Bool == true { lines.append("- \(e["what"] as? String ?? "?"): Aussehen geändert") }
+                else { lines.append("- \(e["what"] as? String ?? "?") Text: „\(e["before"] as? String ?? "")“ → „\(e["after"] as? String ?? "")“") }
+            }
+            for (key, verb) in [("added", "neu"), ("erased", "radiert")] {
+                for e in (changes[key] as? [JSON]) ?? [] {
+                    lines.append("- \(verb): \(e["count"] as? Int ?? 0) \(kinds[e["kind"] as? String ?? ""] ?? "Elemente") (\(who(e["by"]))) in \((e["bounds"] as? JSON).map(span) ?? "?")")
+                }
             }
         }
         lines.append("Weltkoordinaten: 0,0 = Kachelmitte, y nach unten. Zeichnen mit scratch_draw (ohne viewBox in diesen Koordinaten).")
