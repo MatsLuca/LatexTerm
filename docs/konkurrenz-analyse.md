@@ -126,7 +126,8 @@ probieren.
 
 - [x] S-Paket §1.1–1.4 umgesetzt (24.09., + Vollständigkeitsregel §1.9). Bewusst nicht übernommen aus Folios
       Korpus: `价格是 $5$` (auch legitime Mathe) und `+ $$x^2$$` (Diff-Zeile; wir rendern). §1.5 offen, erst messen
-- [ ] §1.6 prototypen: Probe-Hook `MessageDisplay` im Mod, prüfen, ob `displayContent` in 2.1.281 wirklich die
-      Anzeige ersetzt (auch im Fullscreen-TUI), dann `\(`→`$` ergänzen
+- [x] §1.6 umgesetzt (24.09., Werkstatt `9d45f37`): Probe per `script`-Aufzeichnung + Terminal-Replay belegt —
+      CC frisst auch in `$$`-Blöcken (iCodeCraft irrt da), `displayContent` wirkt, in Code frisst CC nichts.
+      `\(`→`$` war unnötig: verdoppelt kommt `\(…\)` heil an und unser Detektor kennt es.
 - [ ] §1.8/1.9 erst nach Alltagsbeobachtung
 - [ ] Ergebnisse in `CLAUDE.md` („Known limitations", HIER WEITERMACHEN) übertragen
