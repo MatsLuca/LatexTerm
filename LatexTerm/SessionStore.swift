@@ -60,6 +60,8 @@ struct SessionSnapshot: Codable, Equatable {
         var layout: LayoutNode?
         /// Bretter (23.09.): von Mats gesetzter Name; nil = automatisch.
         var name: String?
+        /// Home-Brett (24.09.): Übersicht + Chef-Claude, links vor den Brettern, nicht mitgezählt; nil = normales Brett.
+        var home: Bool?
 
         init(panes: [PaneSnapshot], focused: Int? = nil, zoomed: Int? = nil,
              tabGroup: Int? = nil, selected: Bool? = nil, layout: LayoutNode? = nil, name: String? = nil) {
@@ -72,7 +74,7 @@ struct SessionSnapshot: Codable, Equatable {
             self.name = name
         }
 
-        private enum CodingKeys: String, CodingKey { case panes, focused, zoomed, tabGroup, selected, layout, name }
+        private enum CodingKeys: String, CodingKey { case panes, focused, zoomed, tabGroup, selected, layout, name, home }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -84,6 +86,7 @@ struct SessionSnapshot: Codable, Equatable {
             // Ein kaputtes Layout kostet nur die Anordnung, nie die Kacheln.
             layout = try? c.decodeIfPresent(LayoutNode.self, forKey: .layout)
             name = try? c.decodeIfPresent(String.self, forKey: .name)
+            home = try? c.decodeIfPresent(Bool.self, forKey: .home)
         }
 
         /// Aus den Kacheln eines Fensters: Kacheln ohne Snapshot fallen weg, Fokus- und
