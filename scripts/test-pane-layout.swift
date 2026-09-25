@@ -66,6 +66,7 @@ struct PaneLayoutTests {
         coding()
         tabs()
         dragging()
+        docking()
         if failures > 0 { print("pane-layout: \(failures) Fehler"); exit(1) }
         print("pane-layout: ok")
     }
@@ -485,5 +486,66 @@ struct PaneLayoutTests {
         for target in [LayoutDropTarget.place("B", .left), .place("C", .center), .window(.top), .tabBar("B", index: 0)] {
             if let out = move("A", target, root) { check(noSingles(out) && Set(out.paneIDs) == ["A", "B", "C"], "bereinigt nach \(target): \(out)") }
         }
+    }
+
+    /// Angedockte Leisten (25.09.2026): fest über/unter ihrer Kachel, gleich breit, feste Höhe, wandern mit.
+    static func docking() {
+        let bounds = CGRect(x: 0, y: 0, width: 1500, height: 900)
+        // Zwei Kacheln nebeneinander, Leiste L unter A: A-Spalte = A + L, B unverändert daneben.
+        let base = LayoutNode.split(.row, [.leaf("A"), .leaf("B")])
+        let withL = LayoutNode.split(.row, [.leaf("A"), .leaf("B"), .leaf("L")])
+        let docks = ["L": LayoutDock(anchor: "A", edge: .bottom, height: 84)]
+        let d = LayoutEdit.docked(withL, docks: docks)
+        check(d.children.count == 2, "L raus aus der Zeile: \(d)")
+        check(d.children[0].axis == .column && d.children[0].children.map(\.pane) == ["A", "L"], "A über L: \(d)")
+        check(d.children[0].children[1].fixed == 84, "feste Höhe")
+        let (slots, dividers, _) = LayoutGeometry.layout(d, in: bounds, gap: 8)
+        let a = slots.first { $0.pane == "A" }!, l = slots.first { $0.pane == "L" }!, b = slots.first { $0.pane == "B" }!
+        check(l.rect.height == 84 && l.rect.minY == 816, "Leiste 84 pt am Boden: \(l.rect)")
+        check(l.rect.width == a.rect.width && l.rect.minX == a.rect.minX, "gleich breit wie A")
+        check(b.rect.height == 900, "B volle Höhe")
+        check(a.rect.height == 816, "A bekommt den Rest")
+        // Idempotent und dieselbe Geometrie wie vorher für A/B-Breite.
+        check(LayoutEdit.docked(d, docks: docks) == d, "idempotent")
+        check(LayoutGeometry.rect(of: "B", in: d, bounds: bounds) == LayoutGeometry.rect(of: "B", in: base, bounds: bounds), "B-Breite unverändert")
+        // Oben: vor der Kachel.
+        let top = LayoutEdit.docked(withL, docks: ["L": LayoutDock(anchor: "A", edge: .top, height: 60)])
+        check(top.children[0].children.map(\.pane) == ["L", "A"], "oben: \(top)")
+        // Fenster klein: Leiste höchstens 2/3.
+        let tiny = LayoutGeometry.layout(LayoutEdit.docked(withL, docks: ["L": LayoutDock(anchor: "A", edge: .bottom, height: 400)]),
+                                         in: CGRect(x: 0, y: 0, width: 800, height: 300), gap: 0).slots
+        check(tiny.first { $0.pane == "L" }!.rect.height == 200, "gekappt auf 2/3: \(tiny)")
+        // Kachel mit Reitern: Leiste unter dem ganzen Platz.
+        let grouped = LayoutEdit.docked(.split(.row, [.group(["A", "T"]), .leaf("B"), .leaf("L")]), docks: docks)
+        check(grouped.children[0].children[0].members == ["A", "T"] && grouped.children[0].children[1].pane == "L", "unter dem Reiter-Platz: \(grouped)")
+        // Zwei Leisten, eine oben, eine unten; Ketten hängen an der Kachel.
+        let two = LayoutEdit.docked(.split(.row, [.leaf("A"), .leaf("L"), .leaf("M"), .leaf("N")]),
+                                    docks: ["L": LayoutDock(anchor: "A", edge: .bottom), "M": LayoutDock(anchor: "A", edge: .top),
+                                            "N": LayoutDock(anchor: "L", edge: .bottom)])
+        check(two.children.map(\.pane).compactMap { $0 } == [] || two.axis == .column, "nur noch A-Spalte: \(two)")
+        check(two.paneIDs == ["M", "A", "L", "N"], "Reihenfolge oben/Kachel/unten: \(two.paneIDs)")
+        // Leiste fehlt im Baum (Automatik lässt sie weg): wird trotzdem eingesetzt.
+        check(LayoutEdit.docked(base, docks: docks) == d, "Leiste ohne Platz im Baum: \(LayoutEdit.docked(base, docks: docks))")
+        check(LayoutEdit.docked(.leaf("A"), docks: docks).paneIDs == ["A", "L"], "einzige Kachel + Leiste")
+        // Kachel fehlt → Leiste bleibt normal im Baum.
+        let orphan = LayoutEdit.docked(.split(.row, [.leaf("B"), .leaf("L")]), docks: docks)
+        check(orphan == .split(.row, [.leaf("B"), .leaf("L")]), "ohne Kachel unverändert")
+        // Gelöste Leiste (feste Größe, aber keine Andockung mehr): wieder normale Kachel.
+        check(LayoutEdit.docked(d, docks: [:]).children[0].children[1].fixed == nil, "gelöst = ohne feste Größe")
+        // Zug an der Linie zwischen A und L: Leistenhöhe folgt, keine ✋.
+        let line = dividers.first { $0.path == [0] }!
+        let dragged = LayoutEdit.dragged(d, divider: line, to: 700, minimum: 120, actor: .mats)
+        check(dragged.children[0].children[1].fixed == 200 && dragged.children[0].setBy == nil, "Zug setzt Höhe: \(dragged)")
+        check(LayoutEdit.dockHeights(in: dragged)["L"] == 200, "Höhe auslesbar")
+        check(LayoutEdit.dragged(d, divider: line, to: 890, minimum: 120, actor: .mats).children[0].children[1].fixed == LayoutDock.minHeight,
+              "Mindesthöhe")
+        // Leiste entfernen: Spalte löst sich auf, A hat wieder ihren Anteil.
+        check(LayoutEdit.remove("L", from: d) == base, "ohne Leiste wie vorher: \(String(describing: LayoutEdit.remove("L", from: d)))")
+        // JSON: feste Größe übersteht Hin und Zurück.
+        let data = try! JSONEncoder().encode(d)
+        check(try! JSONDecoder().decode(LayoutNode.self, from: data) == d, "JSON mit fixed")
+        // Automatik-Absicht auf den gedockten Baum und wieder andocken: Leiste bleibt unter A.
+        let moved = try! LayoutEdit.apply(.swap("A", "B"), to: d, actor: .agent, overrideMats: false)
+        check(LayoutEdit.docked(moved, docks: docks).children[1].children.map(\.pane) == ["A", "L"], "Leiste wandert mit A")
     }
 }

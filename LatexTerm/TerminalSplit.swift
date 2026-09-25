@@ -22,6 +22,8 @@ struct MovingPane {
     let openedBy: String?
     /// Kachel, neben der sie stand (mitgezogene Begleiter); nil = die umziehende Kachel selbst.
     let companion: UUID?
+    /// War sie als Leiste an `companion` angedockt: Seite und Höhe.
+    var dock: LayoutDock? = nil
 }
 
 final class TerminalSplitView: NSView {
@@ -40,6 +42,10 @@ final class TerminalSplitView: NSView {
     private var manualLayout: LayoutNode?
     /// Kachel → Kachel, neben der sie steht (Begleiter, meist: der Agent, der sie geöffnet hat).
     private var companionOf: [UUID: UUID] = [:]
+    /// Angedockte Leisten (25.09.2026): Kachel → Seite/Höhe an ihrer Kachel (`companionOf`). Stehen nie selbst im
+    /// angepassten Baum der Automatik — `effectiveLayout` setzt sie erst ein (`LayoutEdit.docked`), so wandern sie
+    /// mit ihrer Kachel, egal wie Mats oder ein Agent umordnet.
+    private var docks: [UUID: LayoutDock] = [:]
     /// Kacheln, deren Wunschform nach dem Laden schon einmal gemeldet wurde — danach wird für sie
     /// nicht mehr umgeordnet (ein neu geladenes PDF anderer Form lässt das Layout stehen).
     private var settledPreferences: Set<UUID> = []
@@ -56,6 +62,8 @@ final class TerminalSplitView: NSView {
     private var newsPanes: Set<UUID> = []
     /// Laufender Zug an einer Trennlinie: Ausgangsbaum und Linie.
     private var dragOrigin: (tree: LayoutNode, divider: LayoutDivider)?
+    /// Laufender Zug an der Linie einer Leiste: angepasster Baum von vorher (`.some(nil)` = Automatik) — er bleibt.
+    private var dockDragManual: LayoutNode??
     /// Laufender Zug einer Kachel (am Reiter oder Titelleisten-Chip): welche, und die Anzeige des Ziels.
     private var paneDrag: (pane: String, overlay: PaneDropOverlayView)?
     /// Stand-Nummer der Anordnung (`LayoutReport.revision`): wächst mit jeder Änderung. Agenten müssen
@@ -299,7 +307,8 @@ final class TerminalSplitView: NSView {
     func detachForMove(_ pane: any Pane) -> [MovingPane] {
         let followers = panes.filter { $0 !== pane && companionOf[$0.id] == pane.id }
         let moving = ([pane] + followers).map { p in
-            MovingPane(pane: p, openedBy: p.openedBy, companion: p === pane ? nil : pane.id)
+            MovingPane(pane: p, openedBy: p.openedBy, companion: p === pane ? nil : pane.id,
+                       dock: p === pane ? nil : docks[p.id])
         }
         for entry in moving.reversed() { removePane(entry.pane) }
         return moving
@@ -308,7 +317,10 @@ final class TerminalSplitView: NSView {
     /// Gegenstück zu `detachForMove`: Kacheln hier einhängen, Öffner und Begleiter wie vorher.
     func adopt(_ moving: [MovingPane], focus: Bool) {
         for entry in moving {
-            mount(entry.pane, placement: entry.companion.map { .beside($0) } ?? .own)
+            let placement: PanePlacement = entry.companion.map { anchor in
+                entry.dock.map { .docked(anchor, $0.edge, $0.height) } ?? .beside(anchor)
+            } ?? .own
+            mount(entry.pane, placement: placement)
             entry.pane.openedBy = entry.openedBy
             settle(entry.pane, focus: focus && entry.companion == nil)
         }
@@ -333,6 +345,7 @@ final class TerminalSplitView: NSView {
             (snapshot: pane.snapshot().map {
                 var s = $0; s.id = pane.id.uuidString; s.openedBy = pane.openedBy
                 s.companionOf = companionOf[pane.id]?.uuidString
+                s.dock = docks[pane.id]
                 s.hidden = hidden.contains(pane.id.uuidString) ? true : nil
                 return s
             }, focused: isFocused(pane) || (!isActiveBoard && pane === lastFocused), zoomed: pane === zoomedPane)
@@ -370,6 +383,7 @@ final class TerminalSplitView: NSView {
             guard let old = entry.id?.uppercased(), let pane = idMap[old],
                   let target = entry.companionOf?.uppercased(), let anchor = idMap[target], anchor != pane else { continue }
             companionOf[pane] = anchor
+            if let dock = entry.dock { docks[pane] = LayoutDock(anchor: anchor.uuidString, edge: dock.edge, height: dock.height) }
         }
     }
 
@@ -533,7 +547,7 @@ final class TerminalSplitView: NSView {
     /// animiert nur bei echter Änderung — ein Wechsel innerhalb einer Kachel, etwa in die
     /// ⌘F-Suchleiste, flackert nicht), dann Fenstertitel und Titelleiste nachziehen.
     private func syncFocus() {
-        for pane in panes { pane.container.hasFocus = isFocused(pane) }
+        updateFocusLook()
         if let focused = panes.first(where: { isFocused($0) }) {
             // Fokus in einem verdeckten Brett (eine Home-Kachel lädt dort und greift selbst zur Tastatur, ein
             // Terminal startet …): zurück ins vordere Brett — sonst tippt Mats ins Unsichtbare (Live-Befund 23.09.).
@@ -593,6 +607,8 @@ final class TerminalSplitView: NSView {
         case besideFocused
         /// Verdeckt als Reiter bei dieser Kachel (Agent öffnet „im Hintergrund“), ohne Platz zu nehmen.
         case background(UUID)
+        /// Als Leiste fest über/unter dieser Kachel, gleich breit, feste Höhe (pt).
+        case docked(UUID, LayoutDockEdge, Double)
     }
 
     /// Terminal- oder Home-Kachel anhängen.
@@ -640,6 +656,10 @@ final class TerminalSplitView: NSView {
             if anchor != pane.id, panes.contains(where: { $0.id == anchor }) { companionOf[pane.id] = anchor }
         case .besideFocused:
             if let focused { companionOf[pane.id] = focused.id }
+        case .docked(let anchor, let edge, let height):
+            guard anchor != pane.id, panes.contains(where: { $0.id == anchor }) else { break }
+            companionOf[pane.id] = anchor
+            docks[pane.id] = LayoutDock(anchor: anchor.uuidString, edge: edge, height: height)
         case .background(let anchor):
             guard anchor != pane.id, panes.contains(where: { $0.id == anchor }) else { break }
             companionOf[pane.id] = anchor
@@ -656,7 +676,8 @@ final class TerminalSplitView: NSView {
         // Verdeckt angelegt: nicht als zuletzt gezeigt markieren, sonst läge sie gleich vorn.
         if !inBackground {
             markShown(pane)
-            if manualLayout != nil { insertIntoManualLayout(pane, focused: focused) }
+            // Leisten stehen nie selbst im angepassten Baum — `effectiveLayout` setzt sie an ihre Kachel.
+            if manualLayout != nil, docks[pane.id] == nil { insertIntoManualLayout(pane, focused: focused) }
         }
         // Landet die neue Kachel als Reiter vor der, in der Mats gerade tippt, bleibt seine vorn — die neue
         // kommt nur nach vorn, wenn sie selbst den Fokus bekommt (`settle`).
@@ -713,6 +734,9 @@ final class TerminalSplitView: NSView {
         // Layout: ihr Platz fällt an ihre Nachbarn im Block; ihre Begleiter werden eigenständig.
         companionOf[pane.id] = nil
         for (companion, anchor) in companionOf where anchor == pane.id { companionOf[companion] = nil }
+        // Leisten der geschlossenen Kachel bleiben als normale Kacheln stehen (nichts geht ungefragt zu).
+        docks[pane.id] = nil
+        for (strip, dock) in docks where dock.anchor == pane.id.uuidString { docks[strip] = nil }
         settledPreferences.remove(pane.id)
         if let root = manualLayout { manualLayout = LayoutEdit.remove(pane.id.uuidString, from: root) }
         if panes.count <= 1 { manualLayout = nil }
@@ -972,21 +996,36 @@ final class TerminalSplitView: NSView {
 
     /// Der Baum, der gerade gilt: angepasst (bereinigt, jede Kachel drin) oder von der Automatik.
     private func effectiveLayout() -> LayoutNode? {
-        rawLayout()?.withFront { self.shownAt[$0] ?? 0 }
+        guard let raw = rawLayout() else { return nil }
+        return LayoutEdit.docked(raw, docks: activeDocks).withFront { self.shownAt[$0] ?? 0 }
+    }
+
+    /// Leisten, deren Kachel in diesem Brett steht (nach UUID-String).
+    private var activeDocks: [String: LayoutDock] {
+        let ids = Set(panes.map(\.id))
+        var out: [String: LayoutDock] = [:]
+        for (strip, dock) in docks where ids.contains(strip) {
+            guard let anchor = UUID(uuidString: dock.anchor), ids.contains(anchor), anchor != strip else { continue }
+            out[strip.uuidString] = dock
+        }
+        return out
     }
 
     private func rawLayout() -> LayoutNode? {
         let ids = Set(panes.map { $0.id.uuidString })
         if var manual = manualLayout?.normalized(keeping: ids) {
             // Sicherheitsnetz: jede Kachel steht im Baum — sonst läge sie unsichtbar unter den anderen.
-            for pane in panes where !manual.paneIDs.contains(pane.id.uuidString) {
+            let strips = activeDocks
+            for pane in panes where !manual.paneIDs.contains(pane.id.uuidString) && strips[pane.id.uuidString] == nil {
                 manual = LayoutEdit.insert(pane.id.uuidString, companionOf: nil, anchorCompanions: [], focusBlock: [],
                                            preference: pane.layoutPreference, anchorPreference: .flexible,
                                            into: manual, bounds: bounds, gap: Double(Self.gap))
             }
             return manual
         }
-        let items = panes.map { pane in
+        // Leisten zählen für die Automatik nicht mit (weder als Zelle noch als Begleiter in der Nebenspalte).
+        let strips = Set(activeDocks.keys)
+        let items = panes.filter { !strips.contains($0.id.uuidString) }.map { pane in
             LayoutItem(id: pane.id.uuidString, companionOf: companionOf[pane.id]?.uuidString,
                        preference: pane.layoutPreference)
         }
@@ -1107,7 +1146,7 @@ final class TerminalSplitView: NSView {
 
     /// Kacheln, die zu `anchor` gehören (sie selbst und alle ihre Begleiter), ohne `excluding`.
     private func block(of anchor: UUID, excluding: UUID? = nil) -> Set<String> {
-        Set(panes.filter { $0.id != excluding && rootAnchor(of: $0.id) == anchor }.map { $0.id.uuidString })
+        Set(panes.filter { $0.id != excluding && docks[$0.id] == nil && rootAnchor(of: $0.id) == anchor }.map { $0.id.uuidString })
     }
 
     /// Angepasstes Layout: neue Kachel einsetzen, ohne den Rest umzuwerfen (Begleiter in die Nebenspalte
@@ -1246,6 +1285,11 @@ final class TerminalSplitView: NSView {
         guard zoomedPane == nil, let root = manualLayout ?? effectiveLayout(),
               LayoutEdit.exists(view.divider.path, in: root) else { return }
         dragOrigin = (root, view.divider)
+        // Linie an einer Leiste: nur ihre Höhe ändert sich, die Anordnung bleibt, wie sie war (Automatik bleibt Automatik).
+        let split = LayoutEdit.node(at: view.divider.path, in: root)
+        let i = view.divider.index
+        dockDragManual = split.children.indices.contains(i + 1)
+            && (split.children[i].fixed != nil || split.children[i + 1].fixed != nil) ? .some(manualLayout) : nil
         panes.forEach { $0.container.holdsContent = true }
     }
 
@@ -1253,15 +1297,25 @@ final class TerminalSplitView: NSView {
         guard let origin = dragOrigin else { return }
         // Kachel dazu oder weg während des Zugs: Linie gehört zu einem alten Stand → abbrechen.
         guard Set(origin.tree.paneIDs) == Set(panes.map { $0.id.uuidString }) else { cancelDividerDrag(); return }
-        manualLayout = LayoutEdit.dragged(origin.tree, divider: origin.divider, to: position,
-                                          minimum: Self.dragMinimum, actor: .mats)
+        let dragged = LayoutEdit.dragged(origin.tree, divider: origin.divider, to: position,
+                                         minimum: Self.dragMinimum, actor: .mats)
+        if let before = dockDragManual {
+            for (id, height) in LayoutEdit.dockHeights(in: dragged) {
+                if let strip = UUID(uuidString: id), docks[strip] != nil { docks[strip]?.height = height }
+            }
+            manualLayout = before
+        } else {
+            manualLayout = dragged
+        }
         relayout(animated: false)
     }
 
     private func dividerEnded(_ view: PaneDividerView) {
         guard let origin = dragOrigin else { return }
+        let dockDrag = dockDragManual != nil
+        dockDragManual = nil
         finishDividerDrag()
-        if manualLayout != origin.tree { layoutChanged() }
+        if dockDrag || manualLayout != origin.tree { layoutChanged() }
     }
 
     private func dividerDoubleClicked(_ view: PaneDividerView) {
@@ -1470,6 +1524,8 @@ final class TerminalSplitView: NSView {
     /// Wurf umsetzen: Anordnung gilt als angepasst (die neue Teilung ✋), die Kachel liegt vorn und hat den Fokus.
     private func applyPaneDrop(_ pane: any Pane, result: LayoutNode) {
         guard let root = effectiveLayout(), Set(result.paneIDs) == Set(root.paneIDs) else { return }
+        // Mats zieht eine Leiste woandershin: sie ist ab jetzt eine normale Kachel dort.
+        docks[pane.id] = nil
         manualLayout = result
         markShown(pane)
         relayout(animated: true)
@@ -1492,7 +1548,21 @@ final class TerminalSplitView: NSView {
 
     /// Neue Stand-Nummer: jedes Lagebild, das ein Agent vorher gelesen hat, ist damit veraltet. Die Chips in der
     /// Titelleiste folgen der Lesereihenfolge — nach jeder Änderung der Anordnung nachziehen.
+    /// Hell oder gedimmt: jede Kachel nach ihrem eigenen Fokus — eine Leiste nach dem ihrer Kachel (sie gehört zu ihr,
+    /// Mats tippt nie in die Leiste; Wunsch 25.09.). Fokus in der Leiste selbst hellt beide auf.
+    private func updateFocusLook() {
+        for pane in panes {
+            var lit = isFocused(pane)
+            if let dock = docks[pane.id], let anchor = panes.first(where: { $0.id.uuidString == dock.anchor }) {
+                lit = lit || isFocused(anchor)
+            }
+            if !lit, panes.contains(where: { docks[$0.id]?.anchor == pane.id.uuidString && isFocused($0) }) { lit = true }
+            pane.container.hasFocus = lit
+        }
+    }
+
     private func layoutChanged() {
+        updateFocusLook()
         layoutRevision += 1
         updateTitlebarHUD()
     }
@@ -1625,7 +1695,13 @@ extension TerminalSplitView: ControlCommandHandler {
             case nil, "beside":
                 if let openerID, panes.contains(where: { $0.id == openerID }) { placement = .beside(openerID) }
                 else { placement = kind == "terminal" || kind == "home" ? .own : .besideFocused }
-            default: return .failure("placement „\(request.placement ?? "")“ unbekannt (beside | own | background)")
+            case "dock-bottom", "dock-top":
+                guard let openerID, panes.contains(where: { $0.id == openerID }) else {
+                    return .failure("placement \(request.placement!) braucht eine aufrufende Kachel in diesem Fenster")
+                }
+                placement = .docked(openerID, request.placement == "dock-top" ? .top : .bottom,
+                                    LayoutDock.clamp(request.dockHeight ?? LayoutDock.defaultHeight))
+            default: return .failure("placement „\(request.placement ?? "")“ unbekannt (beside | own | background | dock-bottom | dock-top)")
             }
             let layout = { self.layoutReport() }
             switch kind {
@@ -1753,6 +1829,7 @@ extension TerminalSplitView: ControlCommandHandler {
                         openedBy: pane.openedBy,
                         companionOf: companionOf[pane.id]?.uuidString,
                         hidden: hiddenTabIDs.contains(pane.id.uuidString) ? true : nil,
+                        dock: activeDocks[pane.id.uuidString]?.label,
                         accent: pane.effectiveAccent.srgbHexString)
     }
 
@@ -1813,6 +1890,34 @@ extension TerminalSplitView: ControlCommandHandler {
             reveal(first)
             return ControlResponse(ok: true, pane: info(for: first), layout: report())
         }
+        // Leiste: `pane` fest über/unter `otherPane` hängen bzw. wieder lösen. Ändert keine Teilung (keine ✋).
+        if op == "dock-bottom" || op == "dock-top" || op == "undock" {
+            guard zoomedPane == nil else { return .failure("Gerade ist eine Kachel gezoomt (⌘⏎) — erst danach umordnen.") }
+            if op == "undock" {
+                guard docks[first.id] != nil else { return .failure("\(layoutName(first)) ist keine Leiste.") }
+                // Wird normale Begleiterin ihrer Kachel (Nebenspalte), wie ein `open_*` ohne Leiste.
+                docks[first.id] = nil
+                if let root = manualLayout {
+                    manualLayout = LayoutEdit.remove(first.id.uuidString, from: root)
+                    insertIntoManualLayout(first, focused: nil)
+                }
+            } else {
+                guard targets.count > 1 else { return .failure("\(op) braucht die Kachel, an die die Leiste soll (otherPane)") }
+                let anchor = targets[1]
+                guard anchor !== first else { return .failure("Eine Kachel kann nicht an sich selbst hängen.") }
+                if docks[anchor.id]?.anchor == first.id.uuidString {
+                    return .failure("\(layoutName(anchor)) hängt schon an \(layoutName(first)).")
+                }
+                companionOf[first.id] = anchor.id
+                docks[first.id] = LayoutDock(anchor: anchor.id.uuidString, edge: op == "dock-top" ? .top : .bottom,
+                                             height: request.dockHeight ?? docks[first.id]?.height ?? LayoutDock.defaultHeight)
+                if let root = manualLayout { manualLayout = LayoutEdit.remove(first.id.uuidString, from: root) }
+            }
+            cancelDividerDrag()
+            relayout(animated: true)
+            layoutChanged()
+            return ControlResponse(ok: true, pane: info(for: first), layout: report())
+        }
         let a = first.id.uuidString, b = targets.count > 1 ? targets[1].id.uuidString : nil
         let intent: LayoutOp
         switch (op, b) {
@@ -1824,13 +1929,21 @@ extension TerminalSplitView: ControlCommandHandler {
         case ("swap", let b?): intent = .swap(a, b)
         case ("tab", let b?): intent = .tab(a, into: b)
         case ("beside", nil), ("below", nil), ("swap", nil), ("tab", nil): return .failure("\(op) braucht eine zweite Kachel (otherPane)")
-        default: return .failure("Unbekannte Absicht „\(op)“ (show, big, grow, shrink, beside, below, swap, tab, front, board, auto)")
+        default: return .failure("Unbekannte Absicht „\(op)“ (show, big, grow, shrink, beside, below, swap, tab, front, board, auto, dock-bottom, dock-top, undock)")
         }
         guard zoomedPane == nil else { return .failure("Gerade ist eine Kachel gezoomt (⌘⏎) — erst danach umordnen.") }
         guard let root = manualLayout ?? effectiveLayout() else { return .failure("Kein Layout") }
         let changed: LayoutNode
         do { changed = try LayoutEdit.apply(intent, to: root, actor: actor, overrideMats: onBehalf || actor == .mats) }
         catch { return .failure(String(describing: error)) }
+        // Wer eine Leiste bewegt (daneben, darunter, als Reiter, tauschen), löst sie von ihrer Kachel.
+        switch intent {
+        case .beside(_, let moved), .below(_, let moved), .tab(let moved, _):
+            if let id = UUID(uuidString: moved) { docks[id] = nil }
+        case .swap(let x, let y):
+            for id in [x, y].compactMap(UUID.init(uuidString:)) { docks[id] = nil }
+        default: break
+        }
         switch intent {
         case .big, .grow, .shrink:
             // Wer eine Kachel groß haben will, will sie sehen.

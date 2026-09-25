@@ -168,7 +168,12 @@ final class MCPServer {
         seinen Wunsch. Kacheln per UUID-Präfix ansprechen — Nummern verschieben sich beim Umordnen. Reiter: ab dem vierten \
         Begleiter teilen sich Kacheln einen Platz (eine vorn, der Rest verdeckt, Reiterleiste darüber); eine neue kommt vorn \
         hin. Willst du eine verdeckte zeigen: layout vorholen; Platz sparen: layout reiter — oder gleich mit placement \
-        hintergrund öffnen, wenn der Nutzer die Kachel nicht sofort sehen muss (Log, Server, Nachschlagen). Bittet der Nutzer, \
+        hintergrund öffnen, wenn der Nutzer die Kachel nicht sofort sehen muss (Log, Server, Nachschlagen). \
+        Leiste: placement leiste_unten (bzw. leiste_oben) hängt eine Kachel fest unter (über) dich — so breit wie du, flach \
+        (hoehe in pt, Default 84), sie wandert mit dir und nimmt keinem anderen den Platz. Erste Wahl für alles, was nur \
+        Stand zeigt (Fortschritt, Zähler, Restzeit, Status, eine Logzeile); wird die Darstellung reicher (Diagramm, Tabelle, \
+        Bericht), ist sie neben dir, eigen oder als Reiter besser — layout leiste_unten/loesen stellt eine offene Kachel um. \
+        Bittet der Nutzer, \
         mit dieser Session auf ein eigenes/neues Brett umzuziehen: layout brett (pane = du, ziel neu) — die Session läuft weiter.
         """)
         return lines.joined(separator: "\n")
@@ -182,8 +187,12 @@ final class MCPServer {
     ]
 
     private static let placementProperty: JSON = [
-        "type": "string", "enum": ["neben_mich", "eigen", "hintergrund"],
-        "description": "neben_mich (Default): in deine Nebenspalte rechts neben dir; eigen: eigenständige Kachel mit eigenem Platz (z. B. für ein anderes Projekt); hintergrund: verdeckt als Reiter hinter deinen Kacheln, nimmt keinen Platz (Log, Server, Nachschlagen)",
+        "type": "string", "enum": ["neben_mich", "eigen", "hintergrund", "leiste_unten", "leiste_oben"],
+        "description": "neben_mich (Default): in deine Nebenspalte rechts neben dir; eigen: eigenständige Kachel mit eigenem Platz (z. B. für ein anderes Projekt); hintergrund: verdeckt als Reiter hinter deinen Kacheln, nimmt keinen Platz (Log, Server, Nachschlagen); leiste_unten/leiste_oben: flache Leiste fest unter/über dir, so breit wie du (Höhe: hoehe)",
+    ]
+
+    private static let heightProperty: JSON = [
+        "type": "number", "description": "Leiste: Höhe in pt (Default 84 ≈ drei Textzeilen, 36–400)",
     ]
 
     private static let staticTools: [JSON] = [
@@ -195,7 +204,7 @@ final class MCPServer {
              ["cwd": ["type": "string", "description": "Ordner (absolut, ~ oder relativ zu deinem); Default: dein Ordner"],
               "command": ["type": "string", "description": "Befehl, der nach dem Shell-Start läuft"],
               "focus": ["type": "boolean", "description": "Kachel fokussieren (Default false)"],
-              "placement": placementProperty], []),
+              "placement": placementProperty, "hoehe": heightProperty], []),
         tool("start_agent", "Agent in neuer Kachel starten",
              "Startet eine neue Claude- oder Codex-Session in einer eigenen Kachel, optional mit erstem Prompt — für echte Parallelarbeit oder eine zweite Meinung. Danach wait_session / ask_session. Nicht für kleine Teilaufgaben, die du selbst oder ein Subagent erledigst.",
              ["agent": ["type": "string", "enum": ["claude", "codex"]],
@@ -271,8 +280,9 @@ final class MCPServer {
              ["steps"]),
         tool("layout", "Kacheln anordnen",
              "Zeigt die Anordnung deines Fensters mit Stand-Nummer (Baum aus nebeneinander/übereinander, Anteile in %, ✋ = Aufteilung von Mats von Hand gesetzt, Reiter = mehrere Kacheln an einem Platz, eine vorn) und ändert sie auf Absichts-Ebene. Ohne action: nur zeigen. Geändert wird nur auf dem Stand, den du zuletzt gelesen hast (hier oder in panes) — hat sich inzwischen etwas geändert, kommt der neue Stand zurück: prüfen, dann erneut. Kein Zoom. Eigene Kacheln (du und was du geöffnet hast) ordnest du frei um; fremde Kacheln und ✋-Aufteilungen nur, wenn der Nutzer es ausdrücklich will (auf_auftrag: true). automatisch = eigene Anpassungen verwerfen, die App ordnet wieder selbst.",
-             ["action": ["type": "string", "enum": ["zeigen", "gross", "groesser", "kleiner", "nebeneinander", "untereinander", "tauschen", "reiter", "vorholen", "brett", "automatisch"],
-                         "description": "gross = pane groß, der Rest schmal (holt einen verdeckten Reiter nach vorn) · groesser/kleiner = um ein Stück · nebeneinander/untereinander = other rechts neben bzw. unter pane stellen (löst ihn auch aus Reitern) · tauschen = Plätze von pane und other tauschen · reiter = pane als Reiter hinter other an dessen Platz legen (spart Platz, bleibt einen Klick entfernt) · vorholen = verdeckten Reiter pane nach vorn holen, ohne Fokus · brett = pane samt ihren Begleitern auf ein anderes Brett umziehen (Session läuft weiter; ziel)"],
+             ["action": ["type": "string", "enum": ["zeigen", "gross", "groesser", "kleiner", "nebeneinander", "untereinander", "tauschen", "reiter", "vorholen", "brett", "automatisch", "leiste_unten", "leiste_oben", "loesen"],
+                         "description": "gross = pane groß, der Rest schmal (holt einen verdeckten Reiter nach vorn) · groesser/kleiner = um ein Stück · nebeneinander/untereinander = other rechts neben bzw. unter pane stellen (löst ihn auch aus Reitern) · tauschen = Plätze von pane und other tauschen · reiter = pane als Reiter hinter other an dessen Platz legen (spart Platz, bleibt einen Klick entfernt) · vorholen = verdeckten Reiter pane nach vorn holen, ohne Fokus · brett = pane samt ihren Begleitern auf ein anderes Brett umziehen (Session läuft weiter; ziel) · leiste_unten/leiste_oben = pane als flache Leiste fest unter/über other hängen (so breit wie other, hoehe) · loesen = Leiste pane wieder zur normalen Kachel neben ihrer machen"],
+              "hoehe": heightProperty,
               "pane": paneProperty,
               "other": ["type": "string", "description": "zweite Kachel (nebeneinander, untereinander, tauschen, reiter), UUID-Präfix oder Nummer"],
               "ziel": ["type": "string", "description": "brett: \"neu\" (Default) oder Brett-Nummer in deinem Fenster"],
@@ -336,8 +346,9 @@ final class MCPServer {
     private func openTool(_ info: PaneKindInfo) -> JSON {
         var properties: [String: JSON] = [:]
         for arg in info.args { properties[arg.name] = ["type": "string", "description": arg.summary] }
-        properties["placement"] = ["type": "string", "enum": ["neben_mich", "eigen", "ersetzen", "hintergrund"],
-                                   "description": "neben_mich (Default): in deine Nebenspalte rechts neben dir · eigen: eigenständige Kachel · ersetzen: statt einer neuen deine vorhandene Kachel dieser Art mit dem neuen Inhalt laden · hintergrund: verdeckt als Reiter hinter deinen Kacheln, nimmt keinen Platz (der Nutzer sieht ein Abzeichen, wenn sich dort etwas ändert)"]
+        properties["placement"] = ["type": "string", "enum": ["neben_mich", "eigen", "ersetzen", "hintergrund", "leiste_unten", "leiste_oben"],
+                                   "description": "neben_mich (Default): in deine Nebenspalte rechts neben dir · eigen: eigenständige Kachel · ersetzen: statt einer neuen deine vorhandene Kachel dieser Art mit dem neuen Inhalt laden · hintergrund: verdeckt als Reiter hinter deinen Kacheln, nimmt keinen Platz (der Nutzer sieht ein Abzeichen, wenn sich dort etwas ändert) · leiste_unten/leiste_oben: flache Leiste fest unter/über dir, so breit wie du — für Stand/Fortschritt"]
+        properties["hoehe"] = Self.heightProperty
         var description = info.summary + " Öffnet eine neue Kachel neben dir, ohne Fokuswechsel; ist dieselbe schon offen, wird sie wiederverwendet."
         if !info.actions.isEmpty {
             description += " Danach per pane_action: " + info.actions.map { "\($0.name) (\($0.summary))" }.joined(separator: ", ") + "."
@@ -347,7 +358,7 @@ final class MCPServer {
         if undescribed.contains(info.kind) {
             schema["properties"] = ["args": ["type": "object", "description": "Args der Kachelart als Schlüssel/Wert (Web: url)",
                                              "additionalProperties": ["type": "string"]] as JSON,
-                                    "placement": properties["placement"]!]
+                                    "placement": properties["placement"]!, "hoehe": Self.heightProperty]
         } else {
             schema["additionalProperties"] = false
         }
@@ -436,8 +447,10 @@ final class MCPServer {
         case nil, "neben_mich": return "beside"
         case "eigen": return "own"
         case "hintergrund": return "background"
+        case "leiste_unten": return "dock-bottom"
+        case "leiste_oben": return "dock-top"
         case "ersetzen" where allowReplace: return "replace"
-        case let other: throw ToolFailure("placement „\(other ?? "")“ gibt es hier nicht (neben_mich, eigen, hintergrund\(allowReplace ? ", ersetzen" : "")).")
+        case let other: throw ToolFailure("placement „\(other ?? "")“ gibt es hier nicht (neben_mich, eigen, hintergrund, leiste_unten, leiste_oben\(allowReplace ? ", ersetzen" : "")).")
         }
     }
 
@@ -447,6 +460,7 @@ final class MCPServer {
         if let command = nonEmpty(a["command"]) { request.exec = command }
         request.focus = a["focus"] as? Bool ?? false
         request.placement = try placement(a, allowReplace: false)
+        request.dockHeight = number(a["hoehe"])
         let pane = try open(request)
         return "Terminal-Kachel \(pane.index) (\(pane.id.prefix(8))) in \(tilde(pane.cwd ?? request.cwd) ?? "?")"
             + (request.exec.map { " — läuft: \($0)" } ?? "") + "." + currentLayout()
@@ -616,6 +630,7 @@ final class MCPServer {
         request.args = args
         request.focus = false
         request.placement = placed == "replace" ? "beside" : placed
+        request.dockHeight = number(a["hoehe"])
         let pane = try open(request)
         return "\(info.kind)-Kachel \(pane.index) (\(pane.id.prefix(8))) geöffnet." + currentLayout()
     }
@@ -625,7 +640,8 @@ final class MCPServer {
     private func layoutTool(_ a: JSON) throws -> String {
         let action = (a["action"] as? String) ?? "zeigen"
         let ops = ["zeigen": "show", "gross": "big", "groesser": "grow", "kleiner": "shrink", "nebeneinander": "beside",
-                   "untereinander": "below", "tauschen": "swap", "reiter": "tab", "vorholen": "front", "brett": "board", "automatisch": "auto"]
+                   "untereinander": "below", "tauschen": "swap", "reiter": "tab", "vorholen": "front", "brett": "board", "automatisch": "auto",
+                   "leiste_unten": "dock-bottom", "leiste_oben": "dock-top", "loesen": "undock"]
         guard let op = ops[action] else { throw ToolFailure("action „\(action)“ gibt es nicht (\(ops.keys.sorted().joined(separator: ", ")))") }
         if op == "show" { return panesTool() }
 
@@ -636,6 +652,13 @@ final class MCPServer {
         if op != "auto" {
             guard a["pane"] != nil else { throw ToolFailure("pane fehlt — welche Kachel?") }
             request.pane = try target(a).0.id
+        }
+        if op.hasPrefix("dock-") {
+            // Ohne other: an die eigene Kachel hängen.
+            let other: Any? = a["other"] ?? paneID
+            guard let other else { throw ToolFailure("\(action) braucht other (die Kachel, unter/über die die Leiste soll)") }
+            request.otherPane = try target(["pane": other]).0.id
+            request.dockHeight = number(a["hoehe"])
         }
         if ["beside", "below", "swap", "tab"].contains(op) {
             guard let other = a["other"] else { throw ToolFailure("\(action) braucht other (die zweite Kachel)") }
@@ -697,13 +720,15 @@ final class MCPServer {
             var parts = ["\(pane.index)", String(pane.id.prefix(8)), pane.kind ?? "terminal"]
             if let agent = pane.agent { parts.append(agent) }
             if let title = pane.title, !title.isEmpty, (pane.kind ?? "terminal") != "terminal" { parts[parts.count - 1] += " „\(title.prefix(40))“" }
+            if let dock = pane.dock { parts.append("Leiste \(dock)") }
             if pane.id == own?.id { parts.append("← du") }
             else if isMine(pane) { parts.append("von dir geöffnet") }
             return parts.joined(separator: " · ")
         }
         func walk(_ node: LayoutNode, indent: String, last: Bool, share: Double?) {
             let connector = share == nil ? "" : (last ? "└ " : "├ ")
-            let percent = share.map { "\(Int(($0 * 100).rounded())) % · " } ?? ""
+            // Leisten haben eine feste Höhe statt eines Anteils.
+            let percent = node.fixed.map { "\(Int($0.rounded())) pt · " } ?? share.map { "\(Int(($0 * 100).rounded())) % · " } ?? ""
             lines.append(indent + connector + percent + label(node))
             let total = node.children.reduce(0) { $0 + $1.weight }
             let childIndent = share == nil ? "" : indent + (last ? "   " : "│  ")
@@ -1265,6 +1290,7 @@ final class MCPServer {
         if pane.focused { marks.append("fokussiert") }
         if pane.zoomed { marks.append("gezoomt") }
         if pane.hidden == true { marks.append("verdeckter Reiter") }
+        if let dock = pane.dock, let anchor = pane.companionOf { marks.append("Leiste \(dock) an \(anchor.prefix(8))") }
         if isMine(pane) { marks.append("von dir geöffnet") }
         else if pane.openedBy == "user" { marks.append("vom Nutzer geöffnet") }
         if !marks.isEmpty { parts.append(marks.joined(separator: ", ")) }
@@ -1280,6 +1306,14 @@ final class MCPServer {
         guard let path else { return nil }
         let home = NSHomeDirectory()
         return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+    }
+
+    /// Zahl aus JSON (Int, Double oder Zahl als Text).
+    private func number(_ value: Any?) -> Double? {
+        if let d = value as? Double { return d }
+        if let i = value as? Int { return Double(i) }
+        if let text = value as? String { return Double(text.replacingOccurrences(of: ",", with: ".")) }
+        return nil
     }
 
     private func nonEmpty(_ value: Any?) -> String? {

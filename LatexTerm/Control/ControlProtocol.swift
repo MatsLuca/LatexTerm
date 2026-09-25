@@ -57,9 +57,13 @@ struct ControlRequest: Codable {
     var force: Bool?
     /// new-pane (Kachel-Layout, Capability `layout`): "beside" = neben die aufrufende Kachel (Default,
     /// sobald es einen Aufrufer gibt), "own" = eigenständig (neue Agenten-Session), "background" = als verdeckter
-    /// Reiter bei der aufrufenden Kachel, ohne Platz zu nehmen.
+    /// Reiter bei der aufrufenden Kachel, ohne Platz zu nehmen, "dock-bottom" / "dock-top" = als Leiste fest unter bzw.
+    /// über der aufrufenden Kachel, gleich breit, Höhe `dockHeight` (Capability `dock`, 25.09.2026).
     var placement: String?
-    /// layout: Absicht "show" | "big" | "grow" | "shrink" | "beside" | "below" | "swap" | "tab" | "front" | "board" | "auto";
+    /// new-pane mit "dock-…" und layout "dock-…": Höhe der Leiste in pt (Default 84, 36…400).
+    var dockHeight: Double?
+    /// layout: Absicht "show" | "big" | "grow" | "shrink" | "beside" | "below" | "swap" | "tab" | "front" | "board" | "auto"
+    /// | "dock-bottom" | "dock-top" (`pane` wird Leiste an `otherPane`) | "undock";
     /// Ziel in `pane`, zweite Kachel in `otherPane`.
     var layoutOp: String?
     var otherPane: String?
@@ -129,6 +133,8 @@ struct PaneInfo: Codable {
     var companionOf: String? = nil
     /// Kachel-Layout Stufe 2: liegt als hinterer Reiter verdeckt; nil = sichtbar.
     var hidden: Bool? = nil
+    /// Angedockte Leiste (25.09.2026): hängt fest an `companionOf` — „unten 84“ / „oben 60“; nil = keine Leiste.
+    var dock: String? = nil
     /// Kachelfarbe (`#RRGGBB`, wie Titelstrich/Cursor) — z. B. für die Claude-Statuszeile (`accent=kachel`).
     var accent: String? = nil
 }
@@ -170,7 +176,7 @@ struct PaneKindAction: Codable, Equatable {
 struct ControlResponse: Codable {
     var ok: Bool
     var capabilities: [String]? = ["agent-sessions", "all-windows", "pane-kinds", "pane-kind-info", "pane-details", "mailbox",
-                                   "quiet-new-pane", "paste", "pane-call", "layout", "snapshots", "restore", "doctor"]
+                                   "quiet-new-pane", "paste", "pane-call", "layout", "snapshots", "restore", "doctor", "dock"]
     var error: String?
     /// list-panes: alle Kacheln.
     var panes: [PaneInfo]?

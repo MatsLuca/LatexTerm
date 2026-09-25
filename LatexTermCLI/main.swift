@@ -12,7 +12,7 @@ latexterm — steuert die laufende LatexTerm.app
 Verwendung:
   latexterm list-panes [--json]
   latexterm new-pane [--cwd VERZEICHNIS] [--exec KOMMANDO] [--no-focus]
-  latexterm new-pane --kind ART [--arg SCHLÜSSEL=WERT]… [--no-focus]
+  latexterm new-pane --kind ART [--arg SCHLÜSSEL=WERT]… [--no-focus] [--dock unten|oben [--height PT]]
   latexterm pane-kinds
   latexterm send [--pane ZIEL] [--no-enter] [--paste] TEXT…
   latexterm call [--pane ZIEL] TEXT…            (TEXT „-“ = von stdin)
@@ -48,6 +48,8 @@ ohne Neustart; schon Offenes bleibt, wie es ist. --dry-run zeigt nur, was käme.
 doctor: läuft der neueste Build, Absturzschutz, Stand-Archiv, letzte Zeilen aus lifecycle.log/unclean.log.
 
 --no-focus: die neue Kachel entsteht daneben, die Tastatur bleibt in der fokussierten Kachel.
+--dock unten|oben: die neue Kachel hängt als flache Leiste fest unter/über der aufrufenden (so breit wie sie,
+--height pt, Default 84) und wandert mit ihr.
 
 mcp startet einen MCP-Server über stdio (für Claude Code / Codex): Werkzeuge auf Absichts-Ebene
 (panes, open_terminal, start_agent, ask_session, …) und je App-Kachelart ein open_<art>.
@@ -98,6 +100,16 @@ while !args.isEmpty {
     case "--paste":    request.paste = true
     case "--force":    request.force = true
     case "--no-focus": request.focus = false
+    case "--dock":
+        // Leiste fest unter/über der aufrufenden Kachel ($LATEXTERM_PANE_ID): unten | oben
+        switch value(for: arg) {
+        case "unten", "bottom": request.placement = "dock-bottom"
+        case "oben", "top":     request.placement = "dock-top"
+        case let other: fail("--dock erwartet unten oder oben, bekam „\(other)“", code: 2)
+        }
+    case "--height":
+        guard let h = Double(value(for: arg)) else { fail("--height erwartet eine Zahl (pt)", code: 2) }
+        request.dockHeight = h
     case "--agent":    request.agent = value(for: arg)
     case "--session":  request.sessionID = value(for: arg)
     case "--turn":     request.turnID = value(for: arg)

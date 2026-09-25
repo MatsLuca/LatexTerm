@@ -37,6 +37,9 @@ struct LayoutNode: Codable, Equatable {
     /// Teilung: wer die Anteile der Kinder zuletzt gesetzt hat; Platz mit Reitern: wer ihn zusammengestellt hat
     /// (Mats per Ziehen). nil = Automatik.
     var setBy: LayoutActor?
+    /// Feste Größe in pt entlang der Achse des Elternknotens (Höhe in einer Spalte, Breite in einer Zeile) statt
+    /// eines Anteils — für angedockte Leisten (25.09.2026). Die Geschwister teilen sich den Rest nach `weight`.
+    var fixed: Double?
 
     init(pane: String?, axis: LayoutAxis?, children: [LayoutNode], weight: Double, setBy: LayoutActor?) {
         self.pane = pane
@@ -63,7 +66,7 @@ struct LayoutNode: Codable, Equatable {
         LayoutNode(pane: nil, axis: axis, children: children, weight: weight, setBy: setBy)
     }
 
-    private enum CodingKeys: String, CodingKey { case pane, tabs, axis, children, weight, setBy }
+    private enum CodingKeys: String, CodingKey { case pane, tabs, axis, children, weight, setBy, fixed }
 
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -73,6 +76,7 @@ struct LayoutNode: Codable, Equatable {
         children = try c.decodeIfPresent([LayoutNode].self, forKey: .children) ?? []
         weight = (try? c.decodeIfPresent(Double.self, forKey: .weight)) ?? 1
         setBy = try? c.decodeIfPresent(LayoutActor.self, forKey: .setBy)
+        fixed = (try? c.decodeIfPresent(Double.self, forKey: .fixed)).flatMap { $0 }
     }
 
     func encode(to encoder: Encoder) throws {
@@ -83,6 +87,7 @@ struct LayoutNode: Codable, Equatable {
         if !children.isEmpty { try c.encode(children, forKey: .children) }
         try c.encode(weight, forKey: .weight)
         try c.encodeIfPresent(setBy, forKey: .setBy)
+        try c.encodeIfPresent(fixed, forKey: .fixed)
     }
 
     var isLeaf: Bool { pane != nil }
@@ -127,7 +132,9 @@ struct LayoutNode: Codable, Equatable {
         if let pane {
             let mapped = members.compactMap { transform($0)?.uppercased() }
             guard !mapped.isEmpty else { return nil }
-            return LayoutNode.group(mapped, front: transform(pane), weight: weight, setBy: setBy)
+            var leaf = LayoutNode.group(mapped, front: transform(pane), weight: weight, setBy: setBy)
+            leaf.fixed = fixed
+            return leaf
         }
         var copy = self
         copy.children = children.compactMap { $0.mappingPanes(transform) }
@@ -147,6 +154,8 @@ struct LayoutNode: Codable, Equatable {
         return normalized(keeping: keeping?.reduce(into: Set<String>()) { $0.insert($1.uppercased()) }, seen: &seen)
     }
 
+    private var validFixed: Double? { fixed.flatMap { $0.isFinite && $0 > 0 ? $0 : nil } }
+
     private func normalized(keeping: Set<String>?, seen: inout Set<String>) -> LayoutNode? {
         let w = weight.isFinite && weight > 0 ? weight : 1
         if let pane {
@@ -160,7 +169,9 @@ struct LayoutNode: Codable, Equatable {
             let shown = kept.contains(front) ? front
                 : (all.firstIndex(of: front).flatMap { i in all[(i + 1)...].first(where: kept.contains) ?? all[..<i].last(where: kept.contains) }
                    ?? kept[0])
-            return .group(kept, front: shown, weight: w, setBy: setBy)
+            var leaf = LayoutNode.group(kept, front: shown, weight: w, setBy: setBy)
+            leaf.fixed = validFixed
+            return leaf
         }
         let axis = self.axis ?? .row
         // Gleich gerichtete Teilungen werden bewusst NICHT verschmolzen: eine Teilung in einer Teilung
@@ -171,9 +182,12 @@ struct LayoutNode: Codable, Equatable {
         if kids.count == 1 {
             var only = kids[0]
             only.weight = w
+            only.fixed = validFixed
             return only
         }
-        return .split(axis, kids, weight: w, setBy: setBy)
+        var split = LayoutNode.split(axis, kids, weight: w, setBy: setBy)
+        split.fixed = validFixed
+        return split
     }
 }
 
@@ -191,3 +205,38 @@ struct LayoutReport: Codable, Equatable {
     var width: Double
     var height: Double
 }
+
+/// Seite, an der eine Leiste an ihrer Kachel hängt.
+enum LayoutDockEdge: String, Codable, Equatable {
+    case top, bottom
+}
+
+/// Angedockte Leiste (25.09.2026): eine Kachel steht fest über oder unter einer anderen, genauso breit wie
+/// deren Platz und mit fester Höhe — sie wandert mit, wo immer die Kachel steht. Die Automatik, Mats' Züge und
+/// Agenten-Absichten ordnen ohne Leisten an; eingesetzt werden sie erst im gültigen Baum (`LayoutEdit.docked`).
+struct LayoutDock: Codable, Equatable {
+    /// Kachel, an der die Leiste hängt (UUID, groß).
+    var anchor: String
+    var edge: LayoutDockEdge
+    /// Höhe in pt (ohne Steg).
+    var height: Double
+
+    static let defaultHeight = 84.0
+    static let minHeight = 36.0
+    static let maxHeight = 400.0
+
+    init(anchor: String, edge: LayoutDockEdge, height: Double = LayoutDock.defaultHeight) {
+        self.anchor = anchor.uppercased()
+        self.edge = edge
+        self.height = LayoutDock.clamp(height)
+    }
+
+    static func clamp(_ height: Double) -> Double {
+        guard height.isFinite else { return defaultHeight }
+        return min(max(height, minHeight), maxHeight)
+    }
+
+    /// Kurzform fürs Lagebild und den Steuerkanal: „unten 84“.
+    var label: String { "\(edge == .bottom ? "unten" : "oben") \(Int(height.rounded()))" }
+}
+

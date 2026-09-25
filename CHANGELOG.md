@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- **Single instance (25.09.).** A second LatexTerm started next to a running one (seen after a rebuild) took over the
+  control socket, treated the running app's run marker as a crash and removed it on quit — CLI/MCP could no longer
+  reach the running app. A second instance now brings the first to the front and exits at once; the control server
+  only clears a socket nobody listens on.
+
+### Added
+- **Strips (25.09.).** A pane can hang as a flat strip under or above another pane: same width as that pane's place,
+  fixed height in points, and it moves with it wherever the layout puts it (`placement dock-bottom|dock-top` +
+  `dockHeight`, `latexterm new-pane --dock unten|oben --height PT`, MCP `placement: leiste_unten|leiste_oben` + `hoehe`,
+  `layout leiste_unten|leiste_oben|loesen`). Dragging the line next to a strip only changes its height; dragging the
+  strip elsewhere turns it back into a normal pane. Survives ⌥⌘R.
+
 ### Changed
 - **Scratchpad cards (24.09.).** A card's default look is now plain text on the paper, like Claude Code's answers in
   the terminal: app monospace in the terminal colour, no frame or fill, only a faint line on the left with a short

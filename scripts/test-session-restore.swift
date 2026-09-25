@@ -39,6 +39,11 @@ struct SessionRestoreTests {
         check(try JSONDecoder().decode(PaneSnapshot.self, from: try JSONEncoder().encode(behind)) == behind,
               "hidden survives the round trip")
         check(companion.hidden == nil, "old snapshot panes are visible")
+        // Leiste (25.09.): Seite und Höhe überleben; alte Snapshots haben keine.
+        var strip = PaneSnapshot(kind: "web", args: ["url": "http://127.0.0.1:1/k/x"], id: "EEEE-5", companionOf: "AAAA-1")
+        strip.dock = LayoutDock(anchor: "AAAA-1", edge: .bottom, height: 90)
+        check(try JSONDecoder().decode(PaneSnapshot.self, from: try JSONEncoder().encode(strip)) == strip, "dock survives the round trip")
+        check(companion.dock == nil, "old snapshot panes are no strips")
         let tabPlace = SessionSnapshot.Window(entries: [
             (snapshot: PaneSnapshot(kind: "terminal", id: "AAAA-1"), focused: true, zoomed: false),
             (snapshot: companion, focused: false, zoomed: false),

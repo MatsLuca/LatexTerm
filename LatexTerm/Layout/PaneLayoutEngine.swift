@@ -148,18 +148,38 @@ enum LayoutGeometry {
     }
 
     /// Kanten der Kinder einer Teilung entlang ihrer Achse (Anzahl Kinder + 1 Werte).
+    /// Kinder mit fester Größe (`fixed`, angedockte Leisten) bekommen sie zuerst — höchstens so viel, dass den
+    /// anderen zusammen ein Drittel bleibt —, die übrigen teilen sich den Rest nach ihrem Gewicht.
     static func boundaries(_ node: LayoutNode, rect: CGRect) -> [CGFloat] {
         let axis = node.axis ?? .row
         let origin = axis == .row ? rect.minX : rect.minY
         let size = axis == .row ? rect.width : rect.height
-        let total = node.children.reduce(0) { $0 + $1.weight }
-        var edges: [CGFloat] = [origin]
-        var cumulative = 0.0
-        for child in node.children {
-            cumulative += child.weight
-            // Dieselbe Rechnung wie das alte Raster: (W * k) / c, dann runden.
-            edges.append(origin + (size * CGFloat(cumulative) / CGFloat(total)).rounded())
+        guard node.children.contains(where: { $0.fixed != nil }) else {
+            let total = node.children.reduce(0) { $0 + $1.weight }
+            var edges: [CGFloat] = [origin]
+            var cumulative = 0.0
+            for child in node.children {
+                cumulative += child.weight
+                // Dieselbe Rechnung wie das alte Raster: (W * k) / c, dann runden.
+                edges.append(origin + (size * CGFloat(cumulative) / CGFloat(total)).rounded())
+            }
+            return edges
         }
+        let flexible = node.children.filter { $0.fixed == nil }
+        let wanted = node.children.compactMap(\.fixed).reduce(0, +)
+        // Nur Leisten (ihre Kachel fehlt): wie Anteile behandeln, sonst bliebe Platz leer.
+        let budget = flexible.isEmpty ? Double(size) : min(wanted, Double(size) * 2 / 3)
+        let scale = wanted > 0 ? budget / wanted : 0
+        let rest = Double(size) - budget
+        let flexTotal = flexible.reduce(0) { $0 + $1.weight }
+        var edges: [CGFloat] = [origin]
+        var position = 0.0
+        for child in node.children {
+            if let fixed = child.fixed { position += flexible.isEmpty ? Double(size) * fixed / wanted : fixed * scale }
+            else { position += flexTotal > 0 ? rest * child.weight / flexTotal : 0 }
+            edges.append(origin + CGFloat(position).rounded())
+        }
+        edges[edges.count - 1] = origin + size.rounded()
         return edges
     }
 
@@ -564,9 +584,21 @@ enum LayoutEdit {
         let p = min(max(position, divider.start + minimum), divider.end - minimum)
         var split = node(at: divider.path, in: root)
         guard divider.index + 1 < split.children.count else { return root }
-        let combined = split.children[divider.index].weight + split.children[divider.index + 1].weight
-        split.children[divider.index].weight = combined * (p - divider.start) / span
-        split.children[divider.index + 1].weight = combined * (divider.end - p) / span
+        let a = divider.index, b = divider.index + 1
+        if split.children[a].fixed != nil || split.children[b].fixed != nil {
+            // Leiste: ihre feste Größe folgt dem Zug (eigene Mindestgröße), die Anteile der anderen bleiben.
+            // Das gilt nicht als Mats' Anordnung — die Leiste ist Zubehör ihrer Kachel.
+            let lo = divider.start + (split.children[a].fixed != nil ? LayoutDock.minHeight : minimum)
+            let hi = divider.end - (split.children[b].fixed != nil ? LayoutDock.minHeight : minimum)
+            guard lo < hi else { return root }
+            let q = min(max(position, lo), hi)
+            if split.children[a].fixed != nil { split.children[a].fixed = LayoutDock.clamp(q - divider.start) }
+            if split.children[b].fixed != nil { split.children[b].fixed = LayoutDock.clamp(divider.end - q) }
+            return replacing(at: divider.path, in: root, with: split)
+        }
+        let combined = split.children[a].weight + split.children[b].weight
+        split.children[a].weight = combined * (p - divider.start) / span
+        split.children[b].weight = combined * (divider.end - p) / span
         split.setBy = actor
         return replacing(at: divider.path, in: root, with: split)
     }
@@ -575,7 +607,8 @@ enum LayoutEdit {
     static func equalized(_ root: LayoutNode, divider: LayoutDivider, actor: LayoutActor) -> LayoutNode {
         guard exists(divider.path, in: root) else { return root }
         var split = node(at: divider.path, in: root)
-        guard divider.index + 1 < split.children.count else { return root }
+        guard divider.index + 1 < split.children.count,
+              split.children[divider.index].fixed == nil, split.children[divider.index + 1].fixed == nil else { return root }
         let half = (split.children[divider.index].weight + split.children[divider.index + 1].weight) / 2
         split.children[divider.index].weight = half
         split.children[divider.index + 1].weight = half
@@ -840,3 +873,81 @@ extension LayoutEdit {
         return normalized == root ? nil : normalized
     }
 }
+
+// MARK: - Angedockte Leisten (25.09.2026)
+
+extension LayoutEdit {
+    /// Leisten in einen Baum einsetzen: jede angedockte Kachel erst herausnehmen (wo immer sie steht), dann den
+    /// Platz ihrer Kachel zu einer Spalte machen — Leisten oben, Kachel, Leisten unten, gleich breit wie der Platz.
+    /// Idempotent: ein Baum, in dem die Leisten schon stehen, kommt gleich wieder heraus (Höhen aus `docks`).
+    /// Leisten, deren Kachel fehlt, bleiben, wo sie sind (der Aufrufer löst die Andockung).
+    static func docked(_ root: LayoutNode, docks: [String: LayoutDock]) -> LayoutNode {
+        let present = Set(root.paneIDs)
+        // Die Leiste selbst muss nicht im Baum stehen (die Automatik lässt sie weg) — nur ihre Kachel.
+        let active = docks.filter { present.contains($0.value.anchor.uppercased()) && $0.key.uppercased() != $0.value.anchor.uppercased() }
+        // Feste Größe haben nur Leisten: eine gelöste (weggezogen, `undock`) wird wieder eine normale Kachel.
+        let root = clearingFixed(root, except: Set(active.keys.map { $0.uppercased() }))
+        guard !active.isEmpty else { return root }
+        // Leiste an einer Leiste: an deren Kachel hängen (keine Ketten).
+        var anchorOf: [String: String] = [:]
+        for (id, dock) in active {
+            var anchor = dock.anchor.uppercased(), hops = 0
+            while let next = active[anchor]?.anchor.uppercased(), hops < 8 { anchor = next; hops += 1 }
+            anchorOf[id.uppercased()] = anchor
+        }
+        var tree = root
+        for id in active.keys.sorted() { tree = strip(id.uppercased(), from: tree) ?? tree }
+        // Je Anker: Leisten in fester Reihenfolge (Kachel-ID), damit der Baum stabil bleibt.
+        let byAnchor = Dictionary(grouping: active.keys.map { $0.uppercased() }.sorted(), by: { anchorOf[$0] ?? "" })
+        for (anchor, strips) in byAnchor.sorted(by: { $0.key < $1.key }) {
+            guard let path = placePath(of: anchor, in: tree) else { continue }
+            var place = node(at: path, in: tree)
+            let weight = place.weight, fixed = place.fixed
+            place.weight = 1
+            place.fixed = nil
+            func leaf(_ id: String) -> LayoutNode {
+                var l = LayoutNode.leaf(id)
+                l.fixed = active[id].map { LayoutDock.clamp($0.height) } ?? LayoutDock.defaultHeight
+                return l
+            }
+            let above = strips.filter { active[$0]?.edge == .top }.map(leaf)
+            let below = strips.filter { active[$0]?.edge != .top }.map(leaf)
+            var column = LayoutNode.split(.column, above + [place] + below, weight: weight)
+            column.fixed = fixed
+            tree = replacing(at: path, in: tree, with: column)
+        }
+        return tree
+    }
+
+    private static func clearingFixed(_ node: LayoutNode, except keep: Set<String>) -> LayoutNode {
+        var copy = node
+        if let pane = node.pane {
+            if node.fixed != nil, !keep.contains(pane) { copy.fixed = nil }
+            return copy
+        }
+        copy.children = node.children.map { clearingFixed($0, except: keep) }
+        return copy
+    }
+
+    /// Kachel aus dem Baum nehmen, ohne `normalized` (die übrigen Knoten behalten Gewicht und feste Größe).
+    private static func strip(_ id: String, from root: LayoutNode) -> LayoutNode? {
+        remove(id, from: root)
+    }
+
+    /// Platz (Blatt, ggf. mit Reitern), in dem `id` steht.
+    private static func placePath(of id: String, in root: LayoutNode) -> [Int]? {
+        path(of: id, in: root)
+    }
+
+    /// Höhen der Leisten, wie sie im Baum stehen (nach einem Zug an ihrer Trennlinie).
+    static func dockHeights(in root: LayoutNode) -> [String: Double] {
+        var out: [String: Double] = [:]
+        func walk(_ node: LayoutNode) {
+            if let pane = node.pane, let fixed = node.fixed { out[pane] = fixed }
+            node.children.forEach(walk)
+        }
+        walk(root)
+        return out
+    }
+}
+

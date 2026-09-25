@@ -12,6 +12,7 @@ private let qlog = Logger(subsystem: "com.mats.LatexTerm", category: "quickstart
 /// Die App kennt keine Pfade und keine Befehle; alles kommt aus `projekte` (`config.toml`).
 final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillFinishLaunching(_ notification: Notification) {
+        SingleInstance.yieldIfRunning()   // vor allem anderen: keine zweite App neben der laufenden
         // Bretter statt nativer Tabs (23.09.): kein „Tab-Leiste einblenden“/„Alle Fenster zusammenführen“.
         NSWindow.allowsAutomaticWindowTabbing = false
     }

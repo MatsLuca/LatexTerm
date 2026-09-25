@@ -13,6 +13,8 @@ struct PaneSnapshot: Codable, Equatable {
     var companionOf: String? = nil
     /// Lag als hinterer Reiter verdeckt (Kachel-Layout Stufe 2); nil = sichtbar.
     var hidden: Bool? = nil
+    /// Angedockte Leiste an `companionOf` (Seite, Höhe); nil = keine (25.09.2026).
+    var dock: LayoutDock? = nil
 
     init(kind: String, args: [String: String] = [:], id: String? = nil, openedBy: String? = nil,
          companionOf: String? = nil, hidden: Bool? = nil) {
@@ -32,6 +34,7 @@ struct PaneSnapshot: Codable, Equatable {
         openedBy = try c.decodeIfPresent(String.self, forKey: .openedBy)
         companionOf = try? c.decodeIfPresent(String.self, forKey: .companionOf)
         hidden = try? c.decodeIfPresent(Bool.self, forKey: .hidden)
+        dock = (try? c.decodeIfPresent(LayoutDock.self, forKey: .dock)).flatMap { $0 }
     }
 }
 

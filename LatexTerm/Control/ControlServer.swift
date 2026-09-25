@@ -30,8 +30,9 @@ final class ControlServer {
         let dir = (path as NSString).deletingLastPathComponent
         try? FileManager.default.createDirectory(atPath: dir,
                                                  withIntermediateDirectories: true)
-        // Alten Socket wegräumen (Crash-Leiche); LaunchServices dedupliziert die
-        // App über die Bundle-ID, eine konkurrierende zweite Instanz gibt es nicht.
+        // Alten Socket nur wegräumen, wenn niemand mehr zuhört (Crash-Leiche). Antwortet dort noch eine App,
+        // bleibt ihr Socket — eine zweite Instanz darf ihn nie übernehmen (Befund 25.09., `SingleInstance`).
+        if Self.someoneListens(at: path) { return }
         unlink(path)
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -65,6 +66,29 @@ final class ControlServer {
         source.setEventHandler { [weak self] in self?.acceptConnection() }
         source.resume()
         acceptSource = source
+    }
+
+    /// Nimmt am Socket `path` jemand Verbindungen an?
+    private static func someoneListens(at path: String) -> Bool {
+        let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard fd >= 0 else { return false }
+        defer { close(fd) }
+        var addr = sockaddr_un()
+        addr.sun_family = sa_family_t(AF_UNIX)
+        let fits = path.withCString { cstr -> Bool in
+            let maxLen = MemoryLayout.size(ofValue: addr.sun_path) - 1
+            guard strlen(cstr) <= maxLen else { return false }
+            withUnsafeMutableBytes(of: &addr.sun_path) { raw in
+                raw.baseAddress!.assumingMemoryBound(to: CChar.self).update(from: cstr, count: strlen(cstr) + 1)
+            }
+            return true
+        }
+        guard fits else { return false }
+        return withUnsafePointer(to: &addr) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                connect(fd, $0, socklen_t(MemoryLayout<sockaddr_un>.size)) == 0
+            }
+        }
     }
 
     private func acceptConnection() {
