@@ -75,6 +75,21 @@ final class FakeApp: ControlTransport {
             var response = ControlResponse(ok: true, pane: panes.first { $0.id == request.pane })
             response.reply = reply
             return response
+        case "snapshots":
+            var response = ControlResponse(ok: true)
+            response.snapshots = [SnapshotSummary(name: "2026-09-25_04-35-10_absturz", index: 1, date: "2026-09-25T04:35:10+02:00",
+                                                  reason: "absturz", boards: [.init(name: "Studium", panes: ["claude ~/x (3cac9957)", "scratchpad"])])]
+            return response
+        case "restore":
+            var response = ControlResponse(ok: true)
+            response.reply = request.dryRun == true ? "Probe: 1 Brett mit 2 Kacheln käme dazu" : "1 Brett angehängt"
+            response.snapshots = [SnapshotSummary(name: request.snapshot ?? "neu", index: 1, date: "", reason: "absturz",
+                                                  boards: [.init(name: nil, panes: ["claude ~/x (3cac9957)"])])]
+            return response
+        case "doctor":
+            var response = ControlResponse(ok: true)
+            response.reply = "LatexTerm · pid 1 · Build: aktuell"
+            return response
         default:
             return ControlResponse(ok: true, pane: panes.first { $0.id == request.pane })
         }
@@ -362,6 +377,18 @@ struct MCPServerTests {
         try "<p>d</p>".write(toFile: fourth, atomically: true, encoding: .utf8)
         r = call(layServer, "open_web", ["url": fourth, "placement": "hintergrund"])
         assert(!r.error && lay.sent("new-pane").last?.placement == "background", r.text)
+
+        // Stände und Gesundheitscheck (25.09.): app-weit, Probe vor dem echten Wiederherstellen.
+        let names2 = toolNames(server)
+        for expected in ["app_state", "snapshots", "restore_snapshot"] { assert(names2.contains(expected), "fehlt: \(expected)") }
+        assert(call(server, "app_state").text.contains("Build: aktuell"))
+        let listed = call(server, "snapshots").text
+        assert(listed.contains("absturz") && listed.contains("Studium: claude ~/x (3cac9957) · scratchpad"), listed)
+        let probe = call(server, "restore_snapshot", ["stand": "2", "probe": true])
+        assert(!probe.error && probe.text.contains("Probe") && probe.text.contains("Brett: claude"), probe.text)
+        assert(app.sent("restore").last?.snapshot == "2" && app.sent("restore").last?.dryRun == true)
+        _ = call(server, "restore_snapshot", ["stand": 3])
+        assert(app.sent("restore").last?.snapshot == "3" && app.sent("restore").last?.dryRun == false)
 
         print("mcp-server: ok")
     }

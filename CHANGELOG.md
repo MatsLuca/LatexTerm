@@ -13,6 +13,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   messages are translated. Build number bumped so Notification Center picks up the new app icon.
 
 ### Added
+- **Never lose your boards (24./25.09.).** LatexTerm now notices when it disappeared without ⌘Q, ⌥⌘R or closing the
+  last board (crash, kill, sleep) and brings the last state back on the next launch — a running marker plus an
+  autosave every 5 s. macOS may no longer terminate the app silently; SIGTERM/SIGHUP save the state first; a system
+  quit (log out, restart, shut down) keeps the boards like ⌥⌘R. `lifecycle.log` records start, sleep/wake and how the
+  app ended, `unclean.log` every unclean end.
+- **Saved states and live restore (25.09.).** The last 30 states are kept in `snapshots/` (on quit, restart, unclean
+  end, and at most every 10 min from the autosave). `latexterm snapshots` lists them, `latexterm restore [N] [--dry-run]`
+  opens whatever is missing as new boards in the running app — no restart, nothing duplicated, agent sessions resume.
+  `latexterm doctor` shows uptime, whether the newest build is running, crash protection and the last log lines. MCP
+  tools `app_state`, `snapshots`, `restore_snapshot`.
 - **Kachel-Layout (23.09.).** Panes are arranged by what they show instead of an equal-size grid: each pane kind
   states a preferred shape (a PDF page stays portrait, an image keeps its format, a terminal keeps ~80 columns), and
   panes an agent opens land in a side column next to that agent's session instead of halving it. Drag the gaps

@@ -26,6 +26,7 @@ enum ControlProtocol {
 
 struct ControlRequest: Codable {
     /// "list-panes" | "new-pane" | "send" | "call" | "zoom" | "focus" | "close-pane" | "status" | "pane-kinds" | "layout"
+    /// | "snapshots" | "restore" | "doctor" (app-weit, 25.09.2026)
     var cmd: String
     /// Ziel-Kachel: 1-basierter Index ("2") oder UUID(-Präfix). Fehlt er, nimmt
     /// die App bei zoom/focus/send die Kachel aus `paneID` (= LATEXTERM_PANE_ID
@@ -75,6 +76,29 @@ struct ControlRequest: Codable {
     var sessionID: String?
     var turnID: String?
     var sourceGroup: Int32?
+    /// restore: Stand aus `snapshots` — Nummer (1 = neuester) oder Name; nil = neuester.
+    var snapshot: String?
+    /// restore: nur zeigen, was käme, nichts öffnen.
+    var dryRun: Bool?
+}
+
+/// Ein Eintrag im Stand-Archiv (Capability `snapshots`, 25.09.2026): was beim Wiederherstellen käme.
+struct SnapshotSummary: Codable, Equatable {
+    /// Dateiname ohne `.json`, z. B. `2026-09-25_04-35-10_absturz` — stabil, taugt als `restore`-Ziel.
+    var name: String
+    /// 1 = neuester.
+    var index: Int
+    /// ISO 8601.
+    var date: String
+    /// beenden | neustart | system | signal | absturz | autosave
+    var reason: String
+    var boards: [Board]
+
+    struct Board: Codable, Equatable {
+        var name: String?
+        /// Kurzbeschreibung je Kachel: „claude ~/Documents (3cac9957)“, „scratchpad“, „shell ~/x“.
+        var panes: [String]
+    }
 }
 
 struct PaneInfo: Codable {
@@ -146,7 +170,7 @@ struct PaneKindAction: Codable, Equatable {
 struct ControlResponse: Codable {
     var ok: Bool
     var capabilities: [String]? = ["agent-sessions", "all-windows", "pane-kinds", "pane-kind-info", "pane-details", "mailbox",
-                                   "quiet-new-pane", "paste", "pane-call", "layout"]
+                                   "quiet-new-pane", "paste", "pane-call", "layout", "snapshots", "restore", "doctor"]
     var error: String?
     /// list-panes: alle Kacheln.
     var panes: [PaneInfo]?
@@ -160,6 +184,8 @@ struct ControlResponse: Codable {
     var reply: String? = nil
     /// list-panes / new-pane / layout mit Aufrufer: Anordnung seines Fensters (Capability `layout`).
     var layout: LayoutReport? = nil
+    /// snapshots: Stand-Archiv, neuester zuerst. restore: der gewählte Stand, gekürzt auf das, was (neu) aufging.
+    var snapshots: [SnapshotSummary]? = nil
 
     static func failure(_ message: String) -> ControlResponse {
         ControlResponse(ok: false, error: message)

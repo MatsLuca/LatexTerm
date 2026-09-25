@@ -13,6 +13,9 @@ protocol ControlCommandHandler: AnyObject {
 final class ControlRouter {
     private struct Entry { weak var handler: ControlCommandHandler? }
     private var entries: [Entry] = []
+    /// App-weite Kommandos (snapshots, restore, doctor — 25.09.2026): brauchen kein Ziel-Brett. Liefert nil für
+    /// alles andere; gesetzt von der App, im Test leer.
+    var appCommands: ((ControlRequest) -> ControlResponse?)?
 
     func register(_ handler: ControlCommandHandler) {
         entries.removeAll { $0.handler == nil }
@@ -27,6 +30,7 @@ final class ControlRouter {
     }
 
     func route(_ request: ControlRequest) -> ControlResponse {
+        if let response = appCommands?(request) { return response }
         let handlers = self.handlers
         guard !handlers.isEmpty else { return .failure("Kein Terminal-Fenster registriert") }
         if request.cmd == "list-panes" {

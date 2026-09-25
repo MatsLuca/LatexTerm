@@ -283,6 +283,17 @@ final class MCPServer {
              "Schließt eine Kachel (wie ⌘W). Kacheln, die du in dieser Session geöffnet hast, schließt du nach getaner Arbeit selbst. Fremde nur, wenn der Nutzer es ausdrücklich will (dann foreign: true). Arbeitende Sessions und laufende Programme bleiben offen.",
              ["pane": paneProperty, "foreign": ["type": "boolean", "description": "Kachel wurde nicht von dir geöffnet; nur auf ausdrücklichen Auftrag"]],
              ["pane"], destructive: true),
+        tool("app_state", "LatexTerm-Zustand prüfen",
+             "Gesundheitscheck der App: Laufzeit, ob der neueste Build läuft (sonst ⌥⌘R nötig — z. B. nach einem LatexTerm-Build), Kacheln/Bretter, Absturzschutz (Lauf-Marke, letzter Autosave), Stand-Archiv und die letzten Zeilen aus lifecycle.log (Start, Schlaf, Beenden samt Anlass) und unclean.log (unsaubere Enden). Aufrufen, wenn der Nutzer sagt, LatexTerm sei weg gewesen, abgestürzt oder habe Kacheln verloren, oder um nach einem Build zu prüfen, ob die neue Version läuft.",
+             [:], [], readOnly: true),
+        tool("snapshots", "Gespeicherte Stände",
+             "Liste gespeicherter Stände der App, neuester = 1: Zeit, Anlass (beenden, neustart, system, signal, absturz, autosave), je Brett die Kacheln (Agent + Ordner + Session, Scratchpad, Shell …). Einer entsteht bei jedem Beenden, Neustart und unsauberen Ende, dazu höchstens alle 10 min aus dem Autosave; die letzten 30 bleiben. Grundlage für restore_snapshot.",
+             [:], [], readOnly: true),
+        tool("restore_snapshot", "Stand wiederherstellen",
+             "Öffnet, was von einem gespeicherten Stand fehlt, als neue Bretter hinten in der laufenden App — ohne Neustart; Agenten-Sessions setzen sich fort, schon offene Kacheln bleiben unberührt (keine Doppelten). Nur, wenn der Nutzer Verlorenes zurückhaben will. Erst mit probe: true zeigen, was käme, und den passenden Stand mit dem Nutzer abgleichen; dann ohne probe.",
+             ["stand": ["type": "string", "description": "Nummer aus snapshots (1 = neuester, Default) oder Name"],
+              "probe": ["type": "boolean", "description": "nur zeigen, was käme, nichts öffnen"]],
+             []),
     ]
 
     private static func tool(_ name: String, _ title: String, _ description: String,
@@ -369,6 +380,9 @@ final class MCPServer {
         case "scratch_draw": return try scratchDraw(a)
         case "scratch_clear": return try scratchClear(a)
         case "scratch_cards": return try scratchCards(a)
+        case "app_state": return try checked(ControlRequest(cmd: "doctor")).reply ?? ""
+        case "snapshots": return try snapshotsTool()
+        case "restore_snapshot": return try restoreSnapshot(a)
         default:
             guard let info = kindInfos.first(where: { openToolName($0.kind) == name }) else {
                 throw ToolFailure("Unbekanntes Werkzeug „\(name)“")
@@ -378,6 +392,28 @@ final class MCPServer {
     }
 
     // MARK: Werkzeug-Implementierungen
+
+    private func describeSnapshot(_ snap: SnapshotSummary) -> String {
+        let panes = snap.boards.reduce(0) { $0 + $1.panes.count }
+        var text = "\(snap.index) · \(snap.date) · \(snap.reason) · \(snap.boards.count) Brett\(snap.boards.count == 1 ? "" : "er"), \(panes) Kachel\(panes == 1 ? "" : "n") [\(snap.name)]"
+        for board in snap.boards { text += "\n   " + (board.name ?? "Brett") + ": " + board.panes.joined(separator: " · ") }
+        return text
+    }
+
+    private func snapshotsTool() throws -> String {
+        let all = try checked(ControlRequest(cmd: "snapshots")).snapshots ?? []
+        return all.isEmpty ? "Noch keine gespeicherten Stände." : all.map(describeSnapshot).joined(separator: "\n")
+    }
+
+    private func restoreSnapshot(_ a: JSON) throws -> String {
+        var request = ControlRequest(cmd: "restore")
+        request.snapshot = a["stand"] as? String ?? (a["stand"] as? Int).map(String.init)
+        request.dryRun = a["probe"] as? Bool ?? false
+        let response = try checked(request)
+        let boards = (response.snapshots?.first?.boards ?? [])
+            .map { "   " + ($0.name ?? "Brett") + ": " + $0.panes.joined(separator: " · ") }
+        return ([response.reply ?? ""] + boards).joined(separator: "\n")
+    }
 
     private func panesTool() -> String {
         guard let response = try? checked(ControlRequest(cmd: "list-panes")) else { return "LatexTerm nicht erreichbar — läuft die App?" }

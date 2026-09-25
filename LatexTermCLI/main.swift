@@ -20,6 +20,9 @@ Verwendung:
   latexterm focus [--pane ZIEL]
   latexterm close-pane [--pane ZIEL] [--force]
   latexterm status [--pane ZIEL] [--agent claude|codex --session ID] [--turn ID] PAYLOAD
+  latexterm snapshots [--json]
+  latexterm restore [STAND] [--dry-run]
+  latexterm doctor
   latexterm mcp
 
 ZIEL ist der 1-basierte Index aus `list-panes` oder eine Pane-UUID (auch Präfix).
@@ -37,6 +40,12 @@ Bei arbeitender Session oder laufendem Vordergrundprozess: Exit 1 mit Grund.
 
 status meldet Agenten-Zustand und optional die echte Session-ID (`working;Bash;t=12;n=3`).
 Zustände: ready / working / input / done / closed. Ohne Anbieterfelder bleibt das Legacy-Claude-Protokoll.
+
+snapshots listet gespeicherte Stände (Bretter + Kacheln), neuester = 1. Einer entsteht bei jedem Beenden,
+Neustart und unsauberen Ende, dazu höchstens alle 10 min aus dem Autosave; die letzten 30 bleiben.
+restore öffnet, was von STAND (Nummer oder Name, Default 1) fehlt, als neue Bretter in der laufenden App —
+ohne Neustart; schon Offenes bleibt, wie es ist. --dry-run zeigt nur, was käme.
+doctor: läuft der neueste Build, Absturzschutz, Stand-Archiv, letzte Zeilen aus lifecycle.log/unclean.log.
 
 --no-focus: die neue Kachel entsteht daneben, die Tastatur bleibt in der fokussierten Kachel.
 
@@ -93,6 +102,7 @@ while !args.isEmpty {
     case "--session":  request.sessionID = value(for: arg)
     case "--turn":     request.turnID = value(for: arg)
     case "--json":     wantsJSON = true
+    case "--dry-run":  request.dryRun = true
     case "--help", "-h": print(usage); exit(0)
     case "--":
         // Ende der Optionen: der Rest ist Text, auch wenn er mit „--" beginnt.
@@ -104,7 +114,7 @@ while !args.isEmpty {
 }
 
 switch cmd {
-case "list-panes", "zoom", "focus", "new-pane", "close-pane", "pane-kinds":
+case "list-panes", "zoom", "focus", "new-pane", "close-pane", "pane-kinds", "snapshots", "doctor":
     guard positional.isEmpty else { fail("\(cmd) nimmt keine freien Argumente\n\n\(usage)", code: 2) }
 case "send":
     guard !positional.isEmpty else { fail("send braucht einen Text\n\n\(usage)", code: 2) }
@@ -121,6 +131,9 @@ case "status":
         fail("status: --agent claude|codex und --session ID zusammen angeben", code: 2)
     }
     request.text = positional.joined(separator: " ")
+case "restore":
+    guard positional.count <= 1 else { fail("restore nimmt höchstens einen STAND\n\n\(usage)", code: 2) }
+    request.snapshot = positional.first
 default:
     fail("Unbekanntes Kommando „\(cmd)“\n\n\(usage)", code: 2)
 }
@@ -162,6 +175,18 @@ func describe(_ pane: PaneInfo) -> String {
     return "\(pane.index)  \(pane.id.prefix(8))  \(cwd)\(suffix)"
 }
 
+func describe(_ snap: SnapshotSummary) -> String {
+    let date = ISO8601DateFormatter().date(from: snap.date).map { d -> String in
+        let f = DateFormatter(); f.dateFormat = "dd.MM. HH:mm"; return f.string(from: d)
+    } ?? snap.date
+    let panes = snap.boards.reduce(0) { $0 + $1.panes.count }
+    var text = "\(snap.index)  \(date)  \(snap.reason)  ·  \(snap.boards.count) Brett\(snap.boards.count == 1 ? "" : "er"), \(panes) Kachel\(panes == 1 ? "" : "n")  [\(snap.name)]"
+    for board in snap.boards {
+        text += "\n     " + (board.name ?? "Brett") + ": " + board.panes.joined(separator: " · ")
+    }
+    return text
+}
+
 switch cmd {
 case "list-panes":
     for pane in response.panes ?? [] { print(describe(pane)) }
@@ -169,8 +194,17 @@ case "new-pane":
     if let pane = response.pane { print(describe(pane)) }
 case "pane-kinds":
     for kind in response.kinds ?? [] { print(kind) }
-case "call":
+case "call", "doctor":
     if let reply = response.reply { print(reply) }
+case "snapshots":
+    let all = response.snapshots ?? []
+    if all.isEmpty { print("Noch keine gespeicherten Stände") }
+    for snap in all { print(describe(snap)) }
+case "restore":
+    if let reply = response.reply { print(reply) }
+    for board in response.snapshots?.first?.boards ?? [] {
+        print("  " + (board.name ?? "Brett") + ": " + board.panes.joined(separator: " · "))
+    }
 default:
     break   // send/zoom/focus/close-pane: Erfolg ist still (Unix-Konvention)
 }

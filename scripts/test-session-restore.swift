@@ -106,20 +106,109 @@ struct SessionRestoreTests {
         check(RestoreStep(PaneSnapshot(kind: "terminal", args: ["agent": "claude", "session": "abc", "accentName": "red; x"]))
               == .resume(agent: "claude", sessionID: "abc", cwd: nil, accentName: nil), "unsafe accent name dropped")
 
-        // Marke: genau einmal, vor dem Wiederherstellen gelöscht.
+        // Marke: genau einmal, vor dem Wiederherstellen gelöscht. Zwischen den Starts ein reguläres Ende.
+        let clean = { SessionStore.markCleanExit(for: file) }
         check(SessionStore.takeRestore(from: file) == nil, "missing file → normal start")
-        SessionStore.save(SessionSnapshot(windows: [window]), to: file)
+        SessionStore.save(SessionSnapshot(windows: [window]), to: file); clean()
         check(SessionStore.takeRestore(from: file) == nil, "normal quit → normal start")
         check(SessionStore.load(from: file)?.windows == [window], "normal quit still saves the layout")
         SessionStore.save(SessionSnapshot(windows: [window, SessionSnapshot.Window(panes: [])], restoreOnce: true), to: file)
+        clean()
         check(SessionStore.takeRestore(from: file) == [window], "marked snapshot restores, empty windows dropped")
         check(SessionStore.load(from: file)?.restoreOnce == false, "mark cleared on disk")
         check(SessionStore.load(from: file)?.windows.first == window, "layout kept after taking")
+        clean()
         check(SessionStore.takeRestore(from: file) == nil, "second launch → normal start")
         SessionStore.save(SessionSnapshot(windows: [SessionSnapshot.Window(panes: [])], restoreOnce: true), to: file)
+        clean()
         check(SessionStore.takeRestore(from: file) == nil, "marked but empty → normal start")
-        try Data("{kaputt".utf8).write(to: file)
+        try Data("{kaputt".utf8).write(to: file); clean()
         check(SessionStore.takeRestore(from: file) == nil, "corrupt file → normal start")
+
+        // Unsauberes Ende (24.09.): Lauf-Marke steht noch → letzter Autosave kommt wieder.
+        let runMarker = SessionStore.runMarkerURL(for: file)!
+        let backdate = { (seconds: TimeInterval) in
+            try FileManager.default.setAttributes([.modificationDate: Date().addingTimeInterval(-seconds)],
+                                                  ofItemAtPath: runMarker.path)
+        }
+        clean()
+        check(SessionStore.takeRestore(from: file) == nil && FileManager.default.fileExists(atPath: runMarker.path),
+              "start sets the run marker")
+        try backdate(60)
+        SessionStore.autosave(SessionSnapshot(windows: [window]), to: file)
+        check(SessionStore.takeRestore(from: file) == [window], "crash after autosave → restores without mark")
+        check(SessionStore.load(from: file)?.restoreOnce == false, "crash restore leaves no mark")
+        check(SessionStore.takeRestore(from: file) == nil, "crash before any save of that run → normal start (no loop)")
+        let log = file.deletingLastPathComponent().appendingPathComponent("unclean.log")
+        check(((try? String(contentsOf: log, encoding: .utf8)) ?? "").components(separatedBy: "unsauberes Ende").count == 3,
+              "each unclean end is logged")
+        clean()
+        check(!FileManager.default.fileExists(atPath: runMarker.path), "clean exit removes the marker")
+        SessionStore.save(SessionSnapshot(windows: [window]), to: file)
+        check(SessionStore.takeRestore(from: file) == nil, "clean exit → normal start despite saved panes")
+
+        // Stand-Archiv (25.09.): neuester zuerst, keine Doppelten, keine leeren, höchstens archiveLimit.
+        let archiveFile = directory.appendingPathComponent("archiv/session.json")
+        let day = Date(timeIntervalSince1970: 1_790_300_000)
+        let agentPane = PaneSnapshot(kind: "terminal", args: ["cwd": NSHomeDirectory() + "/Documents", "agent": "claude",
+                                                              "session": "3cac9957-b9a1-4130-91a8-4d965955ed1d"], id: "AAAA0000-0000-0000-0000-000000000001")
+        let padPane = PaneSnapshot(kind: "scratchpad", args: ["id": "0B42DCF6-9B23-44CE-8581-3904B327FC19"], id: "AAAA0000-0000-0000-0000-000000000002",
+                                   companionOf: "AAAA0000-0000-0000-0000-000000000001")
+        let shellPane = PaneSnapshot(kind: "terminal", args: ["cwd": "/tmp"], id: "AAAA0000-0000-0000-0000-000000000003")
+        let studium = SessionSnapshot.Window(panes: [agentPane, padPane], focused: 1, name: "Studium")
+        let werkstatt = SessionSnapshot.Window(panes: [shellPane])
+        let homeBoard: SessionSnapshot.Window = {
+            var w = SessionSnapshot.Window(panes: [PaneSnapshot(kind: "overview")]); w.home = true; return w
+        }()
+        check(SessionStore.archived(for: archiveFile).isEmpty, "no archive yet")
+        check({ if case .failure = SessionStore.findArchived(nil, for: archiveFile) { return true }; return false }(),
+              "empty archive → lookup fails")
+        SessionStore.archive(SessionSnapshot(windows: [SessionSnapshot.Window(panes: [])]), reason: "beenden", for: archiveFile, now: day)
+        check(SessionStore.archived(for: archiveFile).isEmpty, "empty snapshot not archived")
+        SessionStore.archive(SessionSnapshot(windows: [homeBoard, studium]), reason: "beenden", for: archiveFile, now: day)
+        SessionStore.archive(SessionSnapshot(windows: [homeBoard, studium], restoreOnce: true), reason: "autosave",
+                             for: archiveFile, now: day.addingTimeInterval(60))
+        check(SessionStore.archived(for: archiveFile).count == 1, "same content (ignoring the mark) not archived twice")
+        SessionStore.archive(SessionSnapshot(windows: [homeBoard, studium, werkstatt]), reason: "absturz",
+                             for: archiveFile, now: day.addingTimeInterval(120))
+        let list = SessionStore.archived(for: archiveFile)
+        check(list.map(\.summary.reason) == ["absturz", "beenden"] && list.map(\.summary.index) == [1, 2], "newest first, numbered")
+        check(list[0].summary.boards.count == 2 && list[0].summary.boards[0].name == "Studium", "home board left out of the summary")
+        check(list[0].summary.boards[0].panes == ["claude ~/Documents (3cac9957)", "scratchpad"], "pane descriptions")
+        check(list[0].summary.boards[1].panes == ["shell /tmp"], "shell description")
+        check(list[0].snapshot.restoreOnce == false, "archived without the restore mark")
+        check((try? SessionStore.findArchived("2", for: archiveFile).get().summary.reason) == "beenden", "lookup by number")
+        check((try? SessionStore.findArchived(nil, for: archiveFile).get().summary.reason) == "absturz", "default = newest")
+        check((try? SessionStore.findArchived(list[1].summary.name, for: archiveFile).get().summary.index) == 2, "lookup by name")
+        check({ if case .failure = SessionStore.findArchived("9", for: archiveFile) { return true }; return false }(), "bad number fails")
+        check({ if case .failure = SessionStore.findArchived("2026", for: archiveFile) { return true }; return false }(),
+              "ambiguous prefix fails")
+        for i in 0..<(SessionStore.archiveLimit + 5) {
+            SessionStore.archive(SessionSnapshot(windows: [SessionSnapshot.Window(panes: [PaneSnapshot(kind: "terminal", args: ["cwd": "/tmp/\(i)"])])]),
+                                 reason: "autosave", for: archiveFile, now: day.addingTimeInterval(Double(200 + i)))
+        }
+        let pruned = SessionStore.archived(for: archiveFile)
+        check(pruned.count == SessionStore.archiveLimit && pruned[0].summary.boards[0].panes == ["shell /tmp/\(SessionStore.archiveLimit + 4)"],
+              "archive keeps the newest \(SessionStore.archiveLimit)")
+
+        // Fehlende Bretter: Offenes fällt heraus, leere Bretter und das Home-Brett entfallen.
+        var open = OpenPanes()
+        check(open.missing(from: [homeBoard, studium, werkstatt]).count == 2, "nothing open → all boards except home")
+        open.sessions = ["3cac9957-b9a1-4130-91a8-4d965955ed1d"]
+        let rest = open.missing(from: [studium, werkstatt])
+        check(rest.count == 2 && rest[0].panes == [padPane] && rest[0].focused == 0 && rest[0].name == "Studium",
+              "open session filtered, focus follows the kept pane")
+        open.contents = [OpenPanes.contentKey(kind: "scratchpad", args: padPane.args)!]
+        check(open.missing(from: [studium, werkstatt]).map(\.panes) == [[shellPane]], "open scratchpad filtered, empty board dropped")
+        open = OpenPanes(ids: ["AAAA0000-0000-0000-0000-000000000003"])
+        check(open.missing(from: [werkstatt]).isEmpty, "same pane id counts as open")
+
+        // Unsauberes Ende landet im Archiv, auch in der Startphase (kein automatisches Wiederherstellen).
+        let crashFile = directory.appendingPathComponent("crash/session.json")
+        SessionStore.save(SessionSnapshot(windows: [studium]), to: crashFile)
+        _ = SessionStore.takeRestore(from: crashFile)          // setzt die Lauf-Marke
+        check(SessionStore.takeRestore(from: crashFile) == nil, "startup-phase death → no auto restore")
+        check(SessionStore.archived(for: crashFile).first?.summary.reason == "absturz", "…but its snapshot is archived")
 
         // Fensterverteilung beim Start.
         let second = SessionSnapshot.Window(panes: [PaneSnapshot(kind: "terminal", args: ["cwd": "/tmp"])])

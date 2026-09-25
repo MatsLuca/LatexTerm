@@ -27,6 +27,21 @@ final class BoardHostView: NSView {
     /// Beim ersten Zugriff einmal von der Platte geholt; jedes Fenster holt sich eine Gruppe (seine Bretter).
     private static var restoreQueue = RestoreQueue(SessionStore.takeRestore() ?? [])
     private static var restoreStarted = false
+    /// Autosave (24.09.2026): verschwindet die App ohne `applicationWillTerminate`, stellt der nächste Start diesen Stand
+    /// wieder her (`SessionStore` Lauf-Marke). Beginnt erst nach der Startphase, damit ein halb aufgebauter Restore nie
+    /// den guten Stand überschreibt — und damit ein Absturz beim Wiederherstellen nicht in Schleife wiederherstellt.
+    private static var autosaveTimer: Timer?
+    private static let autosaveDelay: TimeInterval = 10
+    private static let autosaveInterval: TimeInterval = 5
+
+    private static func startAutosave() {
+        guard autosaveTimer == nil else { return }
+        autosaveTimer = Timer.scheduledTimer(withTimeInterval: autosaveInterval, repeats: true) { _ in
+            guard !AppLifecycle.isTerminating else { return }
+            SessionStore.autosave(sessionSnapshot(restoreOnce: false))
+        }
+        autosaveTimer?.fireDate = Date().addingTimeInterval(autosaveDelay)
+    }
 
     private var boards: [TerminalSplitView] = []
     private var list = BoardList<ObjectIdentifier>()
@@ -63,6 +78,7 @@ final class BoardHostView: NSView {
     init() {
         super.init(frame: .zero)
         let group = Self.restoreQueue.claimGroup()
+        Self.startAutosave()
         if group.isEmpty {
             addBoard(plan: nil, activate: true)
         } else {
@@ -378,6 +394,37 @@ final class BoardHostView: NSView {
             }
         }
         return SessionSnapshot(windows: windows, restoreOnce: restoreOnce)
+    }
+
+    /// Offene Kacheln aller Fenster — was ein Wiederherstellen nicht doppelt öffnen darf.
+    static func openPanes() -> OpenPanes {
+        var open = OpenPanes()
+        for host in live.compactMap(\.view) where host.window != nil && !host.windowClosed {
+            for board in host.boards + (host.homeBoard.map { [$0] } ?? []) {
+                for entry in board.windowSnapshot().panes {
+                    if let id = entry.id { open.ids.insert(id.uppercased()) }
+                    if case .resume(_, let session, _, _) = RestoreStep(entry) { open.sessions.insert(session.lowercased()) }
+                    if case .app(let kind, let args) = RestoreStep(entry),
+                       let key = OpenPanes.contentKey(kind: kind, args: args) { open.contents.insert(key) }
+                }
+            }
+        }
+        // Agenten, deren Session erst nach dem Snapshot gebunden wurde, meldet der Router.
+        for pane in ControlServer.shared.router.panes {
+            open.ids.insert(pane.id.uppercased())
+            if let session = pane.sessionID { open.sessions.insert(session.lowercased()) }
+        }
+        return open
+    }
+
+    /// Bretter in die laufende App (Steuerkanal `restore`): ans Ende des vorderen Fensters, ohne es zu wechseln.
+    /// Ohne Fenster: nichts (die App öffnet beim nächsten Fenster ohnehin Home).
+    static func addRestoredBoards(_ plans: [SessionSnapshot.Window]) -> Bool {
+        live.removeAll { $0.view == nil }
+        let hosts = live.compactMap(\.view).filter { $0.window != nil && !$0.windowClosed }
+        guard let host = hosts.first(where: { $0.window?.isKeyWindow == true }) ?? hosts.first else { return false }
+        for plan in plans { host.addBoard(plan: plan, activate: false, atEnd: true) }
+        return true
     }
 
     /// Übrige Gruppen des Snapshots als eigene Fenster öffnen (jedes holt sich im `init` seine Bretter). Was danach

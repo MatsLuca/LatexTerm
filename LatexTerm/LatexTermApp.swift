@@ -18,6 +18,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         WidgetRefresher.shared.start()   // Desktop-Widgets füttern (projekte widget), dann alle 5 min
+        LifecycleWatch.start()           // Spur, wie die App endet; macOS darf sie nicht still beenden
+        ControlServer.shared.router.appCommands = AppControl.handle   // snapshots / restore / doctor
         // macOS hängt ans App-Menü ein verstecktes „Quit and Keep Windows“ (⌥-Variante von „Beenden“) —
         // doppelt zu „Beenden und Kacheln merken“. AppKit/SwiftUI fügen es auch später noch ein
         // (Menüaufbau, Öffnen des Menüs), darum bei beidem wieder entfernen.
@@ -47,6 +49,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private enum KeepPanes { case quit, relaunch }
     private var keepPanes: KeepPanes?
+    /// Grund, wenn das System beendet (Abmelden/Neustart/Ausschalten) — fürs Stand-Archiv.
+    private var systemQuitReason: String?
 
     func quitKeepingPanes(relaunch: Bool) {
         guard confirmBusyPanes(relaunch: relaunch) else { return }
@@ -70,7 +74,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Stand aller Fenster sichern (Snapshot v2). Erst hier, nach dem Ja von `VMQuitGuard`: ein
     /// abgebrochenes Beenden hinterlässt so keine Wiederherstell-Marke.
     func applicationWillTerminate(_ notification: Notification) {
-        SessionStore.save(BoardHostView.sessionSnapshot(restoreOnce: keepPanes != nil))
+        let snapshot = BoardHostView.sessionSnapshot(restoreOnce: keepPanes != nil)
+        SessionStore.save(snapshot)
+        SessionStore.archive(snapshot, reason: keepPanes == .relaunch ? "neustart" : systemQuitReason != nil ? "system" : "beenden")
+        SessionStore.markCleanExit()   // reguläres Ende — sonst stellt der nächste Start den Autosave wieder her
+        LifecycleWatch.log("Beendet (regulär)")
         guard keepPanes == .relaunch else { return }
         do { try AppRelaunch.reopen(Bundle.main.bundleURL) } catch {
             // Marke steht trotzdem: das nächste Öffnen von Hand stellt wieder her.
@@ -91,6 +99,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         // Ab hier schließen Fenster nur, weil die App geht — Kachel-Inhalte behalten ihre Dateien für den Restore.
         AppLifecycle.isTerminating = true
+        // Beendet das System (Abmelden/Neustart/Ausschalten), ist das nicht Mats' ⌘Q → Kacheln merken.
+        let systemReason = LifecycleWatch.systemQuitReason()
+        systemQuitReason = systemReason
+        if systemReason != nil, keepPanes == nil { keepPanes = .quit }
+        LifecycleWatch.log("Beenden angefragt · " + (systemReason ?? "aus der App")
+            + (keepPanes == .relaunch ? " · Neu starten" : keepPanes == .quit ? " · Kacheln merken" : ""))
         guard !vmQuitGuard.isPreparing else { return .terminateLater }
         vmQuitGuard.prepare(onSuspending: { [weak self] in
             qlog.notice("Beenden: Windows-VM läuft — halte sie erst an")
