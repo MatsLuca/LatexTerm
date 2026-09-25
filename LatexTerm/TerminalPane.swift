@@ -375,7 +375,13 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         // (Hook-Status / passive Erkennung), höchstens 12 s — der User sieht weder das getippte
         // Kommando noch Plugin-Sync und Ladezeilen. Der Ring im Vorhang füllt sich gegen die
         // erwartete Dauer (Mittel der letzten echten Starts).
-        home.beginLaunch(label ?? "Claude", eta: Self.launchEta, accent: effectiveAccent, takeFocus: takesFocus)
+        // Erwartete Dauer: Mittel der Einzelstarts, je gleichzeitig startender Session +30 % (⌥⌘R mit sechs
+        // Kacheln brauchte ~2,5× so lange wie ein Einzelstart, Messung 25.09.).
+        Self.launchesInFlight = Self.launchesInFlight.filter { Date().timeIntervalSince($0.value) < 12 }
+        Self.launchesInFlight[id] = Date()
+        var concurrent = Self.launchesInFlight.count > 1
+        let eta = Self.launchEta * (1 + 0.3 * Double(Self.launchesInFlight.count - 1))
+        home.beginLaunch(label ?? "Claude", eta: eta, accent: effectiveAccent, takeFocus: takesFocus)
         // Start-Timer: T0 = dieser Tastendruck, als Umgebung vor das Kommando (zsh exportiert
         // Zuweisungen vor einem Funktionsaufruf an dessen Kinder). Der SessionStart-Hook
         // hooks/start-timer.sh (mats-tools) rechnet daraus die Phasen und loggt sie; wir
@@ -392,6 +398,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         launchTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] t in
             guard let self else { t.invalidate(); return }
             if boxAt == nil, self.claudeInputBoxVisible() { boxAt = Date().timeIntervalSince(started) }
+            if Self.launchesInFlight.count > 1 { concurrent = true }
             // `ready` der Bridge ist das Signal, aber aufgedeckt wird erst, wenn die Eingabebox auch im
             // Grid steht: ohne Last kam das Signal 100–150 ms vor der gezeichneten Box (Messung 25.09.),
             // der Vorhang gab kurz einen halbfertigen Bildschirm frei. Sicherung: Signal + 0,4 s.
@@ -405,7 +412,10 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
             self.launchTimer = nil
             let bereit = Date().timeIntervalSince(started)
             if boxAt == nil, self.claudeInputBoxVisible() { boxAt = bereit }
-            if ready { Self.recordLaunch(bereit) }
+            Self.launchesInFlight[self.id] = nil
+            // Nur Einzelstarts ins Mittel: parallele Starts (⌥⌘R) sind langsamer und zogen es auf 2,2 s hoch,
+            // der Rahmen stand bei einem 1,3-s-Start dann erst bei ~70 % und sprang am Ende.
+            if ready && !concurrent { Self.recordLaunch(bereit) }
             let reason = self.launchReady ? (boxAt != nil ? "signal+box" : "signal+frist") : (ready ? "passiv" : "timeout")
             // Folgebefehle (z. B. /color, /compact) nur bei echter Session. Runde 26: der Vorhang
             // bleibt liegen, bis der letzte Folgebefehl abgeschickt ist — vorher landete Mats'
@@ -495,13 +505,15 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
 
     // MARK: Erwartete Startdauer (für den Ring im Vorhang)
 
-    private static let launchEtaKey = "LatexTerm.launchEtaMs"
-    /// Gleitender Mittelwert der letzten echten Starts (nur Signal/passiv, nie Timeout);
-    /// Erstwert 1,4 s. Persistiert, damit der erste Start nach App-Neustart schon passt.
+    private static let launchEtaKey = "LatexTerm.launchEtaSoloMs"
+    /// Gleitender Mittelwert der letzten Einzelstarts (nur Signal/passiv, nie Timeout, nie parallel);
+    /// Erstwert 1,3 s (Einzelstart nach dem Umbau 25.09.). Persistiert, damit der erste Start nach App-Neustart schon passt.
     static var launchEta: TimeInterval {
         let ms = UserDefaults.standard.double(forKey: launchEtaKey)
-        return ms > 0 ? ms / 1000 : 1.4
+        return ms > 0 ? ms / 1000 : 1.3
     }
+    /// Claude-Starts, die gerade laufen (Kachel-ID → Beginn) — für Schätzung und „nur Einzelstarts ins Mittel“.
+    private static var launchesInFlight: [UUID: Date] = [:]
     private static func recordLaunch(_ curtain: TimeInterval) {
         let clamped = min(max(curtain, 0.4), 8)
         let next = UserDefaults.standard.double(forKey: launchEtaKey) > 0
