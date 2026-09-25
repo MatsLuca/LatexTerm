@@ -44,6 +44,7 @@ final class MyzelContent: PaneContent, MyzelTimelineDelegate {
     private var scopes = MyzelScopeStore(path: MyzelContent.stateFolder + "/umfang.json")
     private var draftSheet: (job: String, sheet: MyzelDraftSheet)?
     private let waitingButton = LineButton(title: "")
+    private let moreButton = LineButton(title: "⋯")
     /// Was schon gemeldet wurde (Banner je Auftrag und Zustand nur einmal).
     private var announced: Set<String> = []
 
@@ -68,6 +69,9 @@ final class MyzelContent: PaneContent, MyzelTimelineDelegate {
         composer.onAttachData = { [weak self] data, name in self?.upload(data: data, name: name) }
         composer.onRemovePending = { [weak self] id in self?.removePending(id) }
         waitingButton.onClick = { [weak self] in self?.showWaitingMenu() }
+        moreButton.toolTip = "Mehr"
+        moreButton.onClick = { [weak self] in self?.showMoreMenu() }
+        root.header.trailing = [moreButton]
         start()
     }
 
@@ -336,11 +340,11 @@ final class MyzelContent: PaneContent, MyzelTimelineDelegate {
     private func refreshWaiting() {
         let waiting = chat.waiting(for: me?.id ?? "")
         if waiting.isEmpty {
-            root.header.trailing = []
+            if root.header.trailing.count != 1 { root.header.trailing = [moreButton] }
         } else {
             waitingButton.title = "\(waiting.count) wartet auf dich"
             waitingButton.accent = Tone.waiting.color
-            if root.header.trailing.isEmpty { root.header.trailing = [waitingButton] }
+            if root.header.trailing.count != 2 { root.header.trailing = [moreButton, waitingButton] }
             root.header.needsLayout = true
         }
         try? scopes.prune(keeping: Set(chat.jobs.values.filter { !$0.status.isEnd }.map(\.id)))
@@ -439,11 +443,93 @@ final class MyzelContent: PaneContent, MyzelTimelineDelegate {
                         readTools: config.readTools), jobID: job.id)
                 }
                 let launch = try MyzelLaunch.prepare(input)
+                Self.rememberSession(launch.sessionID, job: job.id)
                 self.openAgentPane(for: job, launch: launch)
                 if let scope { self.flash("Sandbox: \(scope.label)", error: false) }
             } catch {
                 self?.flash("Starten: \(error)")
             }
+        }
+    }
+
+    /// Session-id je Auftrag, außerhalb des Auftragsordners (den ein fremder Agent beschreiben darf — er soll das
+    /// Protokoll nicht auf ein anderes Transkript umbiegen können).
+    private static func rememberSession(_ id: String, job: String) {
+        guard MyzelLaunch.isSafeID(job) else { return }
+        let folder = stateFolder + "/sitzungen"
+        try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true,
+                                                 attributes: [.posixPermissions: 0o700])
+        try? Data(id.utf8).write(to: URL(fileURLWithPath: folder + "/" + job))
+    }
+
+    private static func session(job: String) -> String? {
+        guard MyzelLaunch.isSafeID(job),
+              let data = FileManager.default.contents(atPath: stateFolder + "/sitzungen/" + job) else { return nil }
+        return String(decoding: data, as: UTF8.self)
+    }
+
+    // MARK: Menü ⋯
+
+    private func showMoreMenu() {
+        let menu = NSMenu()
+        func add(_ title: String, _ action: @escaping () -> Void) {
+            let target = MyzelMenuTarget(action)
+            let item = NSMenuItem(title: title, action: #selector(MyzelMenuTarget.fire(_:)), keyEquivalent: "")
+            item.target = target
+            item.representedObject = target
+            menu.addItem(item)
+        }
+        add("Zusammenfassung des Agenten nachführen …") { [weak self] in self?.refreshSummary() }
+        add("Agenten-Ordner im Finder zeigen") { [weak self] in
+            guard let folder = self?.config?.agentFolder else { return }
+            NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: folder)])
+        }
+        menu.addItem(.separator())
+        add("Token aus dem Schlüsselbund entfernen …") { [weak self] in self?.forgetToken() }
+        menu.popUp(positioning: nil, at: NSPoint(x: 0, y: moreButton.bounds.maxY + 4), in: moreButton)
+    }
+
+    /// Neue Nachrichten seit `stand.json` als Datei in den Agenten-Ordner, daneben eine eigene Session, die
+    /// `zusammenfassung.md` nachführt — für Gespräche, die ohne eigenen Ping weiterliefen. Kein Server-Zugang nötig.
+    private func refreshSummary() {
+        guard let config, let me = delegate?.contentPaneID.uuidString else { return }
+        let after = MyzelLaunch.lastSeen(agentFolder: config.agentFolder)
+        var messages = chat.messages
+        if let after, let index = messages.firstIndex(where: { $0.id == after }) { messages = Array(messages[(index + 1)...]) }
+        guard let last = messages.last else { return flash("Zusammenfassung ist aktuell.", error: false) }
+        let text = messages.suffix(200).map { m in
+            "## \(chat.displayName(m.von)) · \(m.ts.prefix(16)) · \(m.id)\n\n\(m.text ?? "")\n"
+        }.joined(separator: "\n")
+        let file = config.agentFolder + "/neu.md"
+        do { try Data(("# Neue Nachrichten seit dem letzten Stand\n\n" + text).utf8).write(to: URL(fileURLWithPath: file)) } catch {
+            return flash("neu.md: \(error)")
+        }
+        let prompt = "Führe zusammenfassung.md anhand von neu.md nach (höchstens ~40 Zeilen, Älteres verdichten, Regeln in "
+            + "regeln.md beachten), setze stand.json auf {\"nach\": \"\(last.id)\"} und lösche danach neu.md. Sonst nichts."
+        var request = ControlRequest(cmd: "new-pane")
+        request.paneID = me
+        request.placement = "beside"
+        request.focus = false
+        request.cwd = config.agentFolder
+        request.exec = " claude " + MyzelLaunch.shellQuote(prompt)
+        let response = ControlServer.shared.router.route(request)
+        if !response.ok { flash("Kachel: \(response.error ?? "ging nicht")") }
+    }
+
+    private func forgetToken() {
+        guard let config, let window = root.window else { return }
+        let alert = NSAlert()
+        alert.messageText = "Token für \(config.host) entfernen?"
+        alert.informativeText = "Die Kachel trennt die Verbindung und fragt beim nächsten Mal wieder nach dem Token."
+        alert.addButton(withTitle: "Entfernen")
+        alert.addButton(withTitle: "Abbrechen")
+        alert.beginSheetModal(for: window) { [weak self] response in
+            guard response == .alertFirstButtonReturn, let self else { return }
+            MyzelKeychain.remove(host: config.host)
+            self.client?.invalidate()
+            self.client = nil
+            self.watchdog?.invalidate()
+            self.askForToken(reason: nil)
         }
     }
 
@@ -495,6 +581,10 @@ final class MyzelContent: PaneContent, MyzelTimelineDelegate {
                         sheet?.markOpened(attachment.id)
                     }
                 }
+                sheet.setAccessLog(Self.session(job: job.id)
+                    .flatMap { MyzelTranscript.file(sessionID: $0) }
+                    .flatMap { try? String(contentsOfFile: $0, encoding: .utf8) }
+                    .map { MyzelTranscript.lines(MyzelTranscript.accesses(jsonl: $0)) })
                 self.draftSheet = (job.id, sheet)
                 sheet.begin(on: window) { [weak self] action in self?.draftAction(action, job: job) }
             } catch {

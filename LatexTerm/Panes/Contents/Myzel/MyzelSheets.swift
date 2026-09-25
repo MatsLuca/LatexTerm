@@ -84,6 +84,8 @@ final class MyzelDraftSheet: NSObject, NSWindowDelegate {
     private let sendButton = NSButton(title: "Senden", target: nil, action: nil)
     private let status = NSTextField(labelWithString: "")
     private let attachmentsBox = NSView()
+    private let accessTitle = NSTextField(labelWithString: "")
+    private let accessView = NSTextView()
     private var checkboxes: [String: NSButton] = [:]
     private var opened: Set<String> = []
     private var onAction: ((Action) -> Void)?
@@ -93,7 +95,7 @@ final class MyzelDraftSheet: NSObject, NSWindowDelegate {
 
     init(draft: MyzelDraft, agent: String, trigger: String, triggerText: String) {
         self.draft = draft
-        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 640, height: 600),
+        panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 660, height: 720),
                         styleMask: [.titled, .resizable], backing: .buffered, defer: true)
         panel.title = "Entwurf von \(agent)"
         panel.minSize = NSSize(width: 480, height: 420)
@@ -124,6 +126,17 @@ final class MyzelDraftSheet: NSObject, NSWindowDelegate {
     func showStatus(_ text: String, error: Bool) {
         status.stringValue = text
         status.textColor = error ? .systemRed : .secondaryLabelColor
+    }
+
+    /// Lesezugriffs-Protokoll aus dem Transkript der Agenten-Session (nur lokal); nil = keins gefunden.
+    func setAccessLog(_ lines: [String]?) {
+        if let lines {
+            accessTitle.stringValue = "Was der Agent angefasst hat (\(lines.count)) — ✓ ging, ✗ abgelehnt"
+            accessView.string = lines.isEmpty ? "(nichts außer dem Chat)" : lines.joined(separator: "\n")
+        } else {
+            accessTitle.stringValue = "Was der Agent angefasst hat — kein Transkript gefunden (anderswo gestartet?)"
+            accessView.string = ""
+        }
     }
 
     func markOpened(_ id: String) {
@@ -167,6 +180,26 @@ final class MyzelDraftSheet: NSObject, NSWindowDelegate {
         attachScroll.documentView = attachmentsBox
         content.addSubview(attachScroll)
 
+        accessTitle.font = AppFonts.mono(size: 11, weight: .bold)
+        accessTitle.textColor = .secondaryLabelColor
+        accessTitle.translatesAutoresizingMaskIntoConstraints = false
+        content.addSubview(accessTitle)
+        let accessScroll = NSScrollView()
+        accessScroll.hasVerticalScroller = true
+        accessScroll.borderType = .bezelBorder
+        accessScroll.translatesAutoresizingMaskIntoConstraints = false
+        accessView.isEditable = false
+        accessView.isSelectable = true
+        accessView.font = AppFonts.mono(size: 10.5)
+        accessView.textColor = .secondaryLabelColor
+        accessView.textContainerInset = NSSize(width: 4, height: 4)
+        accessView.isVerticallyResizable = true
+        accessView.autoresizingMask = [.width]
+        accessView.textContainer?.widthTracksTextView = true
+        accessScroll.documentView = accessView
+        content.addSubview(accessScroll)
+        setAccessLog(nil)
+
         status.translatesAutoresizingMaskIntoConstraints = false
         status.lineBreakMode = .byTruncatingTail
         content.addSubview(status)
@@ -191,8 +224,15 @@ final class MyzelDraftSheet: NSObject, NSWindowDelegate {
             attachScroll.topAnchor.constraint(equalTo: scroll.bottomAnchor, constant: 10),
             attachScroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: pad),
             attachScroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -pad),
-            attachScroll.heightAnchor.constraint(equalToConstant: 150),
-            status.topAnchor.constraint(equalTo: attachScroll.bottomAnchor, constant: 8),
+            attachScroll.heightAnchor.constraint(equalToConstant: 130),
+            accessTitle.topAnchor.constraint(equalTo: attachScroll.bottomAnchor, constant: 8),
+            accessTitle.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: pad),
+            accessTitle.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -pad),
+            accessScroll.topAnchor.constraint(equalTo: accessTitle.bottomAnchor, constant: 4),
+            accessScroll.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: pad),
+            accessScroll.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -pad),
+            accessScroll.heightAnchor.constraint(equalToConstant: 96),
+            status.topAnchor.constraint(equalTo: accessScroll.bottomAnchor, constant: 8),
             status.leadingAnchor.constraint(equalTo: content.leadingAnchor, constant: pad),
             status.trailingAnchor.constraint(equalTo: content.trailingAnchor, constant: -pad),
             sendButton.topAnchor.constraint(equalTo: status.bottomAnchor, constant: 8),
