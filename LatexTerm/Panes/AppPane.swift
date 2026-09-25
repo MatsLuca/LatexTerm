@@ -90,6 +90,8 @@ final class AppPane: Pane, PaneContentDelegate {
 
     var contentOpener: String? { openedBy }
 
+    var contentPaneID: UUID { id }
+
     func contentAgentPanes() -> [PaneInfo] { host?.agentPanes() ?? [] }
 
     func contentPaste(_ text: String, intoPaneID: String) -> Bool {

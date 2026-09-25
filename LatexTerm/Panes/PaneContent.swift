@@ -95,6 +95,8 @@ protocol PaneContentDelegate: AnyObject {
     func contentHasNews()
     /// Wer die Kachel geöffnet hat (`Pane.openedBy`): Kachel-UUID eines Agenten, "user" oder nil.
     var contentOpener: String? { get }
+    /// Eigene Kachel-UUID — als Aufrufer für Steuerbefehle (Myzel: Agent-Kachel „neben mir“ öffnen).
+    var contentPaneID: UUID { get }
     /// Kacheln mit laufender Claude-/Codex-Session (alle Fenster).
     func contentAgentPanes() -> [PaneInfo]
     /// Text in eine andere Kachel einfügen (bracketed paste) und sie fokussieren.
@@ -128,7 +130,7 @@ struct PaneArgsError: Error, CustomStringConvertible {
 /// und Session-Restore. "terminal" und "home" sind fest verdrahtet (`TerminalPane`), alles
 /// andere kommt aus `contents`.
 enum PaneKindRegistry {
-    static let contents: [any PaneContent.Type] = [ScratchpadContent.self, WebContent.self, PreviewContent.self]
+    static let contents: [any PaneContent.Type] = [ScratchpadContent.self, WebContent.self, PreviewContent.self, MyzelContent.self]
 
     /// Alle Arten, die `new-pane --kind` kennt.
     static var kinds: [String] { ["terminal", "home"] + contents.map { $0.kind } }

@@ -28,4 +28,10 @@ run_test pane-layout LatexTerm/Control/PaneLayoutTree.swift LatexTerm/Layout/Pan
 run_test boards LatexTerm/Boards/BoardList.swift
 run_test scratch-svg LatexTerm/Panes/Contents/ScratchSVG.swift
 run_test session-restore LatexTerm/SessionStore.swift LatexTerm/Control/ControlProtocol.swift LatexTerm/Control/PaneLayoutTree.swift LatexTerm/AgentSession.swift LatexTerm/AppRelaunch.swift
+run_test myzel-model LatexTerm/Panes/Contents/Myzel/MyzelModel.swift LatexTerm/Panes/Contents/Myzel/MyzelConfig.swift
+run_test myzel-sse LatexTerm/Panes/Contents/Myzel/MyzelSSE.swift
+run_test myzel-markdown LatexTerm/Panes/Contents/Myzel/MyzelMarkdown.swift
+run_test myzel-compose LatexTerm/Panes/Contents/Myzel/MyzelCompose.swift
+run_test myzel-jobs LatexTerm/Panes/Contents/Myzel/MyzelModel.swift LatexTerm/Panes/Contents/Myzel/MyzelJobs.swift
+run_test myzel-launch LatexTerm/Panes/Contents/Myzel/MyzelLaunch.swift LatexTerm/Panes/Contents/Myzel/MyzelConfig.swift
 python3 -m unittest discover -s scripts/tests -v

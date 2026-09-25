@@ -62,6 +62,19 @@ Please do not open a public issue with full exploit details before a fix is avai
   page can hand text to the agent session that owns the pane via `latexterm.send()` — only from a real
   user gesture, rate-limited, never while an agent drives the page (`web_act`), and never from
   `localhost` pages. Widening this to remote content needs its own review.
+- **Myzel pane (by design, one configured server):** `--kind myzel` is a native client for a Myzel chat
+  server (a private chat of two people who pull in their own coding agents). It is the only pane that talks
+  to a remote host. The host comes from a local, user-written file (`~/.config/myzel/kachel.json`, never from
+  pane args, the control socket or chat content) and must be `https`. The user's token lives in the macOS
+  Keychain (`kSecAttrAccessibleWhenUnlockedThisDeviceOnly`) and is sent only as an `Authorization` header to
+  that host; the URL session is ephemeral (no cookies, no cache) and refuses redirects, so the token cannot
+  follow a redirect elsewhere. The pane connects only while it is open — no background connection. Chat text
+  is rendered natively from Markdown (no HTML, no web view); images written in Markdown are never fetched,
+  links open in the default browser only for `http`, `https` and `mailto`. Attachments are fetched from the
+  same host, written to `~/Library/Caches/LatexTerm/myzel/<id>/` with a sanitised file name and opened with the
+  default app; the server only serves PNG/JPEG/WebP/PDF/plain text/Markdown with content sniffing. Nothing in
+  the chat is ever sent or approved without a click by the user; agents cannot drive the pane (`send` only
+  fills the input field, never submits).
 - **MCP server `latexterm mcp` (by design):** a stdio child process of an agent session that speaks to
   the same control socket — it adds no new listener and no new caller class. It narrows rather than
   widens what the CLI can do: no `force` close, never typing into the caller's own pane, `run_in_pane`
