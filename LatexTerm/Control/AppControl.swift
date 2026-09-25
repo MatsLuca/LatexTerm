@@ -62,8 +62,7 @@ enum AppControl {
                 : "Build: aktuell (\(clock(built)))")
         }
 
-        // Die Übersicht des Home-Bretts zählt nicht mit (sie entsteht von selbst).
-        let panes = ControlServer.shared.router.panes.filter { $0.kind != OverviewContent.kind }
+        let panes = ControlServer.shared.router.panes
         let agents = panes.filter { $0.runningAgent != nil }
         let working = panes.filter { $0.state == "working" }.count
         let boards = Set(panes.map { "\($0.windowID ?? "?")|\($0.tab ?? 0)" }).count

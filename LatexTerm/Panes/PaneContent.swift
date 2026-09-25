@@ -129,9 +129,6 @@ struct PaneArgsError: Error, CustomStringConvertible {
 /// andere kommt aus `contents`.
 enum PaneKindRegistry {
     static let contents: [any PaneContent.Type] = [ScratchpadContent.self, WebContent.self, PreviewContent.self]
-    /// Arten, die die App selbst anlegt (Übersicht im Home-Brett): wiederherstellbar, aber nicht im Menü und nicht in
-    /// `pane-kinds` — ein Agent soll sie nicht als `open_<art>` angeboten bekommen.
-    static let internalContents: [any PaneContent.Type] = [OverviewContent.self]
 
     /// Alle Arten, die `new-pane --kind` kennt.
     static var kinds: [String] { ["terminal", "home"] + contents.map { $0.kind } }
@@ -160,7 +157,7 @@ enum PaneKindRegistry {
 
     /// App-Kachel dieser Art anlegen; Fehler mit Grund (unbekannte Art, falsche Args).
     static func makeAppPane(kind: String, args: [String: String], id: UUID = UUID()) throws -> AppPane {
-        guard let type = (contents + internalContents).first(where: { $0.kind == kind }) else {
+        guard let type = contents.first(where: { $0.kind == kind }) else {
             throw PaneArgsError("Unbekannte Kachelart „\(kind)“ — bekannt: \(kinds.joined(separator: ", "))")
         }
         return AppPane(content: try type.init(args: args), id: id)

@@ -60,7 +60,7 @@ struct SessionSnapshot: Codable, Equatable {
         var layout: LayoutNode?
         /// Bretter (23.09.): von Mats gesetzter Name; nil = automatisch.
         var name: String?
-        /// Home-Brett (24.09.): Übersicht + Chef-Claude, links vor den Brettern, nicht mitgezählt; nil = normales Brett.
+        /// Home-Brett (24.09., wieder entfernt 25.09.): nur noch zum Wiedererkennen alter Stände — wird übersprungen.
         var home: Bool?
 
         init(panes: [PaneSnapshot], focused: Int? = nil, zoomed: Int? = nil,
@@ -453,7 +453,8 @@ struct OpenPanes {
 /// geholt hat, hängt das erste Fenster als Kacheln an — keine Session geht verloren, schlimmstenfalls die Grenze.
 struct RestoreQueue {
     private var windows: [SessionSnapshot.Window]
-    init(_ windows: [SessionSnapshot.Window]) { self.windows = windows }
+    /// Home-Bretter alter Stände (24.09.) kommen nicht wieder — die Art gibt es nicht mehr.
+    init(_ windows: [SessionSnapshot.Window]) { self.windows = windows.filter { $0.home != true } }
 
     var isEmpty: Bool { windows.isEmpty }
     var count: Int { windows.count }

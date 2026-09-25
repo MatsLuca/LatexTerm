@@ -26,7 +26,6 @@ run_test control-router LatexTerm/Control/ControlProtocol.swift LatexTerm/Contro
 run_test mcp-server LatexTerm/Control/ControlProtocol.swift LatexTerm/Control/PaneLayoutTree.swift LatexTermCLI/ControlClient.swift LatexTermCLI/MCPServer.swift
 run_test pane-layout LatexTerm/Control/PaneLayoutTree.swift LatexTerm/Layout/PaneLayoutEngine.swift
 run_test boards LatexTerm/Boards/BoardList.swift
-run_test overview LatexTerm/Overview/OverviewModel.swift
 run_test scratch-svg LatexTerm/Panes/Contents/ScratchSVG.swift
 run_test session-restore LatexTerm/SessionStore.swift LatexTerm/Control/ControlProtocol.swift LatexTerm/Control/PaneLayoutTree.swift LatexTerm/AgentSession.swift LatexTerm/AppRelaunch.swift
 python3 -m unittest discover -s scripts/tests -v

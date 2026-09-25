@@ -11,8 +11,6 @@ final class BoardStripView: NSView, NSViewToolTipOwner, NSTextFieldDelegate {
         var name: String
         var active: Bool
         var badge: PaneTabBarView.Badge?
-        /// Home-Brett (24.09.): ganz links, Zeichen „⌂“ statt Name, nicht verschieb- und umbenennbar, ohne Nummer.
-        var isHome = false
     }
 
     static let height: CGFloat = 30
@@ -85,25 +83,20 @@ final class BoardStripView: NSView, NSViewToolTipOwner, NSTextFieldDelegate {
     /// Beschriftung und Textbreite je Eintrag, passend zu `maxWidth` (einmal je Zeichnen/Klick gerechnet).
     private func fitted() -> [(label: String, width: CGFloat)] {
         guard !items.isEmpty else { return [] }
-        let natural = items.map { Double(min(Self.maxNameWidth, Self.measure(label(for: $0)))) }
+        let natural = items.map { Double(min(Self.maxNameWidth, Self.measure($0.name))) }
         let active = items.firstIndex { $0.active }
         let chrome = Double(Self.leadingInset + Self.plusWidth + 6) + Double(Self.spacing) * Double(items.count)
             + Double(Self.itemChrome) * Double(items.count)
         let available = Double(maxWidth) - chrome
         if let widths = BoardStripFit.names(natural: natural, active: active, available: available,
                                             minWidth: Double(Self.minNameWidth)) {
-            return items.indices.map { (label(for: items[$0]), CGFloat(widths[$0])) }
+            return items.indices.map { (items[$0].name, CGFloat(widths[$0])) }
         }
-        let numbers = items.indices.map { items[$0].isHome ? Self.homeGlyph : "\($0 + 1 - homeCount)" }
+        let numbers = items.indices.map { "\($0 + 1)" }
         let widths = BoardStripFit.numbers(natural: natural, numberWidths: numbers.map { Double(Self.measure($0)) },
                                            active: active, available: available, minWidth: Double(Self.minNameWidth))
-        return items.indices.map { ($0 == active ? label(for: items[$0]) : numbers[$0], CGFloat(widths[$0])) }
+        return items.indices.map { ($0 == active ? items[$0].name : numbers[$0], CGFloat(widths[$0])) }
     }
-
-    private static let homeGlyph = "⌂"
-    private func label(for item: Item) -> String { item.isHome ? Self.homeGlyph : item.name }
-    /// 1, wenn vorn das Home-Brett steht — Nummern und Zuglücken zählen erst dahinter.
-    private var homeCount: Int { items.first?.isHome == true ? 1 : 0 }
 
     private func itemRects() -> [NSRect] { itemRects(fitted()) }
 
@@ -265,17 +258,17 @@ final class BoardStripView: NSView, NSViewToolTipOwner, NSTextFieldDelegate {
         let point = convert(event.locationInWindow, from: nil)
         pressed = target(at: point)
         pressPoint = point
-        if event.clickCount == 2, case .item(let i) = pressed, items.indices.contains(i), !items[i].isHome {
+        if event.clickCount == 2, case .item(let i) = pressed, items.indices.contains(i) {
             pressed = nil
             beginRename(items[i].id)
         }
     }
 
     override func mouseDragged(with event: NSEvent) {
-        guard case .item(let i) = pressed, let start = pressPoint, items.count > 1 + homeCount, !items[i].isHome else { return }
+        guard case .item(let i) = pressed, let start = pressPoint, items.count > 1 else { return }
         let point = convert(event.locationInWindow, from: nil)
         guard drag != nil || hypot(point.x - start.x, point.y - start.y) >= Self.dragThreshold else { return }
-        let gap = max(homeCount, itemRects().filter { $0.midX < point.x }.count)
+        let gap = itemRects().filter { $0.midX < point.x }.count
         drag = (i, gap)
     }
 
@@ -369,9 +362,6 @@ final class BoardStripView: NSView, NSViewToolTipOwner, NSTextFieldDelegate {
         let index = Int(bitPattern: data)
         if index == 999 { return "Neues Brett (⇧⌘T)" }
         guard items.indices.contains(index - 1) else { return "" }
-        let item = items[index - 1]
-        if item.isHome { return "Home-Brett: Übersicht über alle Bretter  (⌃0)" }
-        let number = index - homeCount
-        return item.name + (number <= 9 ? "  (⌃\(number))" : "")
+        return items[index - 1].name + (index <= 9 ? "  (⌃\(index))" : "")
     }
 }

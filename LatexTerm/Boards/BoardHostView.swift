@@ -4,8 +4,6 @@ import AppKit
 enum BoardCommand {
     case new, close, next, previous, rename
     case select(Int)
-    /// ⌃0: Home-Brett (Übersicht) — legt es an, wenn es fehlt.
-    case home
     case newWindow
 }
 
@@ -55,23 +53,11 @@ final class BoardHostView: NSView {
     private var windowClosed = false
     private var stripRefreshQueued = false
 
-    // Home-Brett (24.09.2026, Plan claude-werkstatt `plans/home-brett_2026-09-24.md`): Übersicht über alle Bretter +
-    // Chef-Claude als verdeckter Reiter. Steht links vor den Brettern, zählt nicht mit (⌃1–9, Brett-Nummern, `tab`),
-    // hat ⌃0. Erscheint von selbst ab zwei Brettern und geht bei einem wieder.
-    private(set) var homeBoard: TerminalSplitView?
-    private var homeActive = false
-    /// Mats hat es geschlossen: kommt erst mit ⌃0 wieder oder nachdem die Bretter unter zwei gefallen sind.
-    private var homeDismissed = false
-    /// Beim Wiederherstellen kein automatisches Home-Brett — es kommt ggf. aus dem Snapshot.
-    private var restoring = false
-
     /// Bretter in Leisten-Reihenfolge.
     var ordered: [TerminalSplitView] {
         list.order.compactMap { id in boards.first { ObjectIdentifier($0) == id } }
     }
-    var activeBoard: TerminalSplitView? {
-        homeActive ? homeBoard : boards.first { ObjectIdentifier($0) == list.active }
-    }
+    var activeBoard: TerminalSplitView? { boards.first { ObjectIdentifier($0) == list.active } }
     /// Platz, den die Leiste in der Titelleiste belegt — die Chips rechts rechnen ihn ab.
     var stripWidth: CGFloat { stripAccessory?.view.frame.width ?? 0 }
 
@@ -82,19 +68,9 @@ final class BoardHostView: NSView {
         if group.isEmpty {
             addBoard(plan: nil, activate: true)
         } else {
-            restoring = true
-            // Das Home-Brett kommt als eigenes, die übrigen in Snapshot-Reihenfolge.
-            let regular = group.filter { $0.home != true }
-            if let home = group.first(where: { $0.home == true }) { makeHome(plan: home) }
-            for plan in regular { addBoard(plan: plan, activate: false, atEnd: true) }
-            if regular.isEmpty { addBoard(plan: nil, activate: true) }
-            restoring = false
-            if group.first(where: { $0.selected == true })?.home == true, let home = homeBoard {
-                activate(home)
-            } else {
-                let selected = regular.firstIndex { $0.selected == true } ?? 0
-                activate(ordered[min(selected, ordered.count - 1)])
-            }
+            for plan in group { addBoard(plan: plan, activate: false, atEnd: true) }
+            let selected = group.firstIndex { $0.selected == true } ?? 0
+            activate(ordered[min(selected, ordered.count - 1)])
             // Nur das erste Fenster öffnet die übrigen; Nachzügler finden die Schlange leer.
             if !Self.restoreStarted {
                 Self.restoreStarted = true
@@ -103,11 +79,11 @@ final class BoardHostView: NSView {
         }
 
         strip.onSelect = { [weak self] id in
-            guard let self, let board = self.board(for: id) else { return }
+            guard let self, let board = self.boards.first(where: { ObjectIdentifier($0) == id }) else { return }
             self.activate(board)
         }
         strip.onClose = { [weak self] id in
-            guard let self, let board = self.board(for: id) else { return }
+            guard let self, let board = self.boards.first(where: { ObjectIdentifier($0) == id }) else { return }
             self.close(board)
         }
         strip.onAdd = { [weak self] in self?.addBoard(plan: nil, activate: true) }
@@ -117,9 +93,7 @@ final class BoardHostView: NSView {
             self.refreshStrip()
         }
         strip.onMove = { [weak self] id, gap in
-            // Die Leiste zählt das Home-Brett mit, die Liste nicht.
-            let gap = gap - (self?.homeBoard == nil ? 0 : 1)
-            guard let self, gap >= 0, let index = self.list.moveIndex(for: id, gap: gap) else { return }
+            guard let self, let index = self.list.moveIndex(for: id, gap: gap) else { return }
             self.list.move(id, to: index)
             self.refreshStrip()
         }
@@ -167,7 +141,6 @@ final class BoardHostView: NSView {
 
     override func resizeSubviews(withOldSize oldSize: NSSize) {
         for board in boards { board.frame = bounds }
-        homeBoard?.frame = bounds
         if abs(bounds.width - oldSize.width) > 0.5 { refreshStrip() }
     }
 
@@ -183,22 +156,14 @@ final class BoardHostView: NSView {
         boards.append(board)
         list.add(ObjectIdentifier(board), activate: false, atEnd: atEnd)
         if activate || boards.count == 1 { self.activate(board) }
-        updateHomePresence()
         refreshStrip()
         return board
     }
 
-    private func board(for id: ObjectIdentifier) -> TerminalSplitView? {
-        if let homeBoard, ObjectIdentifier(homeBoard) == id { return homeBoard }
-        return boards.first { ObjectIdentifier($0) == id }
-    }
-
     func activate(_ board: TerminalSplitView) {
-        let isHome = board === homeBoard
-        guard isHome || boards.contains(where: { $0 === board }) else { return }
+        guard boards.contains(where: { $0 === board }) else { return }
         let old = activeBoard
-        homeActive = isHome
-        if !isHome { list.activate(ObjectIdentifier(board)) }
+        list.activate(ObjectIdentifier(board))
         if old !== board { old?.boardDidResignActive() }
         if old !== board || board.isHidden { board.boardDidBecomeActive() }
         refreshStrip()
@@ -206,7 +171,7 @@ final class BoardHostView: NSView {
 
     /// 1-basierte Position in der Leiste; nil, solange es nur ein Brett gibt (Steuerkanal: `tab`).
     func position(of board: TerminalSplitView) -> Int? {
-        guard boards.count > 1, board !== homeBoard else { return nil }
+        guard boards.count > 1 else { return nil }
         return list.position(of: ObjectIdentifier(board))
     }
 
@@ -233,7 +198,6 @@ final class BoardHostView: NSView {
         let moving = source.detachForMove(pane)
         target.adopt(moving, focus: activate)
         if activate { self.activate(target) }
-        updateHomePresence()
         refreshStrip()
         return target
     }
@@ -245,14 +209,12 @@ final class BoardHostView: NSView {
 
     /// × oder ⇧⌘W: sofort, ohne Rückfrage — was dort läuft, prüft Mats selbst (Entscheidung 23.09.).
     private func close(_ board: TerminalSplitView) {
-        if board === homeBoard { closeHome(dismiss: true); return }
         guard boards.contains(where: { $0 === board }) else { return }
         let wasActive = board === activeBoard
         if wasActive { board.boardDidResignActive() }
         list.remove(ObjectIdentifier(board))
         boards.removeAll { $0 === board }
         board.closeBoard()
-        updateHomePresence()
         guard let next = activeBoard else { window?.close(); return }
         if wasActive { next.boardDidBecomeActive() }
         refreshStrip()
@@ -263,8 +225,6 @@ final class BoardHostView: NSView {
         case .new: addBoard(plan: nil, activate: true)
         case .close: if let board = activeBoard { close(board) }
         case .next, .previous:
-            // Vom Home-Brett aus: das erste bzw. letzte Brett.
-            if homeActive, let board = command.isNext ? ordered.first : ordered.last { activate(board); return }
             guard let id = list.neighbor(command.isNext ? 1 : -1),
                   let board = boards.first(where: { ObjectIdentifier($0) == id }) else { NSSound.beep(); return }
             activate(board)
@@ -272,55 +232,9 @@ final class BoardHostView: NSView {
             let all = ordered
             guard all.indices.contains(n - 1) else { NSSound.beep(); return }
             activate(all[n - 1])
-        case .rename:
-            if let board = activeBoard, board !== homeBoard { strip.beginRename(ObjectIdentifier(board)) }
+        case .rename: if let board = activeBoard { strip.beginRename(ObjectIdentifier(board)) }
         case .newWindow: Self.openWindow?()
-        case .home:
-            if homeBoard == nil { homeDismissed = false; makeHome(plan: nil) }
-            if let homeBoard { activate(homeBoard) }
         }
-    }
-
-    // MARK: Home-Brett
-
-    /// Ab zwei Brettern da (außer Mats hat es geschlossen), bei weniger weg.
-    private func updateHomePresence() {
-        guard !restoring else { return }
-        if ordered.count < 2 {
-            homeDismissed = false
-            if homeBoard != nil { closeHome(dismiss: false) }
-            return
-        }
-        if homeBoard == nil, !homeDismissed { makeHome(plan: nil) }
-    }
-
-    @discardableResult
-    private func makeHome(plan: SessionSnapshot.Window?) -> TerminalSplitView {
-        if let homeBoard { return homeBoard }
-        let home = TerminalSplitView(plan: plan, empty: plan == nil)
-        home.boardHost = self
-        home.isHomeBoard = true
-        home.frame = bounds
-        home.isHidden = true
-        addSubview(home, positioned: .below, relativeTo: nil)
-        homeBoard = home
-        if !home.allPanes.contains(where: { $0.kind == OverviewContent.kind }) {
-            _ = try? home.addAppPane(kind: OverviewContent.kind, focus: false, placement: .own)
-        }
-        refreshStrip()
-        return home
-    }
-
-    private func closeHome(dismiss: Bool) {
-        guard let home = homeBoard else { return }
-        let wasActive = homeActive
-        if wasActive { home.boardDidResignActive() }
-        homeActive = false
-        homeBoard = nil
-        if dismiss { homeDismissed = true }
-        home.closeBoard()
-        if wasActive { activeBoard?.boardDidBecomeActive() }
-        refreshStrip()
     }
 
     // MARK: Leiste
@@ -347,11 +261,7 @@ final class BoardHostView: NSView {
 
     private func refreshStrip() {
         let active = activeBoard
-        let home = homeBoard.map { board in
-            BoardStripView.Item(id: ObjectIdentifier(board), name: "Home", active: board === active,
-                                badge: board === active ? nil : board.boardBadge, isHome: true)
-        }
-        strip.items = (home.map { [$0] } ?? []) + ordered.map { board in
+        strip.items = ordered.map { board in
             BoardStripView.Item(id: ObjectIdentifier(board), name: board.displayName, active: board === active,
                                 badge: board === active ? nil : board.boardBadge)
         }
@@ -377,13 +287,6 @@ final class BoardHostView: NSView {
         var windows: [SessionSnapshot.Window] = []
         for (group, host) in hosts.enumerated() {
             let active = host.activeBoard
-            if let home = host.homeBoard {
-                var snapshot = home.windowSnapshot()
-                snapshot.tabGroup = group
-                snapshot.selected = home === active
-                snapshot.home = true
-                if !snapshot.panes.isEmpty { windows.append(snapshot) }
-            }
             for board in host.ordered {
                 var snapshot = board.windowSnapshot()
                 guard !snapshot.panes.isEmpty else { continue }
@@ -400,7 +303,7 @@ final class BoardHostView: NSView {
     static func openPanes() -> OpenPanes {
         var open = OpenPanes()
         for host in live.compactMap(\.view) where host.window != nil && !host.windowClosed {
-            for board in host.boards + (host.homeBoard.map { [$0] } ?? []) {
+            for board in host.boards {
                 for entry in board.windowSnapshot().panes {
                     if let id = entry.id { open.ids.insert(id.uppercased()) }
                     if case .resume(_, let session, _, _) = RestoreStep(entry) { open.sessions.insert(session.lowercased()) }
@@ -447,80 +350,4 @@ private extension BoardCommand {
 struct BoardMoveError: Error, CustomStringConvertible {
     let description: String
     init(_ description: String) { self.description = description }
-}
-
-// MARK: - Übersicht (Home-Brett, 24.09.2026)
-
-extension BoardHostView: OverviewHost {
-    func overviewBoards() -> [OverviewBoard] {
-        ordered.enumerated().map { index, board in board.overviewBoard(number: index + 1) }
-    }
-
-    func overviewShowBoard(_ id: ObjectIdentifier) {
-        guard let board = boards.first(where: { ObjectIdentifier($0) == id }) else { return }
-        activate(board)
-        board.restoreFocus()
-    }
-
-    func overviewShowPane(_ paneID: String, board id: ObjectIdentifier) {
-        guard let board = boards.first(where: { ObjectIdentifier($0) == id }), let pane = board.pane(withID: paneID) else { return }
-        board.showPane(pane)
-    }
-
-    /// Chef = die Terminal-Kachel im Home-Brett (verdeckter Reiter hinter der Übersicht).
-    private var chefPane: TerminalPane? {
-        homeBoard?.allPanes.lazy.compactMap { $0 as? TerminalPane }.first
-    }
-
-    var overviewChef: OverviewChef? {
-        guard let chef = chefPane else { return nil }
-        let working = chef.sessionState == .working
-        let state: OverviewState = chef.sessionState == .awaitingInput ? .waiting : working ? .working : .idle
-        let say = working ? chef.currentPrompt.map { "„\($0)“" } : chef.lastSay
-        let starting = !chef.isStarted || chef.agentSession.identity == nil && chef.sessionState == .none && chef.lastSay == nil
-        return OverviewChef(state: state, say: say, starting: starting && !working)
-    }
-
-    func overviewShowChef() {
-        guard let home = homeBoard, let chef = chefPane else { return }
-        home.showPane(chef)
-    }
-
-    /// Erste Nachricht startet Chef-Claude verdeckt hinter der Übersicht, mit seiner Rolle im ersten Prompt (bleibt so
-    /// auch nach ⌥⌘R im Verlauf); danach geht alles über den Briefkasten wie an jeden Agenten.
-    func overviewAskChef(_ text: String, done: @escaping (String, Bool) -> Void) {
-        guard let home = homeBoard,
-              let overview = home.allPanes.first(where: { $0.kind == OverviewContent.kind }) else {
-            done("kein Home-Brett", false); return
-        }
-        if let chef = chefPane {
-            if chef.agentSession.identity != nil || chef.sessionState != .none {
-                AgentDelivery.deliver(text, toPane: chef.id.uuidString, agent: "claude", done: done)
-            } else if chef.isStarted {
-                // Session beendet, Shell steht noch: neu starten, diesmal wieder mit Rolle.
-                _ = chef.receive("claude " + Self.shellQuote(Self.chefBriefing(text)), enter: true, paste: false)
-                done("startet neu", true)
-            } else {
-                done("startet noch — gleich nochmal", false)
-            }
-            return
-        }
-        let chef = home.addBackgroundTerminal(behind: overview)
-        chef.launchQuietly(in: NSHomeDirectory() + "/Documents",
-                           command: "claude " + Self.shellQuote(Self.chefBriefing(text)), label: "Chef")
-        done("startet", true)
-    }
-
-    /// Rolle des Chefs — kurz; das Lagebild holt er sich selbst über den LatexTerm-MCP.
-    private static func chefBriefing(_ text: String) -> String {
-        "[Home-Brett] Du bist Chef-Claude im Home-Brett von LatexTerm: Mats führt von hier aus die Agenten in den "
-            + "anderen Brettern (Feld tab in `panes`). Lagebild per MCP latexterm `panes`, Fragen an eine Session per "
-            + "`ask_session`, Warten per `wait_session`. Regeln: antworte knapp — dein erster Satz erscheint als Band in "
-            + "der Übersicht, also das Wichtigste zuerst; je Brett höchstens ein Satz. Delegiere nur, was Mats dir "
-            + "aufträgt; schließe keine fremden Kacheln, öffne keine neuen ohne Auftrag. Mats: " + text
-    }
-
-    private static func shellQuote(_ s: String) -> String {
-        "'" + s.replacingOccurrences(of: "\n", with: " ").replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
 }

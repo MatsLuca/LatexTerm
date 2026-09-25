@@ -56,10 +56,9 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     private(set) var sessionState: SessionState = .none {
         didSet {
             guard sessionState != oldValue else { return }
-            stateSince = Date()
             // Session vorbei/unbekannt → kein veralteter Tool-Name beim nächsten Start.
             if sessionState == .none { statusDetail = nil; turnStartedAt = nil; turnSteps = 0 }
-            if sessionState == .working { turnSummary = nil; openQuestion = nil }
+            if sessionState == .working { turnSummary = nil }
             updateStatusBadge()
             host?.paneStyleChanged(self)
         }
@@ -86,24 +85,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     private(set) var agentSession = AgentSession()
     private var sessionOwnerGroup: pid_t?
     private var sessionWatch: Timer?
-    var agentName: String { agentSession.identity?.name ?? "Claude" }
-
-    // MARK: Für die Übersicht im Home-Brett (24.09.2026)
-
-    /// Seit wann der Zustand gilt (wartet seit 2 min, arbeitet seit 4 min).
-    private(set) var stateSince = Date()
-    /// Letzter Satz des Agenten, Klartext: Antwort-Anfang am Turn-Ende, bei „braucht dich“ die Frage.
-    private(set) var lastSay: String?
-    /// Frage, mit der die letzte Antwort endete (Bridge-Feld `q`) — bleibt offen, bis der nächste Turn beginnt.
-    private(set) var openQuestion: String?
-    /// Wie der letzte Turn endete: "answer" | "error" | "refusal" | "aborted"; nil = noch keiner.
-    private(set) var lastOutcome: String?
-    /// Prompt des laufenden Turns (Anfang, von der Bridge).
-    var currentPrompt: String? { turnPrompt }
-    /// Ungesehenes Turn-Ende (dieselbe Wahrheit wie das Reiter-Abzeichen „Ergebnis“).
-    var hasUnseenOutcome: Bool { turnSummary != nil && sessionState == .none }
-    /// Wartet auf eine Freigabe (Hook „input“), nicht bloß auf den nächsten Prompt.
-    var awaitsPermission: Bool { sessionState == .awaitingInput }
+    private var agentName: String { agentSession.identity?.name ?? "Claude" }
     /// Nachklang nach Turn-Ende („✓ fertig · 1:42 · 7 Schritte"): bleibt, bis jemand hingesehen
     /// hat (Kachel beobachtet + 6 s), höchstens 10 min. Sichtbar nur bei `sessionState == .none`.
     private struct TurnSummary {
@@ -290,13 +272,6 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         (container.window?.firstResponder as? NSView)?.isDescendant(of: container) ?? false
     }
     private var takesFocus: Bool { !quietLaunch || ownsFocus }
-
-    /// Start ohne Fokus-Klau in einer verdeckten Kachel (Chef-Claude im Home-Brett): wie `launch`, aber Vorhang und
-    /// Terminal nehmen die Tastatur nicht.
-    func launchQuietly(in directory: String, command: String, label: String, accentName: String? = nil) {
-        quietLaunch = true
-        launch(in: directory, command: command, label: label, accentName: accentName)
-    }
 
     /// Home → Terminal: Shell in `directory` starten und `command` tippen (Kernel puffert,
     /// die Shell liest es nach dem Prompt — gleicher Pfad wie `new-pane --exec`).
@@ -787,7 +762,6 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
             lastHookStatusAt = Date()
             sessionState = .awaitingInput
             statusDetail = hook.detail
-            lastSay = AttentionNote.agentMessage(hook.detail) ?? lastSay
             requestAttention(title: "\(agentName) braucht dich", body: AttentionNote.agentMessage(hook.detail))
         case "done":
             lastHookStatusAt = Date()
@@ -797,7 +771,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
             turnStartedAt = nil; turnSteps = 0; turnPrompt = nil
             sessionState = .none           // räumt statusDetail im didSet mit ab
             finishTurn(reason: hook.fields["r"] ?? "answer", seconds: seconds, steps: steps,
-                       answer: hook.fields["a"], question: hook.fields["q"])
+                       answer: hook.fields["a"])
         case "ready":
             // SessionStart-Hook: Session steht, wartet auf die erste Eingabe. Hebt nur den
             // Home-Vorhang (launch) — kein Zustand, keine Pille, keine Notification. Erneuert
@@ -835,7 +809,6 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         sessionWatch?.invalidate(); sessionWatch = nil; sessionOwnerGroup = nil
         turnSummary = nil; turnPrompt = nil; turnStartedAt = nil; turnSteps = 0
         sessionState = .none; statusDetail = nil; bridgeSeen = false; lastHookStatusAt = nil
-        lastSay = nil; lastOutcome = nil; openQuestion = nil
         launchReady = false
         // A former Codex pane remains free of Claude heuristics until a Claude hook identifies it.
         if wasCodex { usesClaudeIntegration = false }
@@ -847,10 +820,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     /// bleibt stumm, Fertig unter 2 s (Slash-Command, Einzeiler) auch. Fehler melden immer.
     /// Banner ohne Prompt-Zitat (war oft `<task-notification>` o. ä.) und ohne Schrittzahl: Titel, Ordner
     /// mit Dauer, erster Satz der Antwort.
-    private func finishTurn(reason: String, seconds: Double, steps: Int, answer: String?, question: String? = nil) {
-        lastOutcome = reason
-        openQuestion = AttentionNote.summary(question, max: 220)
-        lastSay = AttentionNote.summary(answer, max: 220)
+    private func finishTurn(reason: String, seconds: Double, steps: Int, answer: String?) {
         let theme = ThemeStore.shared.theme
         let clock = Self.clock(seconds)
         let stepsPart = steps > 0 ? " · " + Self.stepsText(steps) : ""

@@ -230,8 +230,6 @@ final class TerminalSplitView: NSView {
     var isFrontBoard: Bool { isActiveBoard && window?.isKeyWindow == true }
     /// Von Mats gesetzter Name; nil = automatisch (`displayName`).
     var customName: String?
-    /// Home-Brett (24.09.): Übersicht + Chef-Claude; heißt immer „Home“.
-    var isHomeBoard = false
     /// Zuletzt fokussierte Kachel — bekommt die Tastatur zurück, wenn das Brett wieder nach vorn kommt.
     private weak var lastFocused: (any Pane)?
 
@@ -245,7 +243,6 @@ final class TerminalSplitView: NSView {
 
     /// Name in der Brett-Leiste.
     var displayName: String {
-        if isHomeBoard { return "Home" }
         if let customName, !customName.isEmpty { return customName }
         let infos = displayPanes.map { info(for: $0) }
         return BoardName.automatic(agentDirectories: infos.compactMap { $0.agent != nil ? $0.cwd : nil },
@@ -542,10 +539,6 @@ final class TerminalSplitView: NSView {
             // Terminal startet …): zurück ins vordere Brett — sonst tippt Mats ins Unsichtbare (Live-Befund 23.09.).
             if !isActiveBoard, let front = boardHost?.activeBoard, front !== self {
                 DispatchQueue.main.async { front.restoreFocus() }
-            } else if focused.container.isHidden {
-                // Ebenso ein verdeckter Reiter (Chef-Claude hinter der Übersicht lädt Home und greift zur Tastatur):
-                // Tastatur an die Kachel vorn am Platz.
-                DispatchQueue.main.async { [weak self] in self?.keepFocusVisible() }
             } else {
                 lastFocused = focused
             }
@@ -2097,88 +2090,4 @@ extension NSColor {
             && abs(a.blueComponent - b.blueComponent) < eps
             && abs(a.alphaComponent - b.alphaComponent) < eps
     }
-}
-
-// MARK: - Übersicht im Home-Brett (24.09.2026)
-
-extension TerminalSplitView {
-    /// Karte dieses Bretts für die Übersicht: Miniatur aus der echten Anordnung (Ortsgedächtnis), Agenten mit Zustand
-    /// und letztem Satz. Verdeckte Reiter fehlen in der Miniatur, ihre Agenten zählen trotzdem.
-    func overviewBoard(number: Int) -> OverviewBoard {
-        let root = effectiveLayout()
-        let slots = root.map { LayoutGeometry.layout($0, in: bounds, gap: Self.gap, tabBarHeight: Self.tabBarHeight).slots } ?? []
-        let W = max(bounds.width, 1), H = max(bounds.height, 1)
-        let ordered = displayPanes
-        let agentIDs = Set(ordered.compactMap { pane in info(for: pane).runningAgent != nil ? pane.id.uuidString : nil })
-        var agents: [OverviewAgent] = []
-        var cells: [OverviewCell] = []
-        let agentPanes = ordered.filter { agentIDs.contains($0.id.uuidString) }
-        for pane in ordered {
-            let paneInfo = info(for: pane)
-            let terminal = pane as? TerminalPane   // Terminal-Cast: Session-Zustand und letzter Satz
-            var state = OverviewState.idle
-            if let agent = paneInfo.runningAgent, let terminal {
-                state = Self.overviewState(terminal)
-                let say: String?
-                switch state {
-                case .working: say = terminal.currentPrompt.map { "an „\($0)“" } ?? terminal.lastSay
-                case .waiting: say = terminal.awaitsPermission ? terminal.lastSay : terminal.openQuestion ?? terminal.lastSay
-                default: say = terminal.lastSay
-                }
-                let base = agent == "codex" ? "Codex" : "Claude"
-                let name = agentPanes.count > 1
-                    ? base + " · " + ((pane.currentDirectory ?? "") as NSString).lastPathComponent
-                    : base
-                let opener = pane.openedBy.flatMap { UUID(uuidString: $0) }?.uuidString
-                agents.append(OverviewAgent(paneID: pane.id.uuidString, name: name, agent: agent, state: state, say: say,
-                                            since: terminal.stateSince, permission: terminal.awaitsPermission,
-                                            isWorker: opener.map { agentIDs.contains($0) } ?? false))
-            }
-            guard let slot = slots.first(where: { $0.pane == pane.id.uuidString }), !slot.hidden else { continue }
-            let r = slot.rect
-            let label: String
-            if let agent = paneInfo.runningAgent { label = agent == "codex" ? "Codex" : "Claude" }
-            else if pane.kind == "terminal" { label = paneInfo.foreground ?? "Shell" }
-            else { label = pane.kind == "home" ? "Home" : pane.tabTitle }
-            cells.append(OverviewCell(paneID: pane.id.uuidString,
-                                      rect: CGRect(x: r.minX / W, y: r.minY / H, width: r.width / W, height: r.height / H),
-                                      agent: paneInfo.runningAgent, label: label, state: state,
-                                      accent: pane.effectiveAccent))
-        }
-        let accent = agentPanes.first?.effectiveAccent ?? ordered.first?.effectiveAccent ?? ThemeStore.shared.accentColor
-        return OverviewBoard(id: ObjectIdentifier(self), number: number, name: displayName, accent: accent,
-                             cells: cells, agents: agents)
-    }
-
-    /// Zustand für die Übersicht: Freigabe/offene Frage = wartet, Fehler, ungesehenes Ergebnis, arbeitet, ruhig.
-    private static func overviewState(_ terminal: TerminalPane) -> OverviewState {
-        switch terminal.sessionState {
-        case .awaitingInput: return .waiting
-        case .working: return .working
-        case .none: break
-        }
-        if terminal.openQuestion != nil { return .waiting }
-        guard terminal.hasUnseenOutcome else { return .idle }
-        switch terminal.lastOutcome {
-        case "error", "refusal": return .error
-        case "aborted": return .idle
-        default: return .outcome
-        }
-    }
-
-    /// Kachel dieses Bretts nach ID (Übersicht: Antwort an einen Agenten, Chef-Kachel).
-    func pane(withID id: String) -> (any Pane)? {
-        panes.first { $0.id.uuidString == id.uppercased() }
-    }
-
-    /// Alle Kacheln dieses Bretts (Home-Brett: Übersicht und Chef finden).
-    var allPanes: [any Pane] { panes }
-
-    /// Neue Kachel verdeckt hinter `anchor` (Chef-Claude hinter der Übersicht), ohne Fokus.
-    func addBackgroundTerminal(behind anchor: any Pane) -> TerminalPane {
-        addPane(home: true, focus: false, placement: .background(anchor.id))
-    }
-
-    /// Kachel (fensterübergreifend über den Router nicht nötig — sie steht hier) zeigen: Brett nach vorn, Fokus.
-    func showPane(_ pane: any Pane) { focusPane(pane) }
 }
