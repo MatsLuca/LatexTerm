@@ -259,12 +259,36 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
 
     /// Neustart mit Kacheln: diese Home-Kachel setzt die Session fort, sobald Home seine Daten hat —
     /// über „Weiter“, also mit demselben Befehl, derselben Farbe und demselben Vorhang wie der Klick.
+    /// Reihenfolge beim Neustart: Kacheln des sichtbaren Bretts starten sofort, verdeckte warten, bis
+    /// die sichtbaren stehen (höchstens 8 s) — sechs gleichzeitige Claude-Starts kosteten jedem 2,5–3,3 s
+    /// statt ~1 s (Messung 25.09.). Die Ausführung verschiebt sich um einen Runloop-Takt, damit das
+    /// Brett schon eingehängt ist, wenn Sichtbarkeit geprüft wird.
     func resumeSession(_ request: HomePaneView.PendingResume) {
-        guard let homeView, !isStarted else { return }
+        guard homeView != nil, !isStarted else { return }
         quietLaunch = true
+        deferredResume = request
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            if self.isOnScreen { Self.visibleLaunches[self.id] = Date() }
+            self.resumeWhenFree(since: Date())
+        }
+    }
+    private func resumeWhenFree(since: Date) {
+        guard let request = deferredResume, let homeView, !isStarted else { deferredResume = nil; return }
+        let busy = Self.visibleLaunches.contains { $0.key != id && Date().timeIntervalSince($0.value) < 12 }
+        guard Self.visibleLaunches[id] != nil || isOnScreen || !busy || Date().timeIntervalSince(since) > 8 else {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.resumeWhenFree(since: since) }
+            return
+        }
+        deferredResume = nil
         homeView.resumeWhenLoaded(request)
     }
-    var hasPendingResume: Bool { homeView?.hasPendingResume ?? false }
+    /// Fortsetzung, die auf den Start der sichtbaren Kacheln wartet.
+    private var deferredResume: HomePaneView.PendingResume?
+    /// Laufende Starts auf dem sichtbaren Brett (Kachel-ID → Beginn); verdeckte Fortsetzungen warten darauf.
+    private static var visibleLaunches: [UUID: Date] = [:]
+    private var isOnScreen: Bool { container.window != nil && !container.isHiddenOrHasHiddenAncestor }
+    var hasPendingResume: Bool { deferredResume != nil || (homeView?.hasPendingResume ?? false) }
     /// Start ohne Fokus-Klau (Neustart: mehrere Kacheln decken nacheinander auf): Vorhang und
     /// Terminal nehmen den Fokus nur, wenn er schon in dieser Kachel liegt.
     private var quietLaunch = false
@@ -358,21 +382,31 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         // hängen unten die Vorhang-Zeit (bis reveal, Grund) an dasselbe Log.
         let t0 = Int(Date().timeIntervalSince1970 * 1000)
         launchReady = false
-        view.send(txt: "MATS_START_T0=\(t0) " + command + "\r")
+        readySignalAt = nil; readyTransitMs = nil
+        // Exportiert statt als Zuweisung vor dem Befehl: beim Fortsetzen steht `projekte color …;` vorn,
+        // eine Zuweisung gälte nur dafür und der Start-Timer verlöre den Tastendruck. Nach dem Ende weg.
+        view.send(txt: "export MATS_START_T0=\(t0); " + command + "; unset MATS_START_T0\r")
         let started = Date()
+        var boxAt: TimeInterval?
         launchTimer?.invalidate()
-        launchTimer = Timer.scheduledTimer(withTimeInterval: 0.1, repeats: true) { [weak self] t in
+        launchTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] t in
             guard let self else { t.invalidate(); return }
-            // `status=ready` aus dem SessionStart-Hook ist das eigentliche Signal; die passive
-            // Grid-Erkennung (sessionState) bleibt Fallback, dann harter Timeout.
-            let ready = self.launchReady || self.sessionState != .none
+            if boxAt == nil, self.claudeInputBoxVisible() { boxAt = Date().timeIntervalSince(started) }
+            // `ready` der Bridge ist das Signal, aber aufgedeckt wird erst, wenn die Eingabebox auch im
+            // Grid steht: ohne Last kam das Signal 100–150 ms vor der gezeichneten Box (Messung 25.09.),
+            // der Vorhang gab kurz einen halbfertigen Bildschirm frei. Sicherung: Signal + 0,4 s.
+            // Die passive Grid-Erkennung (sessionState) bleibt Fallback, dann harter Timeout.
+            let signalled = self.launchReady && (boxAt != nil
+                || self.readySignalAt.map { Date().timeIntervalSince($0) > 0.4 } ?? true)
+            let ready = signalled || self.sessionState != .none
             let timeout = Date().timeIntervalSince(started) > 12
             guard ready || timeout else { return }
             t.invalidate()
             self.launchTimer = nil
             let bereit = Date().timeIntervalSince(started)
+            if boxAt == nil, self.claudeInputBoxVisible() { boxAt = bereit }
             if ready { Self.recordLaunch(bereit) }
-            let reason = self.launchReady ? "signal" : (ready ? "passiv" : "timeout")
+            let reason = self.launchReady ? (boxAt != nil ? "signal+box" : "signal+frist") : (ready ? "passiv" : "timeout")
             // Folgebefehle (z. B. /color, /compact) nur bei echter Session. Runde 26: der Vorhang
             // bleibt liegen, bis der letzte Folgebefehl abgeschickt ist — vorher landete Mats'
             // erstes Tippen mitten im noch offenen „/color …" („cyanist es"). Text in die
@@ -381,13 +415,19 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
             let queue = ready ? followUps.filter { !$0.isEmpty } : []
             guard !queue.isEmpty else {
                 self.revealTerminal(success: ready)
-                Self.startTimerLog(t0: t0, ready: bereit, curtain: bereit, reason: reason)
+                self.logWhenBoxKnown(t0: t0, started: started, box: boxAt) { box in
+                    Self.startTimerLog(t0: t0, ready: bereit, curtain: bereit, reason: reason, transit: self.readyTransitMs, box: box)
+                }
                 return
             }
             self.sendFollowUps(queue) { [weak self] in
                 guard let self else { return }
                 self.revealTerminal(success: true)
-                Self.startTimerLog(t0: t0, ready: bereit, curtain: Date().timeIntervalSince(started), reason: reason)
+                let curtain = Date().timeIntervalSince(started)
+                self.logWhenBoxKnown(t0: t0, started: started, box: boxAt) { box in
+                    Self.startTimerLog(t0: t0, ready: bereit, curtain: curtain, reason: reason,
+                                       transit: self.readyTransitMs, box: box)
+                }
             }
         }
     }
@@ -419,6 +459,37 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     }
     /// `status=ready` vom SessionStart-Hook (settings.json) ist angekommen — Session steht.
     private var launchReady = false
+    /// Diagnose: Stand die Box beim Aufdecken noch nicht, bis zu 3 s weiter nachsehen (alle 50 ms) und
+    /// erst dann loggen — `box` > `vorhang` hieße: Vorhang zu früh gefallen.
+    private func logWhenBoxKnown(t0: Int, started: Date, box: TimeInterval?, log: @escaping (TimeInterval?) -> Void) {
+        guard box == nil else { log(box); return }
+        let revealAt = Date()
+        Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] t in
+            let elapsed = Date().timeIntervalSince(started)
+            let seen = self?.claudeInputBoxVisible() ?? false
+            guard seen || self == nil || Date().timeIntervalSince(revealAt) > 3 else { return }
+            t.invalidate()
+            log(seen ? elapsed : nil)
+        }
+    }
+    /// Claudes Eingabebox sichtbar: eine Zeile mit `❯` am Anfang zwischen zwei Linien aus `─`
+    /// (frühere Prompts im Verlauf tragen auch `❯`, aber keine Linien drumherum).
+    private func claudeInputBoxVisible() -> Bool {
+        let term = view.getTerminal()
+        func text(_ row: Int) -> String {
+            guard row >= 0, row < term.rows, let line = term.getLiveLine(row: row) else { return "" }
+            var out = ""
+            for col in 0..<min(term.cols, 12) { out.append(line[col].getCharacter()) }
+            return out
+        }
+        for row in stride(from: term.rows - 2, through: 1, by: -1) where text(row).hasPrefix("❯") {
+            if text(row - 1).hasPrefix("──"), text(row + 1).hasPrefix("──") { return true }
+        }
+        return false
+    }
+    /// Diagnose: Ankunft des `ready` und seine Laufzeit von der Bridge bis hier (ms), fürs Start-Timer-Log.
+    private var readySignalAt: Date?
+    private var readyTransitMs: Int?
     /// Claude-Code-Farbname dieser Kachel (Runde 25) — Kollisionsschutz der Split-View liest ihn.
     private(set) var accentName: String?
 
@@ -440,13 +511,13 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     }
 
     /// Vorhang-Zeile ins Start-Timer-Log (gleiches Log wie hooks/start-timer.sh; t0 verknüpft beide).
-    private static func startTimerLog(t0: Int, ready: TimeInterval, curtain: TimeInterval, reason: String) {
+    private static func startTimerLog(t0: Int, ready: TimeInterval, curtain: TimeInterval, reason: String, transit: Int? = nil, box: TimeInterval? = nil) {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let dir = home.appendingPathComponent(".cache/mats-tools")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let url = dir.appendingPathComponent("start-timer.log")
         let f = DateFormatter(); f.dateFormat = "yyyy-MM-dd HH:mm:ss"
-        let line = "\(f.string(from: Date()))  t0=\(t0) bereit=\(Int(ready * 1000)) vorhang=\(Int(curtain * 1000)) grund=\(reason)  (LatexTerm: Tastendruck bis Session steht / bis Vorhang weg; Differenz = Folgebefehle)\n"
+        let line = "\(f.string(from: Date()))  t0=\(t0) bereit=\(Int(ready * 1000)) vorhang=\(Int(curtain * 1000)) grund=\(reason) unterwegs=\(transit.map(String.init) ?? "-") box=\(box.map { String(Int($0 * 1000)) } ?? "-")  (LatexTerm: Tastendruck bis Session steht / bis Vorhang weg; Differenz = Folgebefehle; unterwegs = Bridge-Sendung bis Annahme; box = Eingabebox im Grid, 0,1-s-Raster)\n"
         guard let data = line.data(using: .utf8) else { return }
         if let h = try? FileHandle(forWritingTo: url) { h.seekToEndOfFile(); h.write(data); try? h.close() }
         else { try? data.write(to: url) }
@@ -455,6 +526,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     /// Vorhang weg: Fokus sofort ans Terminal (Tasten landen ab jetzt bei Claude), die
     /// Home-Ansicht schließt ihren Ring (bei Erfolg) und blendet dann aus.
     private func revealTerminal(success: Bool) {
+        Self.visibleLaunches[id] = nil
         guard let home = homeView else { return }
         let focus = takesFocus
         quietLaunch = false
@@ -778,6 +850,13 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
             // die Hook-Frist, damit der Grid-Rater der frischen Eingabe-Box nichts unterstellt.
             lastHookStatusAt = Date()
             launchReady = true
+            // Diagnose Start-Vorhang: wann kam das Signal an, wie lange war es unterwegs
+            // (`s` = Sendezeit der Bridge in ms; Differenz = Bridge-Prozess + Warten auf den Main-Thread).
+            readySignalAt = Date()
+            readyTransitMs = hook.fields["s"].flatMap { Double($0) }
+                .map { Int(Date().timeIntervalSince1970 * 1000 - $0) }
+            // Nicht auf den nächsten 0,1-s-Tick warten: Vorhang sofort prüfen.
+            launchTimer?.fire()
         case "closed":
             clearAgentSession()
         default:
@@ -1454,6 +1533,10 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         // `latexterm`-CLI ordnen sich darüber der richtigen Kachel zu.
         var env = Terminal.getEnvironmentVariables(termName: "xterm-256color")
         env.append("LATEXTERM_PANE_ID=\(id.uuidString)")
+        // CLI-Pfad aus dem eigenen Bundle: der Bridge-Mod spart sich damit beim Start die Suche
+        // (ein Shell-Prozess weniger vor `ready`, zählt beim Restore mehrerer Kacheln).
+        let cli = Bundle.main.bundleURL.appendingPathComponent("Contents/Helpers/latexterm").path
+        if FileManager.default.isExecutableFile(atPath: cli) { env.append("LATEXTERM_CLI=\(cli)") }
         // OSC-7-CWD-Meldung: /etc/zshrc lädt /etc/zshrc_$TERM_PROGRAM — als
         // "Apple_Terminal" bekommt jede zsh Apples update_terminal_cwd-Hook
         // (Basis für ⌘T-CWD-Erbe #8 und `list-panes`-CWD #28) ohne Eingriff in
