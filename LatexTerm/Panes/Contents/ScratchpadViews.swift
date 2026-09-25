@@ -636,7 +636,7 @@ final class ScratchpadCanvas: NSView {
         if tool == .eraser { beginErase(at: p); return }
         if tool == .cutter { beginCut(at: p); return }
         // Auf einer Karte oder einem Bild: ziehen verschiebt, Doppelklick bearbeitet die Karte (⌥ = trotzdem malen).
-        if !event.modifierFlags.contains(.option), let index = strokes.lastIndex(where: { ($0.card || $0.isImage) && $0.touches(p, radius: 0) }) {
+        if !event.modifierFlags.contains(.option), let index = strokes.lastIndex(where: { $0.card ? $0.cardGrabs(p) : $0.isImage && $0.touches(p, radius: 0) }) {
             if event.clickCount == 2, strokes[index].card { beginEditing(strokes[index]); return }
             beginObjectDrag(index, at: p)
             return
@@ -1076,7 +1076,7 @@ final class ScratchpadCanvas: NSView {
         let rect = card.cardRect
         let glyphs = card.liveGlyphs.filter { $0.rect.intersects(reach) }
         var cut: [ScratchCut] = glyphs.map { .chars($0.range) }
-        if cut.isEmpty, card.showsFrame, ScratchStroke.distanceToEdge(p, rect) <= r + 3 { cut = [ScratchCut(part: "frame")] }
+        if cut.isEmpty, card.frameTouches(p, radius: r) { cut = [ScratchCut(part: "frame")] }
         if cut.isEmpty, card.showsFill, rect.contains(p) { cut = [ScratchCut(part: "fill")] }
         guard !cut.isEmpty else { return }
         let live: ScratchStroke
@@ -1191,8 +1191,12 @@ final class ScratchpadCanvas: NSView {
                 color.withAlphaComponent(0.08).setFill()
                 frame.fill()
             }
-            switch info.frame?.lowercased() {
+            let textInk = palette[max(0, min(info.textColor ?? 0, palette.count - 1))]
+            switch stroke.frameStyle {
             case _ where !stroke.showsFrame: break
+            case "mark":
+                textInk.withAlphaComponent(0.55).setStroke()
+                stroke.markPath.stroke()
             case let style:
                 frame.lineWidth = style == "thick" ? 2.5 : stroke.width
                 if style == "dashed" { frame.setLineDash([5, 4], count: 2, phase: 0) }
@@ -1200,7 +1204,7 @@ final class ScratchpadCanvas: NSView {
                 frame.stroke()
             }
             let pad = ScratchStroke.cardPadding
-            let ink = palette[max(0, min(info.textColor ?? 0, palette.count - 1))]
+            let ink = textInk
             let content = NSMutableAttributedString(attributedString: info.attributed(text: text, color: ink))
             for range in stroke.erasedChars.rangeView where range.upperBound <= content.length {
                 content.addAttribute(.foregroundColor, value: NSColor.clear, range: NSRange(location: range.lowerBound, length: range.count))

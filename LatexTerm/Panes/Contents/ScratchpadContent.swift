@@ -509,9 +509,10 @@ enum ScratchLayer: String {
     case all, mats, claude, cards
 }
 
-/// Name und Aussehen einer Karte. Alles optional — nil heißt Terminal-Look: Monoschrift der App, Terminal-Vordergrund
-/// auf Terminal-Grund, dünner Rahmen; die Karte sieht aus wie ein ausgeschnittenes Stück Terminal. Agenten dürfen frei
-/// abweichen (Schrift, Größe, Farben, Rahmen), um zu gewichten oder zu gruppieren.
+/// Name und Aussehen einer Karte. Alles optional — nil heißt Terminal-Look: Monoschrift der App in Terminal-Vordergrund,
+/// linksbündig, ohne Rahmen und Fläche — nackter Text auf dem Papier wie Claude Codes Antworten im Terminal, nur ein
+/// leiser Strich links mit kurzem, rund abknickendem Fuß als Trenner (Mats, 24.09., Variante H4).
+/// Agenten dürfen frei abweichen (Schrift, Größe, Farben, Rahmen), um zu gewichten oder zu gruppieren.
 struct ScratchCard: Codable, Equatable {
     /// Stabiler Name („k3“), über den Agenten eine Karte verschieben, ändern, entfernen.
     var id: String?
@@ -524,16 +525,16 @@ struct ScratchCard: Codable, Equatable {
     var italic: Bool?
     /// Palettenindex der Schrift; nil = Tinte.
     var textColor: Int?
-    /// line (Standard) | dashed | thick | none.
+    /// mark (Standard: Strich links mit Fuß) | line | dashed | thick | none.
     var frame: String?
-    /// Fläche leicht in der Rahmenfarbe getönt (Standard true).
+    /// Fläche leicht in der Rahmenfarbe getönt (Standard false).
     var fill: Bool?
     /// left (Standard) | center | right.
     var align: String?
 
     static let defaultSize: CGFloat = 13
     static let fonts = ["mono", "system", "serif", "rounded"]
-    static let frames = ["line", "dashed", "thick", "none"]
+    static let frames = ["mark", "line", "dashed", "thick", "none"]
 
     func font(bold forceBold: Bool = false) -> NSFont {
         let size = max(8, min(size ?? Self.defaultSize, 72))
@@ -890,8 +891,31 @@ final class ScratchStroke: Codable {
         }
         return set
     }
-    var showsFill: Bool { (cardInfo?.fill ?? true) && !cuts.contains { $0.part == "fill" } }
-    var showsFrame: Bool { cardInfo?.frame?.lowercased() != "none" && !cuts.contains { $0.part == "frame" } }
+    var showsFill: Bool { (cardInfo?.fill ?? false) && !cuts.contains { $0.part == "fill" } }
+    var frameStyle: String { cardInfo?.frame?.lowercased() ?? "mark" }
+    var showsFrame: Bool { frameStyle != "none" && !cuts.contains { $0.part == "frame" } }
+
+    /// Trenner der Standardkarte: leiser Strich links auf Höhe des Textes, unten ein kurzer Fuß mit runder Ecke.
+    var markPath: NSBezierPath {
+        let rect = cardRect, pad = Self.cardPadding
+        let x = rect.minX + 1, top = rect.minY + pad.height - 1, bottom = rect.maxY - pad.height + 4
+        let path = NSBezierPath()
+        path.move(to: CGPoint(x: x, y: top))
+        path.line(to: CGPoint(x: x, y: bottom - 3))
+        path.curve(to: CGPoint(x: x + 3, y: bottom), controlPoint1: CGPoint(x: x, y: bottom - 1.3),
+                   controlPoint2: CGPoint(x: x + 1.3, y: bottom))
+        path.line(to: CGPoint(x: x + 6, y: bottom))
+        path.lineWidth = 1.5
+        path.lineCapStyle = .round
+        return path
+    }
+
+    /// Trifft ein Kreis um `p` den Rahmen bzw. den Trenner?
+    func frameTouches(_ p: CGPoint, radius r: CGFloat) -> Bool {
+        guard showsFrame else { return false }
+        if frameStyle == "mark" { return markPath.bounds.insetBy(dx: -r - 3, dy: -r - 3).contains(p) }
+        return Self.distanceToEdge(p, cardRect) <= r + 3
+    }
     /// Buchstaben, die noch da sind (nicht als Fleck radiert).
     var liveGlyphs: [(range: NSRange, rect: NSRect)] {
         let gone = erasedChars
@@ -905,9 +929,16 @@ final class ScratchStroke: Codable {
         let rect = cardRect
         guard rect.insetBy(dx: -r - 3, dy: -r - 3).contains(p), !isCut(p) else { return false }
         if showsFill, rect.contains(p) { return true }
-        if showsFrame, Self.distanceToEdge(p, rect) <= r + 3 { return true }
+        if frameTouches(p, radius: r) { return true }
         let reach = NSRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)
         return liveGlyphs.contains { $0.rect.intersects(reach) }
+    }
+
+    /// Greifen zum Verschieben/Bearbeiten: die ganze Karte, auch zwischen den Buchstaben einer nackten Karte —
+    /// radiert trifft nur, was noch Tinte ist (`cardTouches`).
+    func cardGrabs(_ p: CGPoint) -> Bool {
+        guard cardRect.contains(p), !isCut(p) else { return false }
+        return showsFill || showsFrame || !liveGlyphs.isEmpty
     }
 
     /// Abstand zum Rand eines Rechtecks (innen wie außen).

@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Changed
+- **Scratchpad cards (24.09.).** A card's default look is now plain text on the paper, like Claude Code's answers in
+  the terminal: app monospace in the terminal colour, no frame or fill, only a faint line on the left with a short
+  rounded foot as divider (`frame: mark`). Frames and fills stay available for cards that should stand out; a bare
+  card can still be grabbed anywhere inside it.
 - **Notifications (23.09.).** Banners read as title (what happened), subtitle (folder · duration) and one or two clean
   sentences from the answer — no quoted prompt, no Markdown or code, no mid-word cuts; Claude's English permission
   messages are translated. Build number bumped so Notification Center picks up the new app icon.
