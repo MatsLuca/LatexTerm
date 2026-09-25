@@ -269,8 +269,15 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         deferredResume = request
         DispatchQueue.main.async { [weak self] in
             guard let self else { return }
-            if self.isOnScreen { Self.visibleLaunches[self.id] = Date() }
-            self.resumeWhenFree(since: Date())
+            if self.isOnScreen {
+                Self.visibleLaunches[self.id] = Date()
+                self.resumeWhenFree(since: Date())
+            } else {
+                // Verdeckte erst nach einem Moment prüfen: die sichtbaren Kacheln melden sich im selben Takt an,
+                // stehen aber je nach Brett-Reihenfolge später in der Schlange.
+                let since = Date()
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in self?.resumeWhenFree(since: since) }
+            }
         }
     }
     private func resumeWhenFree(since: Date) {
@@ -287,7 +294,9 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     private var deferredResume: HomePaneView.PendingResume?
     /// Laufende Starts auf dem sichtbaren Brett (Kachel-ID → Beginn); verdeckte Fortsetzungen warten darauf.
     private static var visibleLaunches: [UUID: Date] = [:]
-    private var isOnScreen: Bool { container.window != nil && !container.isHiddenOrHasHiddenAncestor }
+    /// Auf dem vorderen Brett und nicht hinter einem Reiter. Ohne Fenster-Bedingung: beim Neustart hängen die Bretter
+    /// im ersten Takt noch an keinem Fenster (25.09.: alle Kacheln galten als verdeckt und starteten gleichzeitig).
+    private var isOnScreen: Bool { container.superview != nil && !container.isHiddenOrHasHiddenAncestor }
     var hasPendingResume: Bool { deferredResume != nil || (homeView?.hasPendingResume ?? false) }
     /// Start ohne Fokus-Klau (Neustart: mehrere Kacheln decken nacheinander auf): Vorhang und
     /// Terminal nehmen den Fokus nur, wenn er schon in dieser Kachel liegt.
