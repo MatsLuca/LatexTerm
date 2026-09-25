@@ -109,6 +109,7 @@ struct MyzelLaunch: Equatable {
     static func revoke(jobID: String, stateFolder: String) {
         guard isSafeID(jobID) else { return }
         try? FileManager.default.removeItem(atPath: stateFolder + "/zugang/" + jobID + ".mcp.json")
+        try? FileManager.default.removeItem(atPath: stateFolder + "/zugang/" + jobID + ".settings.json")
     }
 
     /// Server-ids: Präfix + `_` + Crockford-ULID (PROTOKOLL §4) — nichts, was einen Pfad verlassen könnte.

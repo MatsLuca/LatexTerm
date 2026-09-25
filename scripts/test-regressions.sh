@@ -34,4 +34,5 @@ run_test myzel-markdown LatexTerm/Panes/Contents/Myzel/MyzelMarkdown.swift
 run_test myzel-compose LatexTerm/Panes/Contents/Myzel/MyzelCompose.swift
 run_test myzel-jobs LatexTerm/Panes/Contents/Myzel/MyzelModel.swift LatexTerm/Panes/Contents/Myzel/MyzelJobs.swift
 run_test myzel-launch LatexTerm/Panes/Contents/Myzel/MyzelLaunch.swift LatexTerm/Panes/Contents/Myzel/MyzelConfig.swift
+run_test myzel-sandbox LatexTerm/Panes/Contents/Myzel/MyzelSandbox.swift LatexTerm/Panes/Contents/Myzel/MyzelJobs.swift LatexTerm/Panes/Contents/Myzel/MyzelModel.swift LatexTerm/Panes/Contents/Myzel/MyzelLaunch.swift LatexTerm/Panes/Contents/Myzel/MyzelConfig.swift
 python3 -m unittest discover -s scripts/tests -v

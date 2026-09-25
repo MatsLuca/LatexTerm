@@ -420,20 +420,27 @@ final class MyzelContent: PaneContent, MyzelTimelineDelegate {
     /// Terminal-Kachel direkt neben dieser (zweiter gleichzeitiger Agent als Reiter dahinter) und dort `claude` starten.
     private func startAgent(_ job: MyzelJob, client: MyzelClient, window: NSWindow) {
         guard let config else { return }
-        guard !job.isForeign else {
-            // Fremde Aufträge nur mit Sandbox-Profil (§8) — kommt mit dem nächsten Schritt.
-            return flash("Fremde Aufträge startet die Kachel erst mit Sandbox-Profil.")
-        }
+        // Fremder Auftrag: Umfang aus dem Zulassen (fehlt er, z. B. auf einem anderen Rechner zugelassen: nur Chat).
+        let scope: MyzelScope? = job.isForeign ? (scopes[job.id] ?? .chat) : nil
         Task { @MainActor [weak self] in
             do {
                 let data = try await client.post("/auftrag/\(job.id)/starten")
                 let reply = try JSONDecoder().decode(MyzelStartReply.self, from: data)
                 guard let self, reply.tokenLooksValid else { return }
-                let launch = try MyzelLaunch.prepare(MyzelLaunch.Inputs(
+                var input = MyzelLaunch.Inputs(
                     jobID: job.id, token: reply.token, server: client.server, stateFolder: Self.stateFolder,
-                    agentFolder: config.agentFolder, own: true, trigger: self.chat.displayName(job.ausloeser),
-                    after: MyzelLaunch.lastSeen(agentFolder: config.agentFolder)))
+                    agentFolder: config.agentFolder, own: scope == nil, trigger: self.chat.displayName(job.ausloeser),
+                    after: MyzelLaunch.lastSeen(agentFolder: config.agentFolder))
+                if let scope {
+                    // §8: Sandbox-Profil (schreiben nur im Auftragsordner, Netz nur Myzel, Sperrliste, Lese-Umfang).
+                    input.extraArgs = try MyzelSandbox.prepare(MyzelSandbox.Inputs(
+                        jobFolder: Self.stateFolder + "/auftraege/" + job.id, scope: scope, blocklist: config.blocklist,
+                        accessFolder: Self.stateFolder + "/zugang", serverHost: config.host,
+                        readTools: config.readTools), jobID: job.id)
+                }
+                let launch = try MyzelLaunch.prepare(input)
                 self.openAgentPane(for: job, launch: launch)
+                if let scope { self.flash("Sandbox: \(scope.label)", error: false) }
             } catch {
                 self?.flash("Starten: \(error)")
             }

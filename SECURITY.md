@@ -75,6 +75,16 @@ Please do not open a public issue with full exploit details before a fix is avai
   default app; the server only serves PNG/JPEG/WebP/PDF/plain text/Markdown with content sniffing. Nothing in
   the chat is ever sent or approved without a click by the user; agents cannot drive the pane (`send` only
   fills the input field, never submits).
+  **Starting an agent** (only on the user's click) opens a terminal pane and types a `claude` command there. The
+  per-job agent token is never on the command line: it sits in a 0600 MCP config under
+  `~/Library/Application Support/LatexTerm/myzel/zugang/` (0700), outside the job's working folder, and is deleted
+  when the job ends. For a job requested by the *other* person, the session gets a per-job Claude Code settings
+  file (`--settings`, `--strict-mcp-config`, `--permission-mode dontAsk`, `--no-chrome`): write only inside the job
+  folder, network for Bash only to the configured host (`strictAllowlist`, `allowUnsandboxedCommands: false`), no
+  WebFetch/WebSearch/browser, a blocklist denied for both built-in tools and Bash, and — unless the user chose
+  "free" when approving — `blockReadsOutsideWorkingDirectories`. Verified with canary files against Claude Code
+  2.1.283. Known residue: Bash may still write to the system temp directory (Claude Code sandbox default);
+  with no network beyond the chat host this is not an exfiltration path.
 - **MCP server `latexterm mcp` (by design):** a stdio child process of an agent session that speaks to
   the same control socket — it adds no new listener and no new caller class. It narrows rather than
   widens what the CLI can do: no `force` close, never typing into the caller's own pane, `run_in_pane`
