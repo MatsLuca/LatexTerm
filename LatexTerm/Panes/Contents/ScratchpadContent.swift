@@ -211,7 +211,9 @@ final class ScratchpadContent: PaneContent {
             "mats": ["count": canvas.count(.mats), "bounds": Self.rectOrNull(canvas.contentBounds(.mats))],
             "claude": ["count": canvas.count(.claude), "bounds": Self.rectOrNull(canvas.contentBounds(.claude))],
             "cards": canvas.cards.map { card in
+                let parts = card.cardParts
                 var entry: [String: Any] = ["id": card.cardInfo?.id ?? "", "text": card.text ?? "",
+                                            "parts": parts.map { ["text": $0.text, "bounds": Self.rect($0.rect)] as [String: Any] },
                                             "visible": card.visibleText ?? NSNull(),
                                             "author": card.isClaude ? "claude" : "mats", "bounds": Self.rect(card.bounds),
                                             "color": ScratchPalette.names[max(0, min(card.color, ScratchPalette.names.count - 1))]]
@@ -227,7 +229,8 @@ final class ScratchpadContent: PaneContent {
             "links": canvas.elements.compactMap { s -> [String: Any]? in
                 guard let link = s.link else { return nil }
                 let name = { (uid: String) in canvas.elements.first { $0.uid == uid }.map { $0.cardInfo?.id ?? "Bild" } ?? "?" }
-                return ["from": name(link.from), "to": name(link.to), "by": s.isClaude ? "claude" : "mats"]
+                return ["from": name(link.from), "to": name(link.to) + (link.route?.toPart.map { ".\($0)" } ?? ""),
+                        "by": s.isClaude ? "claude" : "mats"]
             },
             "images": canvas.elements.filter(\.isImage).map { ["bounds": Self.rect($0.bounds), "by": $0.isClaude ? "claude" : "mats",
                                                                "cut": !$0.cuts.isEmpty] as [String: Any] },
@@ -608,12 +611,13 @@ enum ScratchTool: String, Codable {
     case pen, marker, eraser, cutter
     /// Tippen (Mats, 25.09.): Klick setzt Text, der wie eine Karte Tinte ist (radierbar, verschiebbar, für Agenten sichtbar).
     case text
-    /// Kein Werkzeug (nach Fokusverlust, Mats 24.09.): Ziehen verschiebt Karten/Bilder oder die Fläche, malt nie.
+    /// Zeiger (V; nach Fokusverlust, Mats 24.09.): Ziehen verschiebt Karten/Bilder oder die Fläche, malt nie;
+    /// ⇧-Ziehen wählt mehrere aus, rechter Kartenrand zieht die Breite.
     case none
 
     var label: String {
         switch self {
-        case .none: "kein Werkzeug"
+        case .none: "Zeiger"
         case .pen: "Stift"
         case .marker: "Marker"
         case .text: "Text"
@@ -700,6 +704,8 @@ struct ScratchRoute: Codable, Equatable {
     var fromSide: String?
     var toSide: String?
     var via: [CGPoint]?
+    /// Ziel ist ein Absatz der Zielkarte (1-basiert, `k1.3`): der Pfeil endet an dessen Buchstaben, nicht am Kartenrand.
+    var toPart: Int?
 }
 
 /// Wessen Elemente: alle, nur die des Nutzers, nur die des Agenten, nur die Karten des Agenten.
@@ -729,6 +735,9 @@ struct ScratchCard: Codable, Equatable {
     var fill: Bool?
     /// left (Standard) | center | right.
     var align: String?
+    /// Breite von Hand gezogen oder vom Agenten gesetzt (26.09.): bleibt beim Bearbeiten stehen. Sonst folgt die
+    /// Breite dem Text (längste Zeile, beim Tippen bis an den sichtbaren Rand).
+    var fixedWidth: Bool?
 
     static let defaultSize: CGFloat = 13
     static let fonts = ["mono", "system", "serif", "rounded"]
@@ -1083,6 +1092,32 @@ final class ScratchStroke: Codable {
         return result
     }
 
+    /// Absätze der Karte (durch Leerzeilen getrennt; der Titel gehört zum ersten) mit dem Rechteck ihrer Buchstaben —
+    /// Agenten legen Karten und Pfeile an einzelne Punkte eines langen Tintenblocks (`k1.3`), nicht nur an den ganzen
+    /// Block (Mats, 26.09.). Leer bei weniger als zwei Absätzen.
+    var cardParts: [(text: String, rect: NSRect)] {
+        guard card, let info = cardInfo, let text else { return [] }
+        let full = info.attributed(text: text, color: .white).string as NSString
+        var ranges: [NSRange] = []
+        var open: NSRange?
+        full.enumerateSubstrings(in: NSRange(location: 0, length: full.length), options: .byLines) { line, range, _, _ in
+            if (line ?? "").trimmingCharacters(in: .whitespaces).isEmpty {
+                if let r = open { ranges.append(r); open = nil }
+            } else {
+                open = open.map { NSUnionRange($0, range) } ?? range
+            }
+        }
+        if let open { ranges.append(open) }
+        guard ranges.count >= 2 else { return [] }
+        let glyphs = liveGlyphs
+        return ranges.compactMap { range in
+            let rects = glyphs.filter { NSLocationInRange($0.range.location, range) }.map(\.rect)
+            guard let first = rects.first else { return nil }
+            let words = full.substring(with: range).components(separatedBy: .whitespacesAndNewlines).filter { !$0.isEmpty }
+            return (words.joined(separator: " "), rects.dropFirst().reduce(first) { $0.union($1) })
+        }
+    }
+
     /// Was von der Karte noch zu lesen ist (Titel + Text, radierte Buchstaben als „·“); nil = unversehrt.
     var visibleText: String? {
         guard card, !cuts.isEmpty, let text else { return nil }
@@ -1118,6 +1153,23 @@ final class ScratchStroke: Codable {
         path.curve(to: CGPoint(x: x + 3, y: bottom), controlPoint1: CGPoint(x: x, y: bottom - 1.3),
                    controlPoint2: CGPoint(x: x + 1.3, y: bottom))
         path.line(to: CGPoint(x: x + 6, y: bottom))
+        path.lineWidth = 1.5
+        path.lineCapStyle = .round
+        return path
+    }
+
+    /// Stamm-Geometrie des Trenners: x des Strichs, oberes Ende, Höhe des Fußes.
+    var stem: (x: CGFloat, top: CGFloat, bottom: CGFloat) {
+        let rect = cardRect, pad = Self.cardPadding
+        return (rect.minX + 1, rect.minY + pad.height - 1, rect.maxY - pad.height + 4)
+    }
+
+    /// Trenner ohne Fuß: der Stamm endet über der Ecke, weil dort ein Pfeil nach links weiterläuft (26.09.).
+    var stemPath: NSBezierPath {
+        let s = stem
+        let path = NSBezierPath()
+        path.move(to: CGPoint(x: s.x, y: s.top))
+        path.line(to: CGPoint(x: s.x, y: s.bottom - 10))
         path.lineWidth = 1.5
         path.lineCapStyle = .round
         return path
@@ -1205,14 +1257,15 @@ final class ScratchStroke: Codable {
     static let cardMaxWidth: CGFloat = 360
     static let cardMinWidth: CGFloat = 80
 
-    /// Breite für eine neue Karte: kurzer Text so schmal wie nötig, langer umbrochen auf `cardMaxWidth`.
-    static func cardWidth(for text: String, info: ScratchCard) -> CGFloat {
+    /// Breite für eine neue Karte: kurzer Text so schmal wie nötig, langer umbrochen auf `cardMaxWidth`
+    /// (beim Tippen `limit` = bis an den sichtbaren Rand).
+    static func cardWidth(for text: String, info: ScratchCard, limit: CGFloat = cardMaxWidth) -> CGFloat {
         let content = info.attributed(text: text, color: .white)
         var longest: CGFloat = 0
         (content.string as NSString).enumerateSubstrings(in: NSRange(location: 0, length: content.length), options: .byLines) { _, range, _, _ in
             longest = max(longest, content.attributedSubstring(from: range).size().width)
         }
-        return min(cardMaxWidth, max(cardMinWidth, (longest + 2 * cardPadding.width + 4).rounded(.up)))
+        return min(max(cardMinWidth, limit), max(cardMinWidth, (longest + 2 * cardPadding.width + 4).rounded(.up)))
     }
 
     static func cardSize(text: String, width: CGFloat, info: ScratchCard) -> NSSize {

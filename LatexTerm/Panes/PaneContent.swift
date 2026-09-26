@@ -149,7 +149,23 @@ enum PaneKindRegistry {
 
     /// Menüeinträge für App-Kacheln (Terminal und Home haben eigene Menüpunkte mit Kürzel).
     static var menuEntries: [(kind: String, displayName: String)] {
-        contents.map { ($0.kind, $0.displayName) }
+        contents.filter { !fileKinds.contains($0.kind) }.map { ($0.kind, $0.displayName) }
+    }
+
+    /// Kachelarten, die eine Datei zeigen: im Menü ein gemeinsamer Eintrag „Datei öffnen …“ (26.09.).
+    static let fileKinds: Set<String> = ["web", "preview"]
+    /// Pseudo-Art für `.latexTermNewAppPane`: erst Datei wählen, dann nach Endung web oder preview.
+    static let openFileKind = "datei"
+
+    /// „Datei öffnen …“: HTML → web, alles andere (PDF, Bild, Markdown, Office, Ordner) → preview. Abbrechen = nil.
+    static func openFile() -> (kind: String, args: [String: String])? {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.message = "HTML-Seite, PDF, Bild, Markdown, Dokument — oder ein Ordner mit Plots"
+        guard panel.runModal() == .OK, let url = panel.url else { return nil }
+        let web = ["html", "htm", "xhtml"].contains(url.pathExtension.lowercased())
+        return (web ? "web" : "preview", ["url": url.path])
     }
 
     /// Args für einen Menü-Start dieser Art (Dateidialog …); nil = abgebrochen oder unbekannt.

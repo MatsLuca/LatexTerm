@@ -139,7 +139,8 @@ enum ScratchLayout {
         for sa in fromSide.map({ [$0] }) ?? Side.allCases {
             for sb in toSide.map({ [$0] }) ?? Side.allCases {
                 let p0 = anchor(a, sa), p1 = anchor(b, sb)
-                let ways = via.isEmpty ? orthogonalCandidates(p0, sa, p1, sb) : [[p0] + via + [p1]]
+                var ways = via.isEmpty ? orthogonalCandidates(p0, sa, p1, sb) : [[p0] + via + [p1]]
+                if via.isEmpty, let line = straight(a, sa, b, sb) { ways.insert(line, at: 0) }
                 for way in ways {
                 let points = simplify(way)
                 // Zu kurz = kein Pfeil (Absturz 25.09. 22:07: liegen zwei Anker < 0,5 pt beieinander, schrumpft der Weg auf
@@ -163,6 +164,25 @@ enum ScratchLayout {
             }
         }
         return best?.route ?? fallback(a, b)
+    }
+
+    /// Zugewandte Kanten, die sich gegenüberstehen (Karte neben einem Absatz, 26.09.): gerade auf der Mitte der gemeinsamen
+    /// Höhe bzw. Breite statt Mitte-zu-Mitte mit Knick. nil = sie stehen sich nicht gegenüber (mindestens 6 pt gemeinsam).
+    static func straight(_ a: CGRect, _ sa: Side, _ b: CGRect, _ sb: Side) -> [CGPoint]? {
+        switch (sa, sb) {
+        case (.right, .left) where a.maxX < b.minX, (.left, .right) where b.maxX < a.minX:
+            let (lo, hi) = (max(a.minY, b.minY), min(a.maxY, b.maxY))
+            guard hi - lo >= 6 else { return nil }
+            let y = (lo + hi) / 2
+            return sa == .right ? [CGPoint(x: a.maxX, y: y), CGPoint(x: b.minX, y: y)] : [CGPoint(x: a.minX, y: y), CGPoint(x: b.maxX, y: y)]
+        case (.bottom, .top) where a.maxY < b.minY, (.top, .bottom) where b.maxY < a.minY:
+            let (lo, hi) = (max(a.minX, b.minX), min(a.maxX, b.maxX))
+            guard hi - lo >= 6 else { return nil }
+            let x = (lo + hi) / 2
+            return sa == .bottom ? [CGPoint(x: x, y: a.maxY), CGPoint(x: x, y: b.minY)] : [CGPoint(x: x, y: a.minY), CGPoint(x: x, y: b.maxY)]
+        default:
+            return nil
+        }
     }
 
     /// Kürzester sinnvoller Pfeil; alles darunter wird nicht gewählt.

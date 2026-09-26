@@ -341,13 +341,11 @@ struct LatexTermApp: App {
             // Kachel-Aktionen, die sonst nur als Taste existieren — Menü = Nachschlagewerk der
             // Kürzel. Einstellungen (Theme, Akzent, Zeilenabstand, Formelgröße …) stehen NICHT
             // hier, sondern nur in ⌘, (Menüs = Aktionen, Einstellungen = Einstellungen).
-            CommandMenu("Kachel") {
-                // Neue Kacheln: ⌘N Home (Projekt-Launcher), ⌘T Terminal (nackte Shell, CWD-Erbe),
-                // darunter die App-Kacheln aus der Registry — eine neue Art erscheint hier ohne
-                // Menü-Code. Die Tasten fängt die Kachel-Hülle (PaneContainerView.performKeyEquivalent);
-                // das Menü ist Schaufenster + Mausweg.
-                // Bretter (23.09.): eigene Leiste oben links statt nativer Tabs. ⌘T bleibt Terminal, ⌘W Kachel,
-                // ⌘1–9 Kachel n — Bretter bekommen ⇧⌘T/⇧⌘W, ⇧⌘[ ] und ⌃1–9; ⌃⇥/⌃⇧⇥ fängt die Kachel-Hülle.
+            // Menüs nach Ort (Mats, 26.09.): Brett = das Ganze im Fenster, Kachel = eine Kachel, Schrift und
+            // Formeln in „Darstellung“. Vorher stand alles in „Kachel“ (21 Einträge).
+            // Bretter (23.09.): eigene Leiste oben links statt nativer Tabs. ⌘T bleibt Terminal, ⌘W Kachel,
+            // ⌘1–9 Kachel n — Bretter bekommen ⇧⌘T/⇧⌘W, ⇧⌘[ ] und ⌃1–9; ⌃⇥/⌃⇧⇥ fängt die Kachel-Hülle.
+            CommandMenu("Brett") {
                 Button("Neues Brett") { boardCommand(.new) }
                     .keyboardShortcut("t", modifiers: [.command, .shift])
                 Button("Brett schließen") { boardCommand(.close) }
@@ -363,29 +361,50 @@ struct LatexTermApp: App {
                             .keyboardShortcut(KeyEquivalent(Character("\(n)")), modifiers: .control)
                     }
                 }
+                Divider()
+                // Kachel-Layout des Bretts: gezogene Trennlinien und Agenten-Anordnung verwerfen.
+                Button("Automatisch anordnen") { paneCommand(.rearrange) }
+                Divider()
                 Button("Neues Fenster") { boardCommand(.newWindow) }
                     .keyboardShortcut("n", modifiers: [.command, .option])
-                Divider()
-                Button("Neue Home-Kachel") {
-                    NotificationCenter.default.post(name: .latexTermNewHomePane, object: nil)
-                }
-                .keyboardShortcut("n", modifiers: .command)
-                Button("Neue Terminal-Kachel") { paneCommand(.split) }
-                    .keyboardShortcut("t", modifiers: .command)
-                ForEach(PaneKindRegistry.menuEntries, id: \.kind) { entry in
-                    Button(entry.displayName) {
-                        NotificationCenter.default.post(name: .latexTermNewAppPane, object: nil,
-                                                        userInfo: ["kind": entry.kind])
+            }
+            CommandMenu("Kachel") {
+                // Neue Kacheln: ⌘N Home (Projekt-Launcher), ⌘T Terminal (nackte Shell, CWD-Erbe),
+                // darunter die App-Kacheln aus der Registry — eine neue Art erscheint hier ohne
+                // Menü-Code. Dateikacheln (web, preview) teilen sich „Datei öffnen …“, die Endung wählt die Art.
+                // Die Tasten fängt die Kachel-Hülle (PaneContainerView.performKeyEquivalent);
+                // das Menü ist Schaufenster + Mausweg.
+                Menu("Neue Kachel") {
+                    Button("Home") {
+                        NotificationCenter.default.post(name: .latexTermNewHomePane, object: nil)
+                    }
+                    .keyboardShortcut("n", modifiers: .command)
+                    Button("Terminal") { paneCommand(.split) }
+                        .keyboardShortcut("t", modifiers: .command)
+                    ForEach(PaneKindRegistry.menuEntries, id: \.kind) { entry in
+                        Button(entry.displayName) {
+                            NotificationCenter.default.post(name: .latexTermNewAppPane, object: nil,
+                                                            userInfo: ["kind": entry.kind])
+                        }
                     }
                 }
+                Button("Datei öffnen …") {
+                    NotificationCenter.default.post(name: .latexTermNewAppPane, object: nil,
+                                                    userInfo: ["kind": PaneKindRegistry.openFileKind])
+                }
+                .keyboardShortcut("o", modifiers: .command)
                 Divider()
                 Button("Zoomen / Zoom beenden") { paneCommand(.zoom) }
                     .keyboardShortcut(.return, modifiers: .command)
-                // Kachel-Layout: gezogene Trennlinien und Agenten-Anordnung verwerfen.
-                Button("Automatisch anordnen") { paneCommand(.rearrange) }
-                Button("Suchen…") { paneCommand(.find) }
+                Button("Suchen …") { paneCommand(.find) }
                     .keyboardShortcut("f", modifiers: .command)
                 Divider()
+                // Kein ⌘W als Menükürzel: SwiftUIs „Schließen“ im File-Menü trägt es schon;
+                // die Kachel fängt die Taste selbst.
+                Button("Kachel schließen  (⌘W)") { paneCommand(.close) }
+            }
+            // Darstellung: gilt für Terminal-Kacheln (Schrift, Formeln) — nicht für App-Kacheln.
+            CommandGroup(before: .toolbar) {
                 Toggle("LaTeX-Formeln anzeigen", isOn: $settings.formulasEnabled)
                     .keyboardShortcut("l", modifiers: .command)
                 Divider()
@@ -396,9 +415,6 @@ struct LatexTermApp: App {
                 Button("Schriftgröße zurücksetzen") { ThemeStore.shared.fontSize = ThemeStore.defaultFontSize }
                     .keyboardShortcut("0", modifiers: .command)
                 Divider()
-                // Kein ⌘W als Menükürzel: SwiftUIs „Schließen“ im File-Menü trägt es schon;
-                // die Kachel fängt die Taste selbst.
-                Button("Kachel schließen  (⌘W)") { paneCommand(.close) }
             }
         }
 

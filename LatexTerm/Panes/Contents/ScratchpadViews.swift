@@ -155,6 +155,9 @@ final class ScratchpadCanvas: NSView {
 
     func select(_ tool: ScratchTool) {
         self.tool = tool
+        if tool != .none && tool != .text { clearSelection() }
+        hoverUID = nil
+        hoverEdge = nil
         stateChanged()
     }
 
@@ -354,9 +357,16 @@ final class ScratchpadCanvas: NSView {
         /// Karten, deren Lage/Größe sich geändert hat — die prüft der strenge Weg.
         var placed: [(card: ScratchStroke, entry: CardEntry)] = []
         /// Karte (Rechteck) nach id, so wie sie gerade liegt — auch neu gesetzte dieses Aufrufs.
-        func rect(of id: String) -> NSRect? {
-            (result.added + result.updated).last { $0.cardInfo?.id == id }?.cardRect
-                ?? strokes.last { $0.cardInfo?.id == id }?.cardRect
+        func rect(of ref: String) -> NSRect? {
+            let (id, part) = Self.cardRef(ref)
+            guard let card = (result.added + result.updated).last(where: { $0.cardInfo?.id == id })
+                    ?? strokes.last(where: { $0.cardInfo?.id == id }) else { return nil }
+            guard let part else { return card.cardRect }
+            // Absatz: Höhe des Absatzes, Breite der ganzen Karte — rightOf/leftOf landen neben dem Block, auf Höhe des Punkts.
+            let parts = card.cardParts
+            guard parts.indices.contains(part - 1) else { return nil }
+            let r = parts[part - 1].rect, whole = card.cardRect
+            return NSRect(x: whole.minX, y: r.minY, width: whole.width, height: r.height)
         }
         func origin(for entry: CardEntry, size: NSSize, label: String) throws -> CGPoint? {
             if let origin = entry.origin, entry.placement.ref == nil { return origin }
@@ -372,7 +382,8 @@ final class ScratchpadCanvas: NSView {
                 let old = strokes.remove(at: index)
                 removed.append((index, old))
                 if entry.remove { result.removed.append(id); continue }
-                let info = merge(old.cardInfo ?? ScratchCard(), entry.style)
+                var info = merge(old.cardInfo ?? ScratchCard(), entry.style)
+                if entry.width != nil { info.fixedWidth = true }
                 let width = entry.width.map(Self.clampCardWidth) ?? old.cardWidth
                 let size = ScratchStroke.cardSize(text: entry.text ?? old.text ?? "", width: width, info: info)
                 let copy = old.cardUpdated(text: entry.text, origin: try origin(for: entry, size: size, label: id),
@@ -384,6 +395,7 @@ final class ScratchpadCanvas: NSView {
             }
             guard let text = entry.text, !text.isEmpty else { continue }
             var info = entry.style
+            if entry.width != nil { info.fixedWidth = true }
             if let id = entry.id { info.id = id } else {
                 info.id = "k\(nextNumber)"
                 nextNumber += 1
@@ -449,12 +461,16 @@ final class ScratchpadCanvas: NSView {
         for (position, entry) in entries.enumerated() where !entry.arrows.isEmpty && !entry.remove {
             guard let source = cardFor[position] ?? entry.id.flatMap({ id in strokes.last { $0.cardInfo?.id == id } }) else { continue }
             for spec in entry.arrows {
-                guard let dest = strokes.last(where: { $0.cardInfo?.id == spec.to }), dest !== source else {
+                let (destID, part) = Self.cardRef(spec.to)
+                guard let dest = strokes.last(where: { $0.cardInfo?.id == destID }), dest !== source else {
                     throw PaneArgsError("arrowTo: Karte „\(spec.to)“ gibt es nicht")
                 }
+                if let part, !dest.cardParts.indices.contains(part - 1) {
+                    throw PaneArgsError("arrowTo: \(destID) hat keinen Absatz \(part) (Absätze stehen in scratch_look)")
+                }
                 let route = ScratchRoute(fromSide: spec.fromSide?.rawValue, toSide: spec.toSide?.rawValue,
-                                         via: spec.via.isEmpty ? nil : spec.via)
-                let arrow = routedArrow(from: source, to: dest, route: route, color: spec.color ?? entry.color ?? 0, author: author)
+                                         via: spec.via.isEmpty ? nil : spec.via, toPart: part)
+                let arrow = routedArrow(from: source, to: dest, route: route, color: spec.color ?? entry.color ?? source.color, author: author)
                 let (from, to) = (source.cardInfo?.id ?? "?", spec.to)
                 if strict, !spec.through, !arrow.hits.isEmpty {
                     result.problems.append("Pfeil \(from) → \(to) liefe durch \(arrow.hits.joined(separator: ", ")) — andere Kanten "
@@ -463,6 +479,18 @@ final class ScratchpadCanvas: NSView {
                 strokes.append(contentsOf: arrow.strokes)
                 added += arrow.strokes
                 result.arrows.append((from, to, arrow.strokes[0].points))
+            }
+        }
+        // Neue Pfeile aus dem Stamm: alle Pfeile derselben Karte neu führen, damit sie sich einen Kanal teilen (Gabel).
+        let sources = Set(added.compactMap { $0.link?.route != nil ? $0.link?.from : nil })
+        if !sources.isEmpty {
+            let shafts = strokes.indices.filter { i in strokes[i].link.map { sources.contains($0.from) && $0.route != nil } ?? false }
+            let ids = Set(shafts.map { strokes[$0].uid })
+            let heads = strokes.indices.filter { strokes[$0].follows.map(ids.contains) ?? false }
+            for (index, fresh) in relinked((shafts + heads).map { ($0, strokes[$0]) }) {
+                let old = strokes[index]
+                strokes[index] = fresh
+                if let i = added.firstIndex(where: { $0 === old }) { added[i] = fresh } else { swaps.append((old, fresh)) }
             }
         }
         guard !probe, result.problems.isEmpty else { return result }
@@ -495,6 +523,12 @@ final class ScratchpadCanvas: NSView {
     }
 
     private func objectRect(_ s: ScratchStroke) -> NSRect { s.isImage ? s.imageRect : s.cardRect }
+
+    /// „k1“ → (k1, nil), „k1.3“ → (k1, 3): Karte oder einer ihrer Absätze (1-basiert, wie scratch_look sie nennt).
+    static func cardRef(_ ref: String) -> (id: String, part: Int?) {
+        guard let dot = ref.lastIndex(of: "."), let n = Int(ref[ref.index(after: dot)...]), n >= 1 else { return (ref, nil) }
+        return (String(ref[..<dot]), n)
+    }
     private func name(_ uid: String) -> String {
         strokes.first { $0.uid == uid }.map { $0.cardInfo?.id ?? "Bild" } ?? "?"
     }
@@ -510,13 +544,131 @@ final class ScratchpadCanvas: NSView {
         (route.fromSide.flatMap(ScratchLayout.Side.init(rawValue:)), route.toSide.flatMap(ScratchLayout.Side.init(rawValue:)))
     }
 
+    // MARK: Pfeil aus dem Stamm (Mats, 26.09.)
+    // Karte mit Strich links: Strich und Pfeil sind EINE Linie. Der Pfeil wächst aus einem Ende des Stamms — Ziel rechts:
+    // der Fuß läuft unten weiter; unten: der Fuß knickt ab; links: der Fuß dreht nach links; oben: der Stamm wächst über
+    // die Karte hinaus. Mehrere Pfeile einer Karte teilen sich Fuß und Kanal und gabeln sich erst vor ihren Zielen.
+    // Ein Absatz als Ziel bekommt statt der Spitze eine Klammer über seine Höhe. Läuft der Weg durch fremde Karten, oder
+    // gibt der Agent Seiten/Zwischenpunkte vor, übernimmt der normale Router.
+
+    /// Rechteck, auf das ein Pfeil zielt: der Absatz (`toPart`) oder das ganze Objekt.
+    private func targetRect(_ b: ScratchStroke, _ route: ScratchRoute) -> (rect: NSRect, part: Bool) {
+        if let n = route.toPart {
+            let parts = b.cardParts
+            if parts.indices.contains(n - 1) { return (parts[n - 1].rect.insetBy(dx: -3, dy: -2), true) }
+        }
+        return (objectRect(b), false)
+    }
+
+    private static func stemCard(_ s: ScratchStroke) -> Bool { s.card && s.frameStyle == "mark" && s.showsFrame }
+
+    /// Linkspfeil aus dem Stamm: beginnt über der Ecke und biegt dort nach links (dann fällt der Fuß weg).
+    private static func exitsLeft(_ points: [CGPoint], _ card: ScratchStroke) -> Bool {
+        let s = card.stem
+        return stemCard(card) && abs(points[0].x - s.x) < 1 && points[0].y < s.bottom - 5 && points[1].y > points[0].y + 0.5
+    }
+
+    /// Abstand vor dem Ziel (Klammer bzw. Spitze).
+    private static let stemGap: CGFloat = 6
+
+    private func stemWay(from a: ScratchStroke, to b: ScratchStroke, route: ScratchRoute) -> [CGPoint]? {
+        guard Self.stemCard(a), route.fromSide == nil, route.toSide == nil, route.via == nil else { return nil }
+        let r = a.cardRect, s = a.stem, gap = Self.stemGap
+        let t = targetRect(b, route).rect
+        var way: [CGPoint]
+        if t.maxY < r.minY {                                   // ④ oben: der Stamm wächst hinaus
+            let start = CGPoint(x: s.x, y: s.top)
+            if t.minX > s.x + 12 { way = [start, CGPoint(x: s.x, y: t.midY), CGPoint(x: t.minX - gap, y: t.midY)] }
+            else if t.maxX < s.x - 12 { way = [start, CGPoint(x: s.x, y: t.midY), CGPoint(x: t.maxX + gap, y: t.midY)] }
+            else { way = [start, CGPoint(x: s.x, y: t.maxY + gap)] }
+        } else if t.minX > r.maxX + 8 {                        // ① rechts: der Fuß läuft unten weiter
+            let channel = (r.maxX + channelOffset(a, right: true, gap: t.minX - r.maxX)).rounded()
+            let y = level(t, s.bottom)
+            way = [CGPoint(x: s.x + 3, y: s.bottom), CGPoint(x: channel, y: s.bottom), CGPoint(x: channel, y: y),
+                   CGPoint(x: t.minX - gap, y: y)]
+        } else if t.maxX < r.minX - 8 {                        // ③ links: der Fuß dreht nach links
+            let channel = (s.x - channelOffset(a, right: false, gap: s.x - t.maxX)).rounded()
+            let y = level(t, s.bottom)
+            way = [CGPoint(x: s.x, y: s.bottom - 10), CGPoint(x: s.x, y: s.bottom), CGPoint(x: channel, y: s.bottom),
+                   CGPoint(x: channel, y: y), CGPoint(x: t.maxX + gap, y: y)]
+        } else if t.minY > r.maxY {                            // ② unten: der Fuß knickt ab
+            let lo = max(s.x + 16, t.minX + 8), hi = min(r.maxX - 8, t.maxX - 8)
+            let x = lo <= hi ? min(max(t.midX, lo), hi) : t.midX
+            way = [CGPoint(x: s.x + 3, y: s.bottom), CGPoint(x: x, y: s.bottom), CGPoint(x: x, y: t.minY - gap)]
+        } else {
+            return nil
+        }
+        way = Self.rounded(ScratchLayout.simplify(way), radius: 7)
+        guard way.count >= 2, ScratchLayout.length(way) >= ScratchLayout.minLength else { return nil }
+        // Fremde Karten im Weg: lieber der Router, der um sie herum führt.
+        let skip = Set([a, b].map { $0.cardInfo?.id ?? "Bild \($0.uid)" })
+        let blocked = arrowObstacles().contains { o in
+            !skip.contains(o.name) && zip(way, way.dropFirst()).contains { ScratchLayout.segment($0, $1, hits: o.rect.insetBy(dx: 1, dy: 1)) }
+        }
+        return blocked ? nil : way
+    }
+
+    /// Höhe, auf der ein Pfeil seitlich ins Ziel läuft: die Fußhöhe, wenn das Ziel sie überspannt (dann ohne Treppe),
+    /// sonst die Mitte des Ziels.
+    private func level(_ t: NSRect, _ foot: CGFloat) -> CGFloat {
+        foot >= t.minY + 1 && foot <= t.maxY - 1 ? foot : t.midY
+    }
+
+    /// Abstand des senkrechten Kanals von der Karte: für alle Pfeile einer Karte zur selben Seite gleich — das knappste
+    /// Ziel entscheidet (höchstens 24 pt) —, damit sie sich den Weg teilen und erst vor den Zielen gabeln.
+    private func channelOffset(_ a: ScratchStroke, right: Bool, gap: CGFloat) -> CGFloat {
+        let r = a.cardRect, x = a.stem.x
+        let gaps = strokes.compactMap { s -> CGFloat? in
+            guard let link = s.link, link.from == a.uid, let route = link.route,
+                  let b = strokes.first(where: { $0.uid == link.to }) else { return nil }
+            let t = targetRect(b, route).rect
+            if right { return t.minX > r.maxX + 8 ? t.minX - r.maxX : nil }
+            return t.maxX < r.minX - 8 ? x - t.maxX : nil
+        }
+        return min(24, (gaps + [gap]).min()! / 2)
+    }
+
+    /// Rechte Winkel mit runden Ecken (wie der Fuß): jede innere Ecke als kurze Kurve aus Punkten.
+    private static func rounded(_ points: [CGPoint], radius: CGFloat) -> [CGPoint] {
+        guard points.count >= 3 else { return points }
+        var out = [points[0]]
+        for i in 1..<(points.count - 1) {
+            let (a, p, b) = (points[i - 1], points[i], points[i + 1])
+            let la = hypot(p.x - a.x, p.y - a.y), lb = hypot(b.x - p.x, b.y - p.y)
+            let d = min(radius, la / 2, lb / 2)
+            guard d > 0.5 else { out.append(p); continue }
+            let p1 = CGPoint(x: p.x - (p.x - a.x) / la * d, y: p.y - (p.y - a.y) / la * d)
+            let p2 = CGPoint(x: p.x + (b.x - p.x) / lb * d, y: p.y + (b.y - p.y) / lb * d)
+            for k in 0...6 {
+                let t = CGFloat(k) / 6, u = 1 - t
+                out.append(CGPoint(x: u * u * p1.x + 2 * u * t * p.x + t * t * p2.x, y: u * u * p1.y + 2 * u * t * p.y + t * t * p2.y))
+            }
+        }
+        out.append(points[points.count - 1])
+        return out
+    }
+
+    /// Ende eines gesetzten Pfeils: Klammer über den Absatz (Pfeil aus dem Stamm auf einen Absatz), sonst die Spitze.
+    private func arrowTip(_ way: [CGPoint], from a: ScratchStroke, to b: ScratchStroke, route: ScratchRoute) -> [CGPoint] {
+        let target = targetRect(b, route)
+        guard target.part, Self.stemCard(a), let end = way.last, way.count >= 2 else { return ScratchLayout.head(way) }
+        let t = target.rect, gap = Self.stemGap
+        if abs(end.x - (t.minX - gap)) < 0.5 { return [CGPoint(x: end.x, y: t.minY), CGPoint(x: end.x, y: t.maxY)] }
+        if abs(end.x - (t.maxX + gap)) < 0.5 { return [CGPoint(x: end.x, y: t.minY), CGPoint(x: end.x, y: t.maxY)] }
+        if abs(end.y - (t.minY - gap)) < 0.5 || abs(end.y - (t.maxY + gap)) < 0.5 {
+            return [CGPoint(x: t.minX, y: end.y), CGPoint(x: t.maxX, y: end.y)]
+        }
+        return ScratchLayout.head(way)
+    }
+
     /// Weg eines gesetzten Pfeils zwischen zwei Objekten, so wie sie gerade liegen; `own` = der Pfeil selbst (beim
     /// Nachführen), damit er nicht sich selbst ausweicht.
     private func routePoints(from a: ScratchStroke, to b: ScratchStroke, route: ScratchRoute, own: String? = nil) -> ScratchLayout.Route {
+        if let way = stemWay(from: a, to: b, route: route) { return ScratchLayout.Route(points: way, hits: []) }
         let (fromSide, toSide) = sides(route)
         let nameA = a.cardInfo?.id ?? "Bild \(a.uid)", nameB = b.cardInfo?.id ?? "Bild \(b.uid)"
         let others = strokes.filter { $0.link != nil && $0.uid != own }.map(\.points)
-        return ScratchLayout.route(from: objectRect(a), to: objectRect(b), fromSide: fromSide, toSide: toSide,
+        return ScratchLayout.route(from: objectRect(a), to: targetRect(b, route).rect, fromSide: fromSide, toSide: toSide,
                                    via: route.via ?? [], obstacles: arrowObstacles(), fromName: nameA, toName: nameB,
                                    others: others)
     }
@@ -525,12 +677,15 @@ final class ScratchpadCanvas: NSView {
     private func routedArrow(from a: ScratchStroke, to b: ScratchStroke, route: ScratchRoute, color: Int,
                              author: String?) -> (strokes: [ScratchStroke], hits: [String]) {
         let way = routePoints(from: a, to: b, route: route)
-        let shaft = ScratchStroke(line: way.points, color: color, width: 2, author: author)
+        // Aus dem Stamm: so kräftig wie der Strich links (Gruppenfarbe 2,5, sonst 1,5), damit es eine Linie ist.
+        let stemmed = Self.stemCard(a) && stemWay(from: a, to: b, route: route) != nil
+        let width: CGFloat = stemmed ? (a.color != 0 ? 2.5 : 1.5) : 2
+        let shaft = ScratchStroke(line: way.points, color: color, width: width, author: author)
         let (p0, p1) = (way.points[0], way.points[way.points.count - 1])   // `route` liefert immer ≥ 2 Punkte
         shaft.link = ScratchLink(from: a.uid, to: b.uid,
                                  a: CGPoint(x: p0.x - a.points[0].x, y: p0.y - a.points[0].y),
                                  b: CGPoint(x: p1.x - b.points[0].x, y: p1.y - b.points[0].y), route: route)
-        let tip = ScratchStroke(line: ScratchLayout.head(way.points), color: color, width: 2, author: author)
+        let tip = ScratchStroke(line: arrowTip(way.points, from: a, to: b, route: route), color: color, width: width, author: author)
         tip.follows = shaft.uid
         return ([shaft, tip], way.hits)
     }
@@ -666,6 +821,9 @@ final class ScratchpadCanvas: NSView {
 
     func restore(_ doc: ScratchDocument) {
         strokes = doc.strokes
+        // Verwaiste Spitzen von Agenten-Pfeilen (Schaft vor dem 26.09. wegradiert) räumen — Nutzer-Tinte bleibt.
+        let ids = Set(strokes.map(\.uid))
+        strokes.removeAll { $0.isClaude && ($0.follows.map { !ids.contains($0) } ?? false) }
         // v1 lag in Kachel-Koordinaten (oben links = 0,0): Zeichnung auf die Mitte legen.
         if doc.version < 2, let first = strokes.first {
             let box = strokes.map(\.bounds).reduce(first.bounds) { $0.union($1) }
@@ -819,24 +977,44 @@ final class ScratchpadCanvas: NSView {
         let p = point(event)
         if tool == .eraser { beginErase(at: p); return }
         if tool == .cutter { beginCut(at: p); return }
-        // Auf einer Karte oder einem Bild: ziehen verschiebt, Doppelklick bearbeitet die Karte (⌥ = trotzdem malen);
-        // mit dem Text-Werkzeug bearbeitet schon ein Klick, ziehen verschiebt weiter.
-        if !event.modifierFlags.contains(.option), let index = strokes.lastIndex(where: { $0.card ? $0.cardGrabs(p) : $0.isImage && $0.touches(p, radius: 0) }) {
-            if strokes[index].card, event.clickCount == 2 || tool == .text, !dragsFurther(event) {
+        let (option, shift) = (event.modifierFlags.contains(.option), event.modifierFlags.contains(.shift))
+        let drawing = tool == .pen || tool == .marker
+        // Rechter Kartenrand (Zeiger, Text): Breite ziehen — danach bleibt sie fest.
+        if !drawing, let index = widthEdge(at: p) { beginWidthDrag(index, at: p); return }
+        // Stift/Marker malen auch über Karten und Bilder (Mats, 26.09.: Pfeile an Karten waren „clunky“, weil
+        // Aufsetzen verschob). Verschieben dann am Griff links neben dem Objekt oder mit ⌥.
+        if drawing, let index = gripIndex(at: p) { beginObjectDrag([index], at: p); return }
+        // Zeiger/Text auf Karte oder Bild: ziehen verschiebt (die ganze Auswahl), ⇧-Klick nimmt dazu/heraus;
+        // Doppelklick bearbeitet die Karte, mit dem Text-Werkzeug schon ein Klick.
+        if !drawing || option, let index = objectIndex(at: p) {
+            if !drawing, strokes[index].card, event.clickCount == 2 || tool == .text, !shift, !dragsFurther(event) {
                 beginEditing(strokes[index], at: p)
                 return
             }
-            beginObjectDrag(index, at: p)
+            let uid = strokes[index].uid
+            if shift {
+                if selection.remove(uid) == nil { selection.insert(uid) }
+                needsDisplay = true
+                guard selection.contains(uid) else { return }
+            } else if !selection.contains(uid) {
+                selection = [uid]
+                needsDisplay = true
+            }
+            beginObjectDrag(strokes.indices.filter { selection.contains(strokes[$0].uid) }, at: p)
             return
         }
+        if !shift { clearSelection() }
         if tool == .text { beginTyping(at: p); return }
         if tool == .none {
+            // ⇧-Ziehen auf freier Fläche: Rahmen aufziehen = mehrere auswählen; sonst Sicht verschieben.
+            if shift { rubberBand = (p, p); return }
             panDrag = (convert(event.locationInWindow, from: nil), pan)
             return
         }
         let width = tool == .marker ? Self.markerWidths[sizeIndex] : Self.penWidths[sizeIndex]
         let stroke = ScratchStroke(start: p, color: colorIndex, width: width, marker: tool == .marker)
         current = stroke
+        if !stroke.marker { snapHint = (linkObject(at: p)?.uid, nil) }
         invalidate(stroke.bounds)
     }
 
@@ -844,6 +1022,12 @@ final class ScratchpadCanvas: NSView {
         if focusClick { return }
         let p = point(event)
         if objectDrag != nil { continueObjectDrag(to: p); return }
+        if widthDrag != nil { continueWidthDrag(to: p); return }
+        if let band = rubberBand {
+            rubberBand = (band.start, p)
+            needsDisplay = true
+            return
+        }
         if let drag = panDrag {
             let now = convert(event.locationInWindow, from: nil)
             springTimer?.invalidate(); springTimer = nil
@@ -860,16 +1044,26 @@ final class ScratchpadCanvas: NSView {
             stroke.append(p)
         }
         invalidate(before.union(stroke.bounds))
+        updateSnapHint(stroke)
     }
 
     override func mouseUp(with event: NSEvent) {
         if focusClick { focusClick = false; return }
         if objectDrag != nil { endObjectDrag(); return }
+        if widthDrag != nil { endWidthDrag(); return }
+        if let band = rubberBand {
+            rubberBand = nil
+            let rect = Self.rect(band.start, band.now)
+            for s in strokes where (s.card || s.isImage) && s.bounds.intersects(rect) { selection.insert(s.uid) }
+            needsDisplay = true
+            return
+        }
         if panDrag != nil { panDrag = nil; return }
         if lastErasePoint != nil { endErase(); return }
         if cutting != nil { endCut(); return }
         guard let stroke = current else { return }
         current = nil
+        if snapHint != (nil, nil) { snapHint = (nil, nil); needsDisplay = true }
         if !stroke.marker { attachLink(stroke) }
         strokes.append(stroke)
         commit(Edit(added: [stroke]))
@@ -889,47 +1083,69 @@ final class ScratchpadCanvas: NSView {
     // MARK: Karten und Bilder ziehen — eingerastete Pfeile ziehen mit
 
     private struct ObjectDrag {
-        var index: Int
-        var original: ScratchStroke
-        var live: ScratchStroke
+        /// Gezogene Objekte (die Auswahl): Platz, Fassung zu Beginn, laufende Fassung.
+        var items: [(index: Int, original: ScratchStroke, live: ScratchStroke)]
         var start: CGPoint
         var moved: CGPoint = .zero
-        /// Pfeile (und ihre Spitzen) an diesem Objekt: Platz und Fassung zu Beginn.
+        /// Pfeile (und ihre Spitzen) an diesen Objekten: Platz und Fassung zu Beginn.
         var linked: [(index: Int, original: ScratchStroke)] = []
+        /// Umriss aller gezogenen Objekte zu Beginn (für Hilfslinien).
+        var frame: NSRect
     }
     private var objectDrag: ObjectDrag?
     /// Ohne Werkzeug: Ziehen auf freier Fläche verschiebt die Sicht (Start am Bildschirm, Sicht zu Beginn).
     private var panDrag: (start: CGPoint, pan: CGPoint)?
 
-    private func beginObjectDrag(_ index: Int, at p: CGPoint) {
-        let original = strokes[index]
-        let live = original.copy()
-        strokes[index] = live
-        objectDrag = ObjectDrag(index: index, original: original, live: live, start: p,
-                                linked: linkedStrokes(to: [original.uid]).map { ($0, strokes[$0]) })
+    private func beginObjectDrag(_ indices: [Int], at p: CGPoint) {
+        guard !indices.isEmpty else { return }
+        let items = indices.map { index -> (index: Int, original: ScratchStroke, live: ScratchStroke) in
+            let original = strokes[index]
+            let live = original.copy()
+            strokes[index] = live
+            return (index, original, live)
+        }
+        let uids = Set(items.map(\.original.uid))
+        let frame = items.dropFirst().reduce(items[0].original.bounds) { $0.union($1.original.bounds) }
+        objectDrag = ObjectDrag(items: items, start: p,
+                                linked: linkedStrokes(to: uids).filter { !uids.contains(strokes[$0].uid) }.map { ($0, strokes[$0]) },
+                                frame: frame)
     }
 
     private func continueObjectDrag(to p: CGPoint) {
         guard var drag = objectDrag else { return }
-        let total = CGPoint(x: p.x - drag.start.x, y: p.y - drag.start.y)
-        var dirty = drag.live.bounds
-        drag.live.offset(by: CGPoint(x: total.x - drag.moved.x, y: total.y - drag.moved.y))
+        var total = CGPoint(x: p.x - drag.start.x, y: p.y - drag.start.y)
+        // Hilfslinien: Kanten und Mitten rasten an anderen Karten/Bildern ein (⌘ beim Ziehen = frei).
+        let oldGuides = guides
+        guides = []
+        if !NSEvent.modifierFlags.contains(.command) {
+            let snap = alignmentSnap(drag.frame.offsetBy(dx: total.x, dy: total.y),
+                                     skip: Set(drag.items.map(\.original.uid)))
+            total.x += snap.dx
+            total.y += snap.dy
+            guides = snap.guides
+        }
+        var dirty = drag.items.reduce(NSRect.null) { $0.union($1.live.bounds) }
+        for item in drag.items {
+            item.live.offset(by: CGPoint(x: total.x - drag.moved.x, y: total.y - drag.moved.y))
+            dirty = dirty.union(item.live.bounds)
+        }
         drag.moved = total
-        dirty = dirty.union(drag.live.bounds)
         for (index, fresh) in relinked(drag.linked) where strokes.indices.contains(index) {
             dirty = dirty.union(strokes[index].bounds).union(fresh.bounds)
             strokes[index] = fresh
         }
         objectDrag = drag
-        invalidate(dirty.insetBy(dx: -4, dy: -4))
+        if !guides.isEmpty || !oldGuides.isEmpty || !selection.isEmpty { needsDisplay = true }
+        invalidate(dirty.insetBy(dx: -8, dy: -8))
     }
 
     private func endObjectDrag() {
         guard let drag = objectDrag else { return }
         objectDrag = nil
+        if !guides.isEmpty { guides = []; needsDisplay = true }
         guard hypot(drag.moved.x, drag.moved.y) >= 2 else {
             // Nur geklickt: alles wie vorher.
-            strokes[drag.index] = drag.original
+            for item in drag.items { strokes[item.index] = item.original }
             for (index, original) in drag.linked where strokes.indices.contains(index) { strokes[index] = original }
             needsDisplay = true
             return
@@ -937,10 +1153,203 @@ final class ScratchpadCanvas: NSView {
         let swaps = drag.linked.compactMap { index, original in
             strokes.indices.contains(index) && strokes[index] !== original ? (old: original, new: strokes[index]) : nil
         }
-        // Gezogenes nach oben legen.
-        strokes.remove(at: drag.index)
-        strokes.append(drag.live)
-        commit(Edit(removed: [(drag.index, drag.original)], added: [drag.live], swapped: swaps))
+        // Gezogenes nach oben legen — von hinten entfernen, damit die gemerkten Plätze für Undo stimmen.
+        var removed: [(index: Int, stroke: ScratchStroke)] = []
+        for item in drag.items.sorted(by: { $0.index > $1.index }) {
+            strokes.remove(at: item.index)
+            removed.append((item.index, item.original))
+        }
+        let lives = drag.items.map(\.live)
+        strokes.append(contentsOf: lives)
+        commit(Edit(removed: removed, added: lives, swapped: swaps))
+    }
+
+    // MARK: Auswahl, Hilfslinien, Breite ziehen, Griff (26.09.)
+
+    /// Ausgewählte Karten/Bilder (uids) — Zeiger: Klick wählt, ⇧-Klick nimmt dazu, ⇧-Ziehen zieht einen Rahmen auf.
+    private var selection: Set<String> = []
+    /// ⇧-Ziehen im Zeiger-Modus: Rahmen in Weltkoordinaten.
+    private var rubberBand: (start: CGPoint, now: CGPoint)?
+    /// Hilfslinien beim Ziehen (Weltkoordinaten, von → bis).
+    private var guides: [(CGPoint, CGPoint)] = []
+    /// Beim Malen: Objekt am Anfang des Strichs und unter dem Stift, an denen er als Pfeil einrasten würde.
+    private var snapHint: (from: String?, to: String?) = (nil, nil)
+    /// Objekt unter dem Zeiger (Stift/Marker: Griff zum Verschieben).
+    private var hoverUID: String?
+    /// Karte, deren rechter Rand unter dem Zeiger liegt (Zeiger/Text: Breite ziehen).
+    private var hoverEdge: String?
+    private var widthDrag: (index: Int, original: ScratchStroke, linked: [(index: Int, original: ScratchStroke)])?
+
+    /// Wie weit neben einer Karte ein Strich-Ende noch als „an der Karte“ gilt (vorher 18).
+    static let linkReach: CGFloat = 30
+    /// Einrastweite der Hilfslinien am Bildschirm.
+    static let guideReach: CGFloat = 6
+
+    private static func rect(_ a: CGPoint, _ b: CGPoint) -> NSRect {
+        NSRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(b.x - a.x), height: abs(b.y - a.y))
+    }
+
+    private func clearSelection() {
+        guard !selection.isEmpty else { return }
+        selection = []
+        needsDisplay = true
+    }
+
+    private func objectIndex(at p: CGPoint) -> Int? {
+        strokes.lastIndex { $0.card ? $0.cardGrabs(p) : $0.isImage && $0.touches(p, radius: 0) }
+    }
+
+    /// Karte oder Bild, an dem ein Strich-Ende hier einrasten würde.
+    private func linkObject(at p: CGPoint) -> ScratchStroke? {
+        strokes.last { ($0.card || $0.isImage) && $0.bounds.insetBy(dx: -Self.linkReach, dy: -Self.linkReach).contains(p) }
+    }
+
+    /// Griff links neben dem Objekt unter dem Zeiger (Stift/Marker): sechs Punkte, am Bildschirm immer gleich groß.
+    private func gripRect(_ s: ScratchStroke) -> NSRect {
+        let r = s.bounds
+        return NSRect(x: r.minX - 16 / zoom, y: r.minY, width: 12 / zoom, height: 18 / zoom)
+    }
+
+    private func gripIndex(at p: CGPoint) -> Int? {
+        guard let uid = hoverUID, let index = strokes.firstIndex(where: { $0.uid == uid }),
+              gripRect(strokes[index]).insetBy(dx: -3 / zoom, dy: -3 / zoom).contains(p) else { return nil }
+        return index
+    }
+
+    /// Rechter Rand einer Karte (±5 pt am Bildschirm).
+    private func widthEdge(at p: CGPoint) -> Int? {
+        strokes.lastIndex { s in
+            guard s.card else { return false }
+            let r = s.cardRect
+            return abs(p.x - r.maxX) <= 5 / zoom && p.y >= r.minY && p.y <= r.maxY
+        }
+    }
+
+    private func updateSnapHint(_ stroke: ScratchStroke) {
+        guard !stroke.marker, let p0 = stroke.points.first, let p1 = stroke.points.last else { return }
+        let target = hypot(p1.x - p0.x, p1.y - p0.y) >= 24 ? linkObject(at: p1)?.uid : nil
+        let next = (snapHint.from, snapHint.from != nil && target != snapHint.from ? target : nil)
+        guard next != snapHint else { return }
+        snapHint = next
+        needsDisplay = true
+    }
+
+    /// Kanten (links, Mitte, rechts bzw. oben, Mitte, unten) des gezogenen Umrisses an denen anderer Karten/Bilder
+    /// im Sichtbaren ausrichten: Verschiebung plus Hilfslinien.
+    private func alignmentSnap(_ frame: NSRect, skip: Set<String>) -> (dx: CGFloat, dy: CGFloat, guides: [(CGPoint, CGPoint)]) {
+        let reach = Self.guideReach / zoom
+        let view = toWorld(bounds)
+        let others = strokes.filter { ($0.card || $0.isImage) && !skip.contains($0.uid) && $0.bounds.intersects(view) }.map {
+            $0.card ? $0.cardRect : $0.bounds
+        }
+        func best(_ mine: [CGFloat], _ theirs: (NSRect) -> [CGFloat]) -> (delta: CGFloat, at: CGFloat, rects: [NSRect])? {
+            var found: (delta: CGFloat, at: CGFloat, rects: [NSRect])?
+            for r in others {
+                for a in mine { for b in theirs(r) where abs(b - a) <= reach {
+                    if let f = found, abs(f.delta) < abs(b - a) - 0.01 { continue }
+                    if let f = found, abs(f.delta - (b - a)) < 0.01 { found = (f.delta, f.at, f.rects + [r]) } else { found = (b - a, b, [r]) }
+                } }
+            }
+            return found
+        }
+        var guides: [(CGPoint, CGPoint)] = []
+        let x = best([frame.minX, frame.midX, frame.maxX]) { [$0.minX, $0.midX, $0.maxX] }
+        let y = best([frame.minY, frame.midY, frame.maxY]) { [$0.minY, $0.midY, $0.maxY] }
+        let moved = frame.offsetBy(dx: x?.delta ?? 0, dy: y?.delta ?? 0)
+        if let x {
+            let span = x.rects.reduce(moved) { $0.union($1) }
+            guides.append((CGPoint(x: x.at, y: span.minY - 8 / zoom), CGPoint(x: x.at, y: span.maxY + 8 / zoom)))
+        }
+        if let y {
+            let span = y.rects.reduce(moved) { $0.union($1) }
+            guides.append((CGPoint(x: span.minX - 8 / zoom, y: y.at), CGPoint(x: span.maxX + 8 / zoom, y: y.at)))
+        }
+        return (x?.delta ?? 0, y?.delta ?? 0, guides)
+    }
+
+    private func beginWidthDrag(_ index: Int, at p: CGPoint) {
+        let original = strokes[index]
+        widthDrag = (index, original, linkedStrokes(to: [original.uid]).map { ($0, strokes[$0]) })
+    }
+
+    private func continueWidthDrag(to p: CGPoint) {
+        guard let drag = widthDrag, var info = drag.original.cardInfo else { return }
+        info.fixedWidth = true
+        let width = min(800, max(ScratchStroke.cardMinWidth, p.x - drag.original.cardRect.minX))
+        let before = strokes[drag.index].bounds
+        let fresh = drag.original.cardUpdated(text: nil, origin: nil, width: width.rounded(), color: nil, info: info)
+        strokes[drag.index] = fresh
+        var dirty = before.union(fresh.bounds)
+        for (index, linked) in relinked(drag.linked) where strokes.indices.contains(index) {
+            dirty = dirty.union(strokes[index].bounds).union(linked.bounds)
+            strokes[index] = linked
+        }
+        invalidate(dirty.insetBy(dx: -4, dy: -4))
+    }
+
+    private func endWidthDrag() {
+        guard let drag = widthDrag else { return }
+        widthDrag = nil
+        let live = strokes[drag.index]
+        guard live !== drag.original, abs(live.cardWidth - drag.original.cardWidth) >= 1 else {
+            strokes[drag.index] = drag.original
+            for (index, original) in drag.linked where strokes.indices.contains(index) { strokes[index] = original }
+            needsDisplay = true
+            return
+        }
+        let swaps = [(old: drag.original, new: live)] + drag.linked.compactMap { index, original in
+            strokes.indices.contains(index) && strokes[index] !== original ? (old: original, new: strokes[index]) : nil
+        }
+        commit(Edit(swapped: swaps))
+    }
+
+    /// Ausgewähltes entfernen (⌫ im Zeiger-Modus) — ein Undo-Schritt, Pfeile daran wie beim Leeren.
+    private func deleteSelection() {
+        var removed: [(index: Int, stroke: ScratchStroke)] = []
+        for index in strokes.indices.reversed() where selection.contains(strokes[index].uid) {
+            removed.append((index, strokes.remove(at: index)))
+        }
+        selection = []
+        guard !removed.isEmpty else { return }
+        let orphans = dropOrphanArrows(after: removed)
+        commit(Edit(removed: removed + orphans.removed, swapped: orphans.swapped))
+    }
+
+    // MARK: Zeiger über der Fläche — Griff, Breitenrand
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        trackingAreas.filter { $0.owner === self }.forEach(removeTrackingArea)
+        addTrackingArea(NSTrackingArea(rect: .zero, options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                       owner: self))
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        let p = point(event)
+        let drawing = tool == .pen || tool == .marker
+        let edge = drawing || editor != nil ? nil : widthEdge(at: p).map { strokes[$0].uid }
+        // Griff bleibt, solange der Zeiger auf dem Objekt oder dem Griff ist.
+        var hover: String?
+        if drawing {
+            hover = gripIndex(at: p) != nil ? hoverUID : objectIndex(at: p).map { strokes[$0].uid }
+        }
+        if edge != hoverEdge || hover != hoverUID {
+            hoverEdge = edge
+            hoverUID = hover
+            needsDisplay = true
+        }
+        if edge != nil { NSCursor.resizeLeftRight.set() }
+        else if drawing, gripIndex(at: p) != nil { NSCursor.openHand.set() }
+        else { cursor.set() }
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        guard hoverUID != nil || hoverEdge != nil else { return }
+        hoverUID = nil
+        hoverEdge = nil
+        needsDisplay = true
     }
 
     /// Plätze der Pfeile, die an einem dieser Objekte hängen, samt ihrer Spitzen.
@@ -958,7 +1367,7 @@ final class ScratchpadCanvas: NSView {
         for s in strokes where s.card || s.isImage { byUID[s.uid] = s }
         var transforms: [String: (f: (CGPoint) -> CGPoint, scale: CGFloat)] = [:]
         var result: [(Int, ScratchStroke)] = []
-        var rerouted: [String: [CGPoint]] = [:]
+        var rerouted: [String: (way: [CGPoint], tip: [CGPoint])] = [:]
         for (index, original) in originals {
             guard let link = original.link, let a = byUID[link.from], let b = byUID[link.to],
                   let p0 = original.points.first, let p1 = original.points.last else { continue }
@@ -967,7 +1376,7 @@ final class ScratchpadCanvas: NSView {
                 let way = routePoints(from: a, to: b, route: route, own: original.uid).points
                 // Kein Weg (z. B. Karten übereinander): Pfeil bleibt liegen, statt leer zu werden.
                 guard way.count >= 2 else { continue }
-                rerouted[original.uid] = way
+                rerouted[original.uid] = (way, arrowTip(way, from: a, to: b, route: route))
                 result.append((index, original.rerouted(way)))
                 continue
             }
@@ -978,8 +1387,8 @@ final class ScratchpadCanvas: NSView {
             result.append((index, original.transformed(t.f, scale: t.scale)))
         }
         for (index, original) in originals {
-            if let shaft = original.follows, let way = rerouted[shaft], way.count >= 2 {
-                result.append((index, original.rerouted(ScratchLayout.head(way))))
+            if let shaft = original.follows, let way = rerouted[shaft], way.way.count >= 2 {
+                result.append((index, original.rerouted(way.tip)))
                 continue
             }
             guard let shaft = original.follows, let t = transforms[shaft] else { continue }
@@ -1007,10 +1416,13 @@ final class ScratchpadCanvas: NSView {
     private func attachLink(_ stroke: ScratchStroke) {
         guard let p0 = stroke.points.first, let p1 = stroke.points.last else { return }
         func object(at p: CGPoint) -> ScratchStroke? {
-            strokes.last { ($0.card || $0.isImage) && $0.bounds.insetBy(dx: -18, dy: -18).contains(p) }
+            linkObject(at: p)
         }
+        // Ein Pfeil läuft von einer Karte weg zur anderen hin: sein Ende liegt nicht mehr dicht an der ersten, sein Anfang
+        // nicht dicht an der zweiten (26.09.: eine Klammer neben zwei gestapelten Karten rastete sonst als Pfeil ein).
+        func near(_ p: CGPoint, _ s: ScratchStroke) -> Bool { s.bounds.insetBy(dx: -24, dy: -24).contains(p) }
         if stroke.points.count >= 2, hypot(p1.x - p0.x, p1.y - p0.y) >= 24,
-           let a = object(at: p0), let b = object(at: p1), a !== b {
+           let a = object(at: p0), let b = object(at: p1), a !== b, !near(p1, a), !near(p0, b) {
             stroke.link = ScratchLink(from: a.uid, to: b.uid,
                                       a: CGPoint(x: p0.x - a.points[0].x, y: p0.y - a.points[0].y),
                                       b: CGPoint(x: p1.x - b.points[0].x, y: p1.y - b.points[0].y))
@@ -1143,13 +1555,21 @@ final class ScratchpadCanvas: NSView {
         let pad = ScratchStroke.cardPadding
         let origin = editing?.points[0] ?? typingAt ?? .zero
         let (info, body) = split(view.string.isEmpty ? " " : view.string, title: view.hasTitle)
-        // Neuer Text wird so breit wie seine längste Zeile (wie `cardWidth`), bestehende Karten behalten ihre Breite.
-        let width = editing?.cardWidth ?? ScratchStroke.cardWidth(for: body, info: info)
+        let width = editWidth(for: body, info: info, origin: origin)
         let height = ScratchStroke.cardSize(text: body, width: width, info: info).height
         let rect = toScreen(NSRect(origin: origin, size: NSSize(width: width, height: height)))
         view.textContainerInset = NSSize(width: pad.width * zoom, height: pad.height * zoom)
         view.textContainer?.containerSize = NSSize(width: max(1, rect.width - 2 * pad.width * zoom), height: .greatestFiniteMagnitude)
         view.frame = rect
+    }
+
+    /// Breite beim Tippen (26.09.): so breit wie die längste Zeile, bis an den sichtbaren Rand (mindestens `cardMaxWidth`);
+    /// von Hand gezogene oder vom Agenten gesetzte Breiten (`fixedWidth`) bleiben stehen.
+    private func editWidth(for body: String, info: ScratchCard, origin: CGPoint) -> CGFloat {
+        if let editing, editing.cardInfo?.fixedWidth == true { return editing.cardWidth }
+        let edge = toWorld(bounds).maxX - origin.x - 24 / zoom
+        let limit = max(ScratchStroke.cardMaxWidth, edge, editing?.cardWidth ?? 0)
+        return ScratchStroke.cardWidth(for: body, info: info, limit: limit)
     }
 
     /// Im Editor steht der Titel als erste Zeile — zum Messen wie die Karte in Titel und Text teilen.
@@ -1178,7 +1598,7 @@ final class ScratchpadCanvas: NSView {
         guard keep else { return }
         if let origin {
             guard !raw.isEmpty else { return }
-            let fresh = ScratchStroke(card: raw, at: origin, width: ScratchStroke.cardWidth(for: raw, info: style),
+            let fresh = ScratchStroke(card: raw, at: origin, width: editWidth(for: raw, info: style, origin: origin),
                                       color: 0, author: nil, info: style)
             strokes.append(fresh)
             nameCards()
@@ -1201,7 +1621,10 @@ final class ScratchpadCanvas: NSView {
             info.title = String(lines[0])
             body = lines.count > 1 ? String(lines[1]) : ""
         }
-        let fresh = card.cardUpdated(text: body, origin: nil, width: nil, color: nil, info: info)
+        editing = card
+        let width = editWidth(for: body, info: info, origin: card.points[0])
+        editing = nil
+        let fresh = card.cardUpdated(text: body, origin: nil, width: width, color: nil, info: info)
         fresh.cuts = []
         strokes[index] = fresh
         commit(Edit(swapped: [(card, fresh)]))
@@ -1251,18 +1674,36 @@ final class ScratchpadCanvas: NSView {
     }
 
     /// Zurück in die Normalsicht (Mitte, 100 %) — sanft, wenn gewünscht.
-    func resetView(animated: Bool) {
+    func resetView(animated: Bool) { move(toPan: .zero, zoom: 1, animated: animated) }
+
+    /// Überblick (Mats, 26.09.: ␣␣ soll „best fit“ machen statt stur zur Mitte): alles Gezeichnete eingepasst,
+    /// höchstens 100 %. Steht die Sicht schon so, geht es zur Mitte — zweimal ␣␣ = Normalsicht.
+    func fitView(animated: Bool) {
+        guard let content = contentBounds(.all) else { return resetView(animated: animated) }
+        // Rand: die Werkzeugleiste schwebt an einer Kante, Luft rundherum.
+        let margin = ScratchpadToolbar.thickness + 24
+        let room = NSSize(width: max(80, bounds.width - 2 * margin), height: max(80, bounds.height - 2 * margin))
+        let fit = min(1, room.width / max(content.width, 1), room.height / max(content.height, 1))
+        let target = max(Self.zoomRange.lowerBound, fit)
+        let targetPan = CGPoint(x: -content.midX * target, y: -content.midY * target)
+        if abs(zoom - target) < 0.005, hypot(pan.x - targetPan.x, pan.y - targetPan.y) < 2 {
+            return resetView(animated: animated)
+        }
+        move(toPan: targetPan, zoom: target, animated: animated)
+    }
+
+    private func move(toPan target: CGPoint, zoom goal: CGFloat, animated: Bool) {
         springTimer?.invalidate(); springTimer = nil
-        guard !isNormalView else { return }
-        guard animated, window != nil else { setView(pan: .zero, zoom: 1); return }
+        guard pan != target || zoom != goal else { return }
+        guard animated, window != nil else { setView(pan: target, zoom: goal); return }
         let (startPan, startZoom, started) = (pan, zoom, CACurrentMediaTime())
         let timer = Timer(timeInterval: 1.0 / 60, repeats: true) { [weak self] timer in
             guard let self else { timer.invalidate(); return }
             let t = min(1, (CACurrentMediaTime() - started) / 0.25)
             let e = 1 - pow(1 - t, 3)   // ease-out
-            self.setView(pan: CGPoint(x: startPan.x * (1 - e), y: startPan.y * (1 - e)),
-                         zoom: startZoom + (1 - startZoom) * e)
-            if t >= 1 { timer.invalidate(); self.springTimer = nil; self.setView(pan: .zero, zoom: 1) }
+            self.setView(pan: CGPoint(x: startPan.x + (target.x - startPan.x) * e, y: startPan.y + (target.y - startPan.y) * e),
+                         zoom: startZoom + (goal - startZoom) * e)
+            if t >= 1 { timer.invalidate(); self.springTimer = nil; self.setView(pan: target, zoom: goal) }
         }
         RunLoop.main.add(timer, forMode: .common)
         springTimer = timer
@@ -1279,7 +1720,7 @@ final class ScratchpadCanvas: NSView {
         return ok
     }
 
-    /// Zweimal Leertaste kurz hintereinander = zur Mitte.
+    /// Zweimal Leertaste kurz hintereinander = Überblick (`fitView`).
     private var lastSpace: TimeInterval = 0
 
     /// Zwei Finger (oder Mausrad) verschieben die Fläche.
@@ -1298,8 +1739,8 @@ final class ScratchpadCanvas: NSView {
         setView(pan: CGPoint(x: screen.x - center.x - anchor.x * next, y: screen.y - center.y - anchor.y * next), zoom: next)
     }
 
-    /// Doppeltipp mit zwei Fingern: zurück zur Mitte.
-    override func smartMagnify(with event: NSEvent) { resetView(animated: true) }
+    /// Doppeltipp mit zwei Fingern: Überblick wie ␣␣.
+    override func smartMagnify(with event: NSEvent) { fitView(animated: true) }
 
     // MARK: Radieren (ganze Striche — ein Zug über viele Striche ist EIN Undo-Schritt)
 
@@ -1337,6 +1778,11 @@ final class ScratchpadCanvas: NSView {
             }
         }
         eraseSwaps = [:]
+        // Schaft weg = Spitze weg (26.09.: nach dem Radieren eines Pfeils blieb die Spitze als „>“ liegen).
+        let shafts = Set(erased.map(\.stroke.uid))
+        for index in strokes.indices.reversed() where strokes[index].follows.map(shafts.contains) ?? false {
+            erased.append((index, strokes.remove(at: index)))
+        }
         guard !erased.isEmpty || !swaps.isEmpty else { return }
         commit(Edit(removed: erased, swapped: swaps))
         erased = []
@@ -1380,15 +1826,19 @@ final class ScratchpadCanvas: NSView {
 
     // MARK: Tasten
 
-    /// P/M/T/E/X Werkzeug (T = Text, X = Pixel-Radierer), 1–7 Farbe, +/− Stärke — nur ohne ⌘/⌥/⌃.
+    /// V/P/M/T/E/X Werkzeug (V = Zeiger, T = Text, X = Pixel-Radierer), 1–7 Farbe, +/− Stärke — nur ohne ⌘/⌥/⌃.
     override func keyDown(with event: NSEvent) {
         guard event.modifierFlags.intersection([.command, .option, .control]).isEmpty,
               let key = event.charactersIgnoringModifiers?.lowercased() else { return super.keyDown(with: event) }
         if key == " " {
-            if event.timestamp - lastSpace < 0.4 { resetView(animated: true); lastSpace = 0 } else { lastSpace = event.timestamp }
+            if event.timestamp - lastSpace < 0.4 { fitView(animated: true); lastSpace = 0 } else { lastSpace = event.timestamp }
             return
         }
+        // Esc hebt die Auswahl auf, ⌫/⌦ entfernt sie.
+        if event.keyCode == 53, !selection.isEmpty { clearSelection(); return }
+        if [51, 117].contains(event.keyCode), !selection.isEmpty { deleteSelection(); return }
         switch key {
+        case "v": select(.none)
         case "p": select(.pen)
         case "m": select(.marker)
         case "t": select(.text)
@@ -1442,11 +1892,66 @@ final class ScratchpadCanvas: NSView {
         view.scale(by: zoom)
         view.concat()
         drawStrokes(in: toWorld(dirtyRect))
+        drawHints()
         NSGraphicsContext.restoreGraphicsState()
+    }
+
+    /// Auswahl, Einrast-Ziele, Griff, Breitenrand, Hilfslinien, Auswahlrahmen — nur am Bildschirm, nie im Bild für Agenten.
+    private func drawHints() {
+        let accent = ThemeStore.shared.accentColor
+        let hair = 1 / zoom
+        func outline(_ uid: String?, inset: CGFloat, fill: CGFloat, dash: Bool) {
+            guard let uid, let s = strokes.first(where: { $0.uid == uid }) else { return }
+            let r = (s.card ? s.cardRect : s.bounds).insetBy(dx: -inset / zoom, dy: -inset / zoom)
+            let path = NSBezierPath(roundedRect: r, xRadius: 6 / zoom, yRadius: 6 / zoom)
+            if fill > 0 { accent.withAlphaComponent(fill).setFill(); path.fill() }
+            path.lineWidth = 1.5 * hair
+            if dash { path.setLineDash([4 * hair, 3 * hair], count: 2, phase: 0) }
+            accent.setStroke(); path.stroke()
+        }
+        for uid in selection { outline(uid, inset: 4, fill: 0, dash: false) }
+        outline(snapHint.from, inset: 6, fill: 0.08, dash: true)
+        outline(snapHint.to, inset: 6, fill: 0.12, dash: false)
+        if let uid = hoverUID, let s = strokes.first(where: { $0.uid == uid }) {
+            let grip = gripRect(s)
+            accent.withAlphaComponent(0.85).setFill()
+            for row in 0..<3 { for col in 0..<2 {
+                let c = CGPoint(x: grip.minX + (3 + CGFloat(col) * 6) / zoom, y: grip.minY + (3 + CGFloat(row) * 6) / zoom)
+                NSBezierPath(ovalIn: NSRect(x: c.x - 1.5 * hair, y: c.y - 1.5 * hair, width: 3 * hair, height: 3 * hair)).fill()
+            } }
+        }
+        let edgeUID = widthDrag.map { strokes[$0.index].uid } ?? hoverEdge
+        if let uid = edgeUID, let s = strokes.first(where: { $0.uid == uid }) {
+            let r = s.cardRect
+            let bar = NSBezierPath()
+            bar.move(to: CGPoint(x: r.maxX, y: r.minY + 2 * hair))
+            bar.line(to: CGPoint(x: r.maxX, y: r.maxY - 2 * hair))
+            bar.lineWidth = 2 * hair
+            bar.lineCapStyle = .round
+            accent.setStroke(); bar.stroke()
+        }
+        if !guides.isEmpty {
+            let line = NSBezierPath()
+            for (a, b) in guides { line.move(to: a); line.line(to: b) }
+            line.lineWidth = hair
+            line.setLineDash([3 * hair, 3 * hair], count: 2, phase: 0)
+            accent.setStroke(); line.stroke()
+        }
+        if let band = rubberBand {
+            let path = NSBezierPath(rect: Self.rect(band.start, band.now))
+            accent.withAlphaComponent(0.08).setFill(); path.fill()
+            path.lineWidth = hair
+            accent.setStroke(); path.stroke()
+        }
     }
 
     /// Marker unter die Tinte, damit Markiertes lesbar bleibt; der laufende Strich obenauf.
     private func drawStrokes(in rect: NSRect) {
+        leftStems = Set(strokes.compactMap { s -> String? in
+            guard let link = s.link, link.route != nil, s.points.count >= 2,
+                  let card = strokes.first(where: { $0.uid == link.from }), card.card else { return nil }
+            return Self.exitsLeft(s.points, card) ? link.from : nil
+        })
         let visible = strokes.filter { $0.bounds.intersects(rect) }
         for stroke in visible where stroke.marker { draw(stroke) }
         for stroke in visible where !stroke.marker { draw(stroke) }
@@ -1487,7 +1992,7 @@ final class ScratchpadCanvas: NSView {
             switch stroke.frameStyle {
             case _ where !stroke.showsFrame: break
             case "mark":
-                let mark = stroke.markPath
+                let mark = leftStems.contains(stroke.uid) ? stroke.stemPath : stroke.markPath
                 if grouped { mark.lineWidth = 2.5 }
                 (grouped ? color.withAlphaComponent(0.9) : textInk.withAlphaComponent(0.55)).setStroke()
                 mark.stroke()
@@ -1522,6 +2027,8 @@ final class ScratchpadCanvas: NSView {
     // MARK: Zeiger — Kreis in Werkzeuggröße
 
     private var cursor = NSCursor.crosshair
+    /// Karten, deren Stamm einen Pfeil nach links abgibt — ihr Fuß fällt weg (in `drawStrokes` bestimmt).
+    private var leftStems: Set<String> = []
 
     override func resetCursorRects() {
         addCursorRect(visibleRect, cursor: cursor)
@@ -1576,7 +2083,7 @@ final class ScratchpadToolbar: NSView {
         case tool(ScratchTool), color(Int), size, undo, redo, clear, home, send, divider
     }
 
-    private static let items: [Item] = [.tool(.pen), .tool(.marker), .tool(.text), .tool(.eraser), .tool(.cutter), .divider]
+    private static let items: [Item] = [.tool(.none), .tool(.pen), .tool(.marker), .tool(.text), .tool(.eraser), .tool(.cutter), .divider]
         + ScratchPalette.names.indices.map { .color($0) }
         + [.divider, .size, .divider, .undo, .redo, .clear, .home, .divider, .send]
 
@@ -1643,18 +2150,20 @@ final class ScratchpadToolbar: NSView {
 
     private func toolTip(for item: Item) -> String? {
         switch item {
-        case .tool(.pen): "Stift (P)"
+        case .tool(.pen): "Stift (P): malt auch über Karten und Bilder — verschieben am Griff links daneben oder mit ⌥; "
+            + "ein Strich von Karte zu Karte rastet als Pfeil ein (Ziel leuchtet)"
         case .tool(.marker): "Marker (M)"
         case .tool(.text): "Text (T): klicken und tippen — wird Tinte wie Karten (radierbar, verschiebbar). Klick auf Text bearbeitet, ziehen verschiebt; Esc oder Klick daneben = fertig"
         case .tool(.eraser): "Radierer (E): nimmt ganze Tintenflecken — Striche, Bilder, bei Karten Buchstabe, Rahmen oder Fläche am Stück. Rechtsklick radiert immer"
         case .tool(.cutter): "Pixel-Radierer (X): schneidet aus allem, was er überfährt"
-        case .tool(.none): nil
+        case .tool(.none): "Zeiger (V): verschieben, Doppelklick bearbeitet, ⇧-Klick/⇧-Ziehen wählt mehrere, ⌫ entfernt; "
+            + "rechten Kartenrand ziehen = Breite; ohne Karte: Fläche verschieben"
         case .color(let i): "\(ScratchPalette.names[i]) (\(i + 1))"
         case .size: "Stärke (+ / −) — beim Text die Schriftgröße"
         case .undo: "Rückgängig (⌘Z)"
         case .redo: "Wiederholen (⇧⌘Z)"
         case .clear: "Leeren (⌘⌫) — ⌘S sichert als PNG, ⌘C kopiert als Bild"
-        case .home: "Zur Mitte (zweimal Leertaste, ⌘0, Doppeltipp mit zwei Fingern)"
+        case .home: "Überblick: alles einpassen (zweimal Leertaste, Doppeltipp mit zwei Fingern) — nochmal = Mitte 100 % (⌘0)"
         case .send: "An Claude/Codex schicken (⇧⌘⏎) — landet als Bild in deren Eingabe; ⌥-Klick: Ziel wählen"
         case .divider: nil
         }
@@ -1673,7 +2182,7 @@ final class ScratchpadToolbar: NSView {
         case .undo: canvas.undo()
         case .redo: canvas.redo()
         case .clear: canvas.clear()
-        case .home: canvas.resetView(animated: true)
+        case .home: canvas.fitView(animated: true)
         case .send: onSend?(event.modifierFlags.contains(.option))
         case .divider: break
         }
@@ -1745,7 +2254,7 @@ final class ScratchpadToolbar: NSView {
             case .undo: drawSymbol("arrow.uturn.backward", in: rect, color: canvas.canUndo ? dim : faint)
             case .redo: drawSymbol("arrow.uturn.forward", in: rect, color: canvas.canRedo ? dim : faint)
             case .clear: drawSymbol("trash", in: rect, color: canvas.strokeCount > 0 ? dim : faint)
-            case .home: drawSymbol("scope", in: rect, color: canvas.isNormalView ? faint : dim)
+            case .home: drawSymbol("viewfinder", in: rect, color: canvas.strokeCount > 0 || !canvas.isNormalView ? dim : faint)
             case .send: drawSymbol("paperplane", in: rect, color: canvas.strokeCount > 0 ? foreground : faint)
             case .divider:
                 let line = vertical
@@ -1768,7 +2277,7 @@ final class ScratchpadToolbar: NSView {
         case .text: "character.cursor.ibeam"
         case .eraser: "eraser"
         case .cutter: "eraser.line.dashed"
-        case .none: "hand.raised"
+        case .none: "cursorarrow"
         }
     }
 
