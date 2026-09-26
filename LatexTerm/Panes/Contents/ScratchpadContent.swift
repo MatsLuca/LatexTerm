@@ -1189,6 +1189,36 @@ final class ScratchStroke: Codable {
     /// Nichts mehr übrig — die Karte kann weg.
     var isFullyErased: Bool { card && !showsFill && !showsFrame && liveGlyphs.isEmpty }
 
+    /// Titel und Text ohne die radierten Buchstaben (Mats, 26.09.: radiert = gelöscht). Zeilen, die dadurch leer
+    /// werden, fallen weg, Lücken im Satz schrumpfen auf ein Leerzeichen; nil = keine Buchstaben radiert.
+    var textWithoutErased: (title: String?, text: String)? {
+        let gone = erasedChars
+        guard card, !gone.isEmpty, let text else { return nil }
+        let title = cardInfo?.title.flatMap { $0.isEmpty ? nil : $0 }
+        let head = title.map { $0 + (text.isEmpty ? "" : "\n") } ?? ""
+        let full = Array((head + text).utf16)
+        let headCount = head.utf16.count
+        func purge(_ range: Range<Int>) -> String {
+            let lines = String(decoding: full[range], as: UTF16.self).components(separatedBy: "\n")
+            var offset = range.lowerBound
+            var kept: [String] = []
+            for line in lines {
+                let units = Array(line.utf16)
+                let lineRange = offset..<(offset + units.count)
+                offset += units.count + 1
+                guard lineRange.contains(where: gone.contains) else { kept.append(line); continue }
+                let rest = String(decoding: lineRange.filter { !gone.contains($0) }.map { full[$0] }, as: UTF16.self)
+                let indent = String(rest.prefix { $0 == " " || $0 == "\t" })
+                let words = rest.split(whereSeparator: { $0 == " " || $0 == "\t" })
+                if !words.isEmpty { kept.append(indent + words.joined(separator: " ")) }
+            }
+            return kept.joined(separator: "\n")
+        }
+        let newTitle = title.map { _ in purge(0..<(headCount - (text.isEmpty ? 0 : 1))) }
+        let newText = purge(headCount..<full.count).trimmingCharacters(in: .newlines)
+        return (newTitle.flatMap { $0.trimmingCharacters(in: .whitespaces).isEmpty ? nil : $0 }, newText)
+    }
+
     /// Treffer auf sichtbare Tinte der Karte: Fläche, Rahmen oder ein Buchstabe.
     func cardTouches(_ p: CGPoint, radius r: CGFloat) -> Bool {
         let rect = cardRect

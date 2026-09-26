@@ -1519,8 +1519,16 @@ final class ScratchpadCanvas: NSView {
     }
 
     private func beginEditing(_ card: ScratchStroke, at p: CGPoint? = nil) {
-        guard let info = card.cardInfo else { return }
         endEditing(commit: true)
+        // Ältere Karten tragen radierte Buchstaben noch als Schnitt — erst aufräumen, sonst tauchen sie im Editor wieder auf.
+        var card = card
+        if card.textWithoutErased != nil, let index = strokes.firstIndex(where: { $0 === card }) {
+            let fresh = withoutErasedChars(card)
+            strokes[index] = fresh
+            commit(Edit(swapped: [(card, fresh)]))
+            card = fresh
+        }
+        guard let info = card.cardInfo else { return }
         editing = card
         openEditor(text: (info.title.map { $0 + "\n" } ?? "") + (card.text ?? ""), style: info, title: info.title != nil, caretAt: p)
         invalidate(card.cardRect)
@@ -1567,6 +1575,11 @@ final class ScratchpadCanvas: NSView {
     /// von Hand gezogene oder vom Agenten gesetzte Breiten (`fixedWidth`) bleiben stehen.
     private func editWidth(for body: String, info: ScratchCard, origin: CGPoint) -> CGFloat {
         if let editing, editing.cardInfo?.fixedWidth == true { return editing.cardWidth }
+        // Umbrochene Karte (26.09.: beim Öffnen sprang sie breiter und brach anders um): Breite bleibt, wie sie ist.
+        if let editing, let info = editing.cardInfo, let text = editing.text,
+           ScratchStroke.cardWidth(for: text, info: info, limit: .greatestFiniteMagnitude) > editing.cardWidth + 1 {
+            return editing.cardWidth
+        }
         let edge = toWorld(bounds).maxX - origin.x - 24 / zoom
         let limit = max(ScratchStroke.cardMaxWidth, edge, editing?.cardWidth ?? 0)
         return ScratchStroke.cardWidth(for: body, info: info, limit: limit)
@@ -1773,8 +1786,12 @@ final class ScratchpadCanvas: NSView {
             if pair.live.isFullyErased, let index = strokes.firstIndex(where: { $0 === pair.live }) {
                 strokes.remove(at: index)
                 erased.append((index, pair.old))
-            } else {
-                swaps.append((old: pair.old, new: pair.live))
+            } else if let index = strokes.firstIndex(where: { $0 === pair.live }) {
+                // Radierte Buchstaben sind gelöscht, die Karte schrumpft auf den Rest (Mats, 26.09.).
+                let fresh = withoutErasedChars(pair.live)
+                strokes[index] = fresh
+                invalidate(pair.live.bounds)
+                swaps.append((old: pair.old, new: fresh))
             }
         }
         eraseSwaps = [:]
@@ -1801,6 +1818,18 @@ final class ScratchpadCanvas: NSView {
             erased.append((index, stroke))
             invalidate(stroke.bounds)
         }
+    }
+
+    /// Karte mit echtem Text statt Buchstaben-Schnitten; Breite schrumpft mit (von Hand/Agent gesetzte bleibt),
+    /// Rahmen- und Flächen-Schnitte bleiben. Ohne radierte Buchstaben: die Karte selbst.
+    private func withoutErasedChars(_ card: ScratchStroke) -> ScratchStroke {
+        guard let purged = card.textWithoutErased, var info = card.cardInfo else { return card }
+        info.title = purged.title
+        let width = info.fixedWidth == true ? card.cardWidth
+            : ScratchStroke.cardWidth(for: purged.text, info: info, limit: card.cardWidth)
+        let fresh = card.cardUpdated(text: purged.text, origin: nil, width: width, color: nil, info: info)
+        fresh.cuts = card.cuts.filter { $0.part == "frame" || $0.part == "fill" }
+        return fresh
     }
 
     private func eraseFromCard(_ index: Int, at p: CGPoint, radius r: CGFloat) {
@@ -1834,8 +1863,12 @@ final class ScratchpadCanvas: NSView {
             if event.timestamp - lastSpace < 0.4 { fitView(animated: true); lastSpace = 0 } else { lastSpace = event.timestamp }
             return
         }
-        // Esc hebt die Auswahl auf, ⌫/⌦ entfernt sie.
-        if event.keyCode == 53, !selection.isEmpty { clearSelection(); return }
+        // Esc (Mats, 26.09.): zurück zum Zeiger — Werkzeug ab, Auswahl weg. ⌫/⌦ entfernt die Auswahl.
+        if event.keyCode == 53 {
+            clearSelection()
+            if tool != .none { select(.none) }
+            return
+        }
         if [51, 117].contains(event.keyCode), !selection.isEmpty { deleteSelection(); return }
         switch key {
         case "v": select(.none)
