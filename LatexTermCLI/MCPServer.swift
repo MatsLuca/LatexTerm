@@ -139,6 +139,10 @@ final class MCPServer {
             }
         }
         lines.append("""
+        Wörter des Nutzers — genau das ist gemeint, nichts Ähnliches: Fenster > Brett (eigene Fläche, Reiter in der Leiste oben \
+        links, ⇧⌘T) > Kachel (ein Feld darauf). Begleiter = von einer Session geöffnete Kachel in ihrer Nebenspalte; Reiter = \
+        Kacheln teilen sich einen Platz; Leiste = flache Kachel unter/über einer anderen; Chip = Status je Kachel in der \
+        Titelleiste (früher „Pille“); Banner = macOS-Mitteilung; Steg = Trennlinie; ✋ = von Hand gesetzt; Home-Kachel = ⌘N-Launcher.
         Kacheln sind dein Bildschirm neben dem Chat. Nutze sie von dir aus, wenn es dem Nutzer hilft — er \
         muss das Wort „Kachel“ nicht sagen: Ergebnisse zeigen (PDF, Bild, Plot → open_preview; HTML → open_web; beide laden bei Dateiänderung von selbst neu), lange Prozesse \
         wie Server, Builds oder Logs in eine eigene Terminal-Kachel (open_terminal), Arbeit auf parallele \
