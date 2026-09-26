@@ -2,6 +2,7 @@ import AppKit
 import PDFKit
 import Quartz
 import UniformTypeIdentifiers
+import WebKit
 
 /// Vorschau-Kachel (Kacheln Runde 2, Platz 1 — Plan claude-werkstatt `plans/kacheln-runde-2_2026-09-22.md`):
 /// ein PDF, Bild oder Dokument neben der Session, von selbst neu geladen, sobald die Datei sich ändert
@@ -12,24 +13,31 @@ import UniformTypeIdentifiers
 /// mit SyncTeX führt `sync datei.tex:zeile` vom Quelltext zur Stelle im PDF.
 /// Bild: nie über 1:1 vergrößert, Doppelklick 1:1/zurück, Ziehen, Pinch. Dokumente (Word, PowerPoint,
 /// Excel, Text …) über QuickLook. Ordner: alle PDFs/Bilder darin, neueste zuerst, neue Dateien rücken vor.
+/// Markdown (26.09.): gerendert mit Formeln/Mermaid oder als Quelltext (⌥⌘U), springt nach dem Speichern zur geänderten
+/// Zeile, Marken tragen `datei.md:zeile` + Auszug (`PreviewMarkdown.swift`).
 ///
 /// Rückkanal (22.–23.09., wie ➤ im Scratchpad): Text markieren oder mit ⌥ einen Rahmen ziehen, Notiz, „Merken“
 /// sammelt, ➤ / ⇧⌘⏎ fügt alle Stellen — Seite, SyncTeX-Zeile, Text, Notiz, Ausschnitt als PNG — in die
 /// Agenten-Kachel ein. Agenten sehen die Kachel per `call look` (MCP `preview_look`).
 final class PreviewContent: NSObject, PaneContent {
     static let kind = "preview"
-    static let displayName = "PDF, Bild oder Dokument in neuer Kachel …"
+    static let displayName = "PDF, Bild, Markdown oder Dokument in neuer Kachel …"
     static let manual = PaneKindManual(
-        summary: "Zeigt ein PDF, Bild (PNG, JPG, SVG …), Office-/Textdokument oder einen ganzen Ordner mit Plots neben der Session "
-            + "und lädt von selbst neu, sobald sich die Datei ändert — Seite und Zoom bleiben, nach einer Änderung springt das PDF "
-            + "zur ersten geänderten Seite. Für kompilierte LaTeX-PDFs, Plots, Renders, Screenshots. Die Datei darf noch fehlen "
-            + "(wartet auf den ersten Build). Der Nutzer kann Stellen markieren und dir mit Seite, SyncTeX-Zeile und Ausschnitt "
-            + "schicken; mit preview_look siehst du selbst, was die Kachel zeigt. HTML → open_web.",
+        summary: "Zeigt ein PDF, Bild (PNG, JPG, SVG …), Markdown (.md), Office-/Textdokument oder einen ganzen Ordner mit Plots "
+            + "neben der Session und lädt von selbst neu, sobald sich die Datei ändert — Seite und Zoom bleiben, nach einer Änderung "
+            + "springt die Ansicht zur ersten geänderten Seite bzw. Zeile. Für kompilierte LaTeX-PDFs, Plots, Renders, Screenshots "
+            + "und Markdown-Dateien, die der Nutzer lesen soll (Pläne, Notizen, Berichte): gerendert mit Formeln, Tabellen, Mermaid "
+            + "— oder mit view=source als Quelltext mit Zeilennummern, wenn es um die Syntax geht. Die Datei darf noch fehlen "
+            + "(wartet auf den ersten Build). Der Nutzer kann Stellen markieren und dir mit Seite bzw. Zeile (SyncTeX, .md) und "
+            + "Ausschnitt schicken; mit preview_look siehst du selbst, was die Kachel zeigt. HTML → open_web.",
         args: [PaneKindArg(name: "url", summary: "absoluter Pfad der Datei oder eines Ordners (auch ~/…)", required: true),
                PaneKindArg(name: "page", summary: "PDF: Startseite ab 1", required: false),
                PaneKindArg(name: "zoom", summary: "width (Seitenbreite, Default PDF), fit (ganz sichtbar, Default Bild) oder Prozent wie 150",
-                           required: false)],
-        actions: [PaneKindAction(name: "sync <datei.tex>:<zeile>", summary: "PDF: per SyncTeX zur Stelle dieser Quelltext-Zeile springen und sie aufleuchten lassen (Pfad relativ zum PDF oder absolut; nach dem Kompilieren zeigen, wo eine Änderung gelandet ist)"),
+                           required: false),
+               PaneKindArg(name: "view", summary: "Markdown: rendered (Default, gerendert) oder source (Quelltext mit Zeilennummern)", required: false),
+               PaneKindArg(name: "line", summary: "Markdown: mit dieser Zeile oben öffnen (ab 1)", required: false)],
+        actions: [PaneKindAction(name: "sync <datei.tex>:<zeile>", summary: "PDF: per SyncTeX zur Stelle dieser Quelltext-Zeile springen und sie aufleuchten lassen (Pfad relativ zum PDF oder absolut; nach dem Kompilieren zeigen, wo eine Änderung gelandet ist). Markdown: sync <zeile> bzw. <datei.md>:<zeile> springt zu dieser Zeile"),
+                  PaneKindAction(name: "view <rendered|source|toggle>", summary: "Markdown: gerendert oder Quelltext zeigen"),
                   PaneKindAction(name: "page <n>", summary: "PDF: zu Seite n springen"),
                   PaneKindAction(name: "next", summary: "PDF: nächste Seite"),
                   PaneKindAction(name: "prev", summary: "PDF: vorige Seite"),
@@ -65,7 +73,7 @@ final class PreviewContent: NSObject, PaneContent {
         }
     }
 
-    nonisolated enum FileType { case pdf, image, document }
+    nonisolated enum FileType { case pdf, image, document, markdown }
 
     weak var delegate: PaneContentDelegate?
     let root = PreviewRootView()
@@ -92,6 +100,15 @@ final class PreviewContent: NSObject, PaneContent {
     /// Format des Gezeigten (Breite/Höhe: erste PDF-Seite, Bild) — Wunschform fürs Kachel-Layout.
     private var contentAspect: Double?
 
+    // Markdown
+    private var mdText = ""
+    private var mdView: MarkdownView = .rendered
+    private var mdVisible: (first: Int, last: Int)?
+    private var mdTop: Int?
+    private var startLine: Int?
+    /// ⌘[ im Markdown: Zeile vor dem letzten Sprung bzw. Datei vor einem geklickten Link.
+    private var mdBack: [(file: URL, line: Int?)] = []
+
     // Ordner-Modus
     private(set) var folder: URL?
     private var folderItems: [URL] = []
@@ -105,7 +122,7 @@ final class PreviewContent: NSObject, PaneContent {
     private var sending = false
 
     required init(args: [String: String]) throws {
-        try PaneArgsError.rejectUnknown(args, allowed: ["url", "page", "zoom", "dark", "sidebar", "item", "follow"], kind: Self.kind)
+        try PaneArgsError.rejectUnknown(args, allowed: ["url", "page", "zoom", "dark", "sidebar", "item", "follow", "view", "line"], kind: Self.kind)
         guard let raw = args["url"] else { throw PaneArgsError("preview braucht --arg url=/pfad/datei.pdf") }
         let target = try Self.resolve(raw)
         var zoomArg: Zoom?
@@ -124,7 +141,15 @@ final class PreviewContent: NSObject, PaneContent {
             file = chosen ?? url.appendingPathComponent("…")
             type = chosen.flatMap { Self.fileType($0) } ?? .image
         }
-        zoom = zoomArg ?? (type == .pdf ? .width : .fit)
+        zoom = zoomArg ?? Self.defaultZoom(type)
+        if let raw = args["view"] {
+            guard let view = MarkdownView(arg: raw) else { throw PaneArgsError("preview: view = rendered oder source, bekam „\(raw)“") }
+            mdView = view
+        }
+        if let raw = args["line"] {
+            guard let line = Int(raw), line >= 1 else { throw PaneArgsError("preview: line muss eine Zahl ab 1 sein, bekam „\(raw)“") }
+            startLine = line
+        }
         if let raw = args["page"] {
             guard let page = Int(raw), page >= 1 else { throw PaneArgsError("preview: page muss eine Zahl ab 1 sein, bekam „\(raw)“") }
             startPage = page
@@ -143,7 +168,7 @@ final class PreviewContent: NSObject, PaneContent {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.message = "PDF, Bild, Dokument — oder einen Ordner mit Plots"
+        panel.message = "PDF, Bild, Markdown, Dokument — oder einen Ordner mit Plots"
         return panel.runModal() == .OK ? panel.url.map { ["url": $0.path] } : nil
     }
 
@@ -178,11 +203,14 @@ final class PreviewContent: NSObject, PaneContent {
     }
 
     static func fileType(_ url: URL) -> FileType? {
+        if MarkdownFile.matches(url) { return .markdown }
         guard let type = UTType(filenameExtension: url.pathExtension) else { return nil }
         if type.conforms(to: .pdf) { return .pdf }
         if type.conforms(to: .image) { return .image }
         return .document
     }
+
+    static func defaultZoom(_ type: FileType) -> Zoom { type == .image || type == .document ? .fit : .width }
 
     private func wire() {
         root.findBar.onSearch = { [weak self] text, backwards in self?.find(text, backwards: backwards) }
@@ -206,6 +234,10 @@ final class PreviewContent: NSObject, PaneContent {
         root.pdf.onRegion = { [weak self] page, rect in self?.pdfRegion(page: page, rect: rect) }
         root.sidebar.onMode = { [weak self] mode in self?.setSidebar(mode) }
         root.sidebar.onJump = { [weak self] item in self?.jump(to: item) }
+        root.markdown.onSelection = { [weak self] body in self?.markdownSelection(body, element: false) }
+        root.markdown.onElement = { [weak self] body in self?.markdownSelection(body, element: true) }
+        root.markdown.onLink = { [weak self] href, url in self?.markdownLink(href, url) }
+        root.markdown.onScroll = { [weak self] first, last, top in self?.markdownScrolled(first, last, top) }
     }
 
     // MARK: Laden
@@ -220,6 +252,8 @@ final class PreviewContent: NSObject, PaneContent {
         markAnnotations = []
         flashAnnotations = []
         back = nil
+        mdText = ""
+        mdVisible = nil
         root.show(type)
         applyDarkFilter()
         root.setSidebar(type == .pdf ? sidebar : nil)
@@ -260,6 +294,8 @@ final class PreviewContent: NSObject, PaneContent {
             refreshMarks()
         case .document:
             root.showDocument(file, refresh: !initial)
+        case .markdown:
+            note = showMarkdown(MarkdownFile.normalize(String(decoding: data, as: UTF8.self)), initial: initial)
         }
         retries = 0
         problem = nil
@@ -316,7 +352,7 @@ final class PreviewContent: NSObject, PaneContent {
     private func show(item: URL) {
         guard let type = Self.fileType(item), type != .document else { return }
         self.type = type
-        zoom = type == .pdf ? .width : .fit
+        zoom = Self.defaultZoom(type)
         startPage = nil
         open(item)
     }
@@ -440,6 +476,8 @@ final class PreviewContent: NSObject, PaneContent {
             case .fit, .width: root.image.fitToView()
             case .percent(let p): root.image.setZoom(p / 100)
             }
+        case .markdown:
+            if case .percent(let p) = new { root.markdown.webView.pageZoom = p / 100 } else { root.markdown.webView.pageZoom = 1 }
         case .document:
             return
         }
@@ -455,6 +493,7 @@ final class PreviewContent: NSObject, PaneContent {
         switch type {
         case .pdf: setZoom(.percent(Double(pdfView.scaleFactor * factor) * 100))
         case .image: setZoom(.percent(Double(root.image.magnification * factor) * 100))
+        case .markdown: setZoom(.percent(min(300, max(50, Double(root.markdown.webView.pageZoom * factor) * 100))))
         case .document: break
         }
     }
@@ -482,6 +521,8 @@ final class PreviewContent: NSObject, PaneContent {
         case .image:
             let percent = "\(Int((root.image.magnification * 100).rounded())) %"
             return root.image.isFitted ? "eingepasst · \(percent)" : percent
+        case .markdown:
+            return "\(Int((root.markdown.webView.pageZoom * 100).rounded())) %"
         case .document:
             return ""
         }
@@ -496,6 +537,7 @@ final class PreviewContent: NSObject, PaneContent {
     }
 
     private func goBack() {
+        if type == .markdown || (back == nil && !mdBack.isEmpty) { return markdownBack() }
         guard let target = back else { NSSound.beep(); return }
         back = pdfView.currentDestination
         pdfView.go(to: target)
@@ -546,6 +588,7 @@ final class PreviewContent: NSObject, PaneContent {
 
     /// `datei.tex:zeile` (relativ zum PDF oder absolut) oder nur `zeile` (dann `<pdf-stamm>.tex`) → Seite (1-basiert).
     func sync(_ spec: String) throws -> Int {
+        if type == .markdown { return try syncMarkdown(spec) }
         guard type == .pdf, let doc = pdfView.document else { throw PaneArgsError("sync geht nur bei einem geladenen PDF") }
         guard SyncTeX.available(for: file) else {
             throw PaneArgsError("Keine SyncTeX-Daten neben \(file.lastPathComponent) — mit latexmk -synctex=1 kompilieren")
@@ -578,7 +621,7 @@ final class PreviewContent: NSObject, PaneContent {
     // MARK: Suche, Gehe zu
 
     private func showFind() {
-        guard type == .pdf else { return }
+        guard type == .pdf || type == .markdown else { return }
         closeGoto()
         root.findBar.show(text: findText)
         root.window?.makeFirstResponder(root.findBar.field)
@@ -598,6 +641,7 @@ final class PreviewContent: NSObject, PaneContent {
 
     /// Gleicher Text = nächster Treffer (bzw. voriger), neuer Text = neue Suche ab der aktuellen Seite.
     private func find(_ text: String, backwards: Bool = false) {
+        if type == .markdown { return findMarkdown(text, backwards: backwards) }
         guard type == .pdf, let doc = pdfView.document else { return }
         let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else { closeFind(); return }
@@ -717,6 +761,7 @@ final class PreviewContent: NSObject, PaneContent {
         marks.append(mark)
         pending = nil
         pdfView.clearSelection()
+        root.markdown.clearSelection()
         refreshMarks()
         updateMarkUI()
         root.window?.makeFirstResponder(keyView)
@@ -726,6 +771,7 @@ final class PreviewContent: NSObject, PaneContent {
     private func discardPending() {
         pending = nil
         pdfView.clearSelection()
+        root.markdown.clearSelection()
         refreshMarks()
         updateMarkUI()
         root.window?.makeFirstResponder(keyView)
@@ -740,7 +786,9 @@ final class PreviewContent: NSObject, PaneContent {
     private func updateMarkUI() {
         var summary: String?
         if let pending {
-            let place = type == .pdf ? "S. \(pending.page + 1)" : "Bereich"
+            let place = type == .pdf ? "S. \(pending.page + 1)"
+                : type == .markdown ? (pending.source.map { $0.first == $0.last ? "Z. \($0.first)" : "Z. \($0.first)–\($0.last)" } ?? "Stelle")
+                : "Bereich"
             let text = pending.text.replacingOccurrences(of: "\n", with: " ")
             summary = text.isEmpty ? "\(place) · Rahmen" : "\(place) · „\(text.prefix(60))\(text.count > 60 ? "…" : "")“"
         }
@@ -766,6 +814,11 @@ final class PreviewContent: NSObject, PaneContent {
             if let pending, let page = doc.page(at: pending.page) {
                 annotate(pending, on: page, color: accent, number: nil, dashed: true)
             }
+        case .markdown:
+            let view = mdView == .rendered ? 0 : 1
+            var list = marks.enumerated().filter { $0.element.page == view }.map { Self.markJSON($0.element, number: $0.offset + 1, pending: false) }
+            if let pending, pending.page == view { list.append(Self.markJSON(pending, number: nil, pending: true)) }
+            root.markdown.showMarks(list)
         case .document:
             break
         }
@@ -824,7 +877,8 @@ final class PreviewContent: NSObject, PaneContent {
         }
         guard !batch.isEmpty else {
             NSSound.beep()
-            root.pill.flash("Erst markieren: Text auswählen oder mit ⌥ einen Rahmen ziehen", hold: 3)
+            root.pill.flash(type == .markdown ? "Erst markieren: Text auswählen oder ⌥-Klick auf einen Block"
+                                              : "Erst markieren: Text auswählen oder mit ⌥ einen Rahmen ziehen", hold: 3)
             return
         }
         switch AgentHandoff.target(delegate, choose: choose) {
@@ -846,7 +900,7 @@ final class PreviewContent: NSObject, PaneContent {
     private func deliver(_ batch: [PreviewMark], to pane: PaneInfo) {
         sending = true
         root.pill.flash("➤ bereite \(batch.count == 1 ? "Stelle" : "\(batch.count) Stellen") vor …", hold: 5)
-        let file = file, type = type, doc = pdfView.document
+        let file = file, type = type, doc = pdfView.document, markdown = type == .markdown ? mdText : nil
         let image = root.image.canvas.image, pointSize = root.image.pointSize, pixelSize = root.image.pixelSize
         let synctex = type == .pdf && SyncTeX.available(for: file)
         // Ausschnitte auf dem Main-Thread (PDFKit/NSImage), SyncTeX-Aufrufe im Hintergrund.
@@ -878,7 +932,7 @@ final class PreviewContent: NSObject, PaneContent {
                 }
             }
             let text = Self.compose(located, crops: crops, file: file, type: type, pages: pages,
-                                    pixelSize: pixelSize, pointSize: pointSize)
+                                    pixelSize: pixelSize, pointSize: pointSize, markdown: markdown)
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.sending = false
@@ -899,7 +953,7 @@ final class PreviewContent: NSObject, PaneContent {
 
     /// Der eingefügte Text: Kopf mit Datei, je Stelle eine Zeile mit Ort, Quelle, Text, Notiz, Ausschnitt.
     nonisolated static func compose(_ marks: [PreviewMark], crops: [URL?], file: URL, type: FileType, pages: Int?,
-                        pixelSize: NSSize, pointSize: NSSize) -> String {
+                        pixelSize: NSSize, pointSize: NSSize, markdown: String? = nil) -> String {
         let tilde = (file.path as NSString).abbreviatingWithTildeInPath
         let base = file.deletingLastPathComponent()
         var head = "Aus der Vorschau \(tilde)"
@@ -915,22 +969,218 @@ final class PreviewContent: NSObject, PaneContent {
                 let sx = pixelSize.width / pointSize.width, sy = pixelSize.height / pointSize.height
                 place.append("Bereich x \(Int(mark.rect.minX * sx))–\(Int(mark.rect.maxX * sx)), y \(Int(mark.rect.minY * sy))–\(Int(mark.rect.maxY * sy)) px")
             } else if mark.kind == .region {
-                place.append("Rahmen")
+                place.append(type == .markdown ? "Block" : "Rahmen")
             }
             var line = "\(index + 1). " + place.joined(separator: " · ")
             let text = mark.text.replacingOccurrences(of: "\n", with: " ").trimmingCharacters(in: .whitespaces)
-            if !text.isEmpty { line += " — „\(text.prefix(400))\(text.count > 400 ? "…" : "")“" }
+            let excerpt = markdown.flatMap { source in mark.source.flatMap { MarkdownFile.excerpt(source, first: $0.first, last: $0.last) } }
+            // Ganzer Block: der Quelltext sagt mehr als gerenderter Text (Formeln, Diagramme).
+            if !text.isEmpty, !(mark.kind == .region && excerpt != nil) {
+                line += " — „\(text.prefix(400))\(text.count > 400 ? "…" : "")“"
+            }
             lines.append(line)
             if !mark.note.isEmpty { lines.append("   Notiz: \(mark.note)") }
+            if let excerpt { lines.append(excerpt) }
             if let crop = crops[index] { lines.append("   Ausschnitt: \(crop.path)") }
         }
         return lines.joined(separator: "\n") + "\n"
+    }
+
+    // MARK: Markdown
+
+    private var mdLines: Int { mdText.isEmpty ? 0 : mdText.split(separator: "\n", omittingEmptySubsequences: false).count }
+
+    /// Zeigt den neuen Stand. Nach einer Änderung: liegt die erste geänderte Zeile im Blick, leuchtet sie nur auf,
+    /// sonst springt die Ansicht hin (⌘[ zurück) — wie beim PDF zur geänderten Seite.
+    private func showMarkdown(_ text: String, initial: Bool) -> String? {
+        let old = mdText
+        mdText = text
+        guard !initial, let changed = MarkdownFile.firstChangedLine(old, text) else {
+            root.markdown.show(text: text, file: file, view: mdView, keep: !initial, line: initial ? startLine : nil)
+            if initial { startLine = nil }
+            return nil
+        }
+        let inView = mdVisible.map { $0.first <= changed && changed <= $0.last } ?? false
+        if inView || !follow {
+            root.markdown.show(text: text, file: file, view: mdView, keep: true, reveal: inView ? changed : nil, revealIfHidden: true)
+            return inView ? "↻ neu · Z. \(changed) geändert" : "↻ neu · Änderung in Z. \(changed)"
+        }
+        mdBack.append((file, mdTop))
+        root.markdown.show(text: text, file: file, view: mdView, keep: true, reveal: changed)
+        return "↻ Änderung in Z. \(changed) · ⌘[ zurück"
+    }
+
+    private func setView(_ view: MarkdownView) {
+        guard type == .markdown, view != mdView else { return }
+        mdView = view
+        pending = nil
+        root.markdown.show(text: mdText, file: file, view: view, keep: false, line: mdTop)
+        root.pill.flash(view == .rendered ? "gerendert" : "Quelltext", hold: 1)
+        refreshMarks()
+        updateMarkUI()
+        delegate?.contentStyleChanged()
+    }
+
+    /// `zeile`, `datei.md:zeile` (relativ zur Datei oder absolut). Andere Markdown-Datei → dort öffnen.
+    private func syncMarkdown(_ spec: String) throws -> Int {
+        let trimmed = spec.trimmingCharacters(in: .whitespaces)
+        var target = file.standardizedFileURL
+        var lineText = trimmed
+        if let colon = trimmed.lastIndex(of: ":") {
+            let path = (String(trimmed[..<colon]) as NSString).expandingTildeInPath
+            lineText = String(trimmed[trimmed.index(after: colon)...])
+            target = (path.hasPrefix("/") ? URL(fileURLWithPath: path) : file.deletingLastPathComponent().appendingPathComponent(path)).standardizedFileURL
+        }
+        guard let line = Int(lineText.trimmingCharacters(in: .whitespaces)), line > 0 else {
+            throw PaneArgsError("sync braucht <zeile> oder <datei.md>:<zeile>, bekam „\(spec)“")
+        }
+        if target != file.standardizedFileURL {
+            guard MarkdownFile.matches(target), FileManager.default.fileExists(atPath: target.path) else {
+                throw PaneArgsError("sync: \(target.lastPathComponent) ist keine vorhandene Markdown-Datei")
+            }
+            mdBack.append((file, mdTop))
+            startLine = line
+            open(target)
+            return line
+        }
+        guard line <= max(mdLines, 1) else { throw PaneArgsError("\(file.lastPathComponent) hat nur \(mdLines) Zeilen") }
+        mdBack.append((file, mdTop))
+        root.markdown.reveal(line: line)
+        return line
+    }
+
+    private func markdownBack() {
+        guard let entry = mdBack.popLast() else { NSSound.beep(); return }
+        if entry.file == file, type == .markdown {
+            if let line = entry.line { root.markdown.reveal(line: line, flash: false, top: true) }
+            return
+        }
+        folder = nil
+        folderItems = []
+        type = Self.fileType(entry.file) ?? .document
+        zoom = Self.defaultZoom(type)
+        startPage = nil
+        startLine = entry.line
+        open(entry.file)
+    }
+
+    private func findMarkdown(_ text: String, backwards: Bool) {
+        let text = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { closeFind(); return }
+        findText = text
+        let config = WKFindConfiguration()
+        config.backwards = backwards
+        config.caseSensitive = false
+        config.wraps = true
+        root.markdown.webView.find(text, configuration: config) { [weak self] result in
+            self?.root.findBar.setCount(result.matchFound ? "gefunden" : "keine Treffer")
+        }
+    }
+
+    /// Auswahl (Text) oder ⌥-Klick (ganzer Block) aus der Seite → offene Marke mit Zeilenbereich.
+    private func markdownSelection(_ body: [String: Any], element: Bool) {
+        let text = (body["text"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard element || !text.isEmpty, let first = body["first"] as? Int else {
+            if pending?.kind == .text {
+                pending = nil
+                refreshMarks()
+                updateMarkUI()
+            }
+            return
+        }
+        let last = max(first, body["last"] as? Int ?? first)
+        pending = PreviewMark(kind: element ? .region : .text, page: mdView == .rendered ? 0 : 1, rect: Self.rect(body["rect"]),
+                              lines: (body["lines"] as? [Any] ?? []).map(Self.rect), text: text,
+                              source: SyncTeX.Span(file: file.path, first: first, last: last))
+        refreshMarks()
+        updateMarkUI()
+    }
+
+    private static func rect(_ any: Any?) -> NSRect {
+        guard let d = any as? [String: Any] else { return .zero }
+        func n(_ key: String) -> CGFloat { CGFloat((d[key] as? NSNumber)?.doubleValue ?? 0) }
+        return NSRect(x: n("x"), y: n("y"), width: n("w"), height: n("h"))
+    }
+
+    private static func markJSON(_ mark: PreviewMark, number: Int?, pending: Bool) -> [String: Any] {
+        func box(_ r: NSRect) -> [String: Double] { ["x": Double(r.minX), "y": Double(r.minY), "w": Double(r.width), "h": Double(r.height)] }
+        var json: [String: Any] = ["kind": mark.kind == .region ? "element" : "text", "rect": box(mark.rect),
+                                   "lines": mark.lines.map(box), "pending": pending]
+        if let number { json["n"] = number }
+        return json
+    }
+
+    /// Link in der Seite: nach draußen → Standardprogramm; Markdown/PDF/Bild im Projekt → in dieser Kachel (⌘[ zurück).
+    private func markdownLink(_ href: String, _ url: URL?) {
+        guard let url, let scheme = url.scheme?.lowercased() else { return }
+        if ["http", "https", "mailto"].contains(scheme) { NSWorkspace.shared.open(url); return }
+        guard scheme == MarkdownServer.scheme || scheme == "file" else { return }
+        let target = URL(fileURLWithPath: url.path).standardizedFileURL
+        var isDir: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: target.path, isDirectory: &isDir) else {
+            NSSound.beep()
+            root.pill.flash("Nicht gefunden: \(target.lastPathComponent)", hold: 2.5)
+            return
+        }
+        guard !isDir.boolValue, let kind = Self.fileType(target), kind != .document,
+              !["html", "htm"].contains(target.pathExtension.lowercased()) else {
+            NSWorkspace.shared.open(target)
+            return
+        }
+        mdBack.append((file, mdTop))
+        folder = nil
+        folderItems = []
+        type = kind
+        zoom = Self.defaultZoom(kind)
+        startPage = nil
+        startLine = nil
+        open(target)
+    }
+
+    private func markdownScrolled(_ first: Int?, _ last: Int?, _ top: Int?) {
+        if let first, let last { mdVisible = (first, last) } else { mdVisible = nil }
+        mdTop = top
+        delegate?.contentStyleChanged()
+    }
+
+    /// `call look` für Markdown: antwortet sofort mit `pending`, schreibt Bild und `<png>.json`, sobald WebKit es hat.
+    private func lookMarkdown(_ path: String) -> [String: Any] {
+        var reply = state()
+        reply["pending"] = true
+        let markList = marks.enumerated().map { index, mark -> [String: Any] in
+            ["n": index + 1, "lines": mark.source.map { $0.first == $0.last ? "\($0.first)" : "\($0.first)–\($0.last)" } ?? "",
+             "text": String(mark.text.prefix(200)), "note": mark.note]
+        }
+        root.markdown.lookInfo { [weak self] info in
+            self?.root.markdown.snapshot { [weak self] image in
+                guard let self else { return }
+                var meta = self.state()
+                for (key, value) in info { meta[key] = value }
+                meta["markList"] = markList
+                if let cg = image?.cgImage(forProposedRect: nil, context: nil, hints: nil), let png = PreviewRender.scaled(cg, maxPixels: 1600),
+                   (try? png.write(to: URL(fileURLWithPath: path), options: .atomic)) != nil {
+                    meta["image"] = path
+                } else {
+                    meta["problem"] = "Kein Bild der Ansicht (Kachel verdeckt?)"
+                }
+                if let data = try? JSONSerialization.data(withJSONObject: meta, options: [.sortedKeys]) {
+                    try? data.write(to: URL(fileURLWithPath: path + ".json"), options: .atomic)
+                }
+            }
+        }
+        return reply
     }
 
     // MARK: Werkzeugleiste und Tasten
 
     private func updateToolbar() {
         var items: [PreviewToolbar.Item] = []
+        if type == .markdown {
+            items.append(.init(id: "view-rendered", symbol: nil, title: "Gerendert", tooltip: "Gerendert: Formeln, Tabellen, Diagramme (⌥⌘U wechselt)",
+                               active: mdView == .rendered))
+            items.append(.init(id: "view-source", symbol: nil, title: "Quelle", tooltip: "Quelltext mit Zeilennummern (⌥⌘U wechselt)",
+                               active: mdView == .source))
+        }
         if type == .pdf {
             items.append(.init(id: "sidebar", symbol: "sidebar.left", tooltip: "Seitenleiste (⌥⌘2 Miniaturen, ⌥⌘3 Inhalt)", active: sidebar != nil))
         }
@@ -951,7 +1201,8 @@ final class PreviewContent: NSObject, PaneContent {
             items.append(.init(id: "file-prev", symbol: "chevron.right", tooltip: "Ältere Datei (⌥⌘→, im Bild →)"))
         }
         if type != .document {
-            items.append(.init(id: "send", symbol: "paperplane", tooltip: "Markierte Stellen an die Claude-/Codex-Kachel (⇧⌘⏎) — erst Text auswählen oder mit ⌥ einen Rahmen ziehen",
+            items.append(.init(id: "send", symbol: "paperplane", tooltip: "Markierte Stellen an die Claude-/Codex-Kachel (⇧⌘⏎) — erst Text auswählen oder "
+                               + (type == .markdown ? "⌥-Klick auf einen Block" : "mit ⌥ einen Rahmen ziehen"),
                                active: !marks.isEmpty || pending != nil))
         }
         items.append(.init(id: "open", symbol: "arrow.up.forward.app", tooltip: "Im Standardprogramm öffnen"))
@@ -964,7 +1215,11 @@ final class PreviewContent: NSObject, PaneContent {
         case "zoom-out": zoomStep(-1)
         case "zoom-in": zoomStep(1)
         case "zoom-toggle":
-            if type == .pdf { setZoom(zoom == .width ? .fit : .width) } else { setZoom(root.image.isFitted ? .percent(100) : .fit) }
+            if type == .pdf { setZoom(zoom == .width ? .fit : .width) }
+            else if type == .markdown { setZoom(.width) }
+            else { setZoom(root.image.isFitted ? .percent(100) : .fit) }
+        case "view-rendered": setView(.rendered)
+        case "view-source": setView(.source)
         case "dark": dark.toggle(); applyDarkFilter(); updateToolbar()
         case "file-next": stepFile(-1)
         case "file-prev": stepFile(1)
@@ -1003,7 +1258,7 @@ final class PreviewContent: NSObject, PaneContent {
                 guard root.findBar.isVisible else { return false }
                 find(root.findBar.field.stringValue)
             case "l": guard type == .pdf else { return false }; showGoto()
-            case "[": guard type == .pdf else { return false }; goBack()
+            case "[": guard type == .pdf || type == .markdown || !mdBack.isEmpty else { return false }; goBack()
             default: return false
             }
         case [.command, .shift]:
@@ -1022,6 +1277,7 @@ final class PreviewContent: NSObject, PaneContent {
             switch event.keyCode {
             case 123: return stepFile(-1)   // ←
             case 124: return stepFile(1)    // →
+            case 32 where type == .markdown: setView(mdView == .rendered ? .source : .rendered); return true   // U
             default: break
             }
             guard type == .pdf else { return false }
@@ -1053,6 +1309,7 @@ final class PreviewContent: NSObject, PaneContent {
         case .pdf: return pdfView
         case .image: return root.image.canvas
         case .document: return root.quickLook ?? root
+        case .markdown: return root.markdown.webView
         }
     }
     var title: String { file.lastPathComponent }
@@ -1076,7 +1333,7 @@ final class PreviewContent: NSObject, PaneContent {
         case .image:
             let size = root.image.pointSize
             if root.image.hasImage, size.width > 0, size.height > 0 { aspect = Double(size.width / size.height) }
-        case .document:
+        case .document, .markdown:
             aspect = nil
         }
         guard let aspect, aspect != contentAspect else { return }
@@ -1108,6 +1365,10 @@ final class PreviewContent: NSObject, PaneContent {
         case .document:
             return StatusChip(long: prefix + file.pathExtension.uppercased(), short: file.pathExtension.uppercased(),
                               tone: ThemeStore.shared.accentColor, tooltip: tilde)
+        case .markdown:
+            var long = prefix + (mdView == .rendered ? "MD" : "MD · Quelle")
+            if let visible = mdVisible { long += " · Z. \(visible.first)–\(visible.last)/\(mdLines)" }
+            return StatusChip(long: long, short: "MD", tone: ThemeStore.shared.accentColor, tooltip: tilde)
         }
     }
 
@@ -1123,6 +1384,14 @@ final class PreviewContent: NSObject, PaneContent {
         } ?? (trimmed.lowercased(), "")
         switch verb {
         case "reload": reload(announce: true)
+        case "view":
+            guard type == .markdown else { return false }
+            switch rest.lowercased() {
+            case "", "toggle", "wechseln": setView(mdView == .rendered ? .source : .rendered)
+            default:
+                guard let view = MarkdownView(arg: rest) else { return false }
+                setView(view)
+            }
         case "load":
             guard let target = try? Self.resolve(rest) else { return false }
             folderWatcher?.stop()
@@ -1132,8 +1401,9 @@ final class PreviewContent: NSObject, PaneContent {
                 folder = nil
                 folderItems = []
                 self.type = type
-                zoom = type == .pdf ? .width : .fit
+                zoom = Self.defaultZoom(type)
                 startPage = nil
+                startLine = nil
                 open(url)
             case .folder(let url):
                 folder = url
@@ -1148,9 +1418,9 @@ final class PreviewContent: NSObject, PaneContent {
         case "prev", "previous":
             guard type == .pdf else { return false }
             if pdfView.canGoToPreviousPage { pdfView.goToPreviousPage(nil) }
-        case "back": guard type == .pdf else { return false }; goBack()
+        case "back": guard type == .pdf || type == .markdown || !mdBack.isEmpty else { return false }; goBack()
         case "find":
-            guard type == .pdf, !rest.isEmpty else { return false }
+            guard type == .pdf || type == .markdown, !rest.isEmpty else { return false }
             root.findBar.show(text: rest)
             find(rest)
         case "zoom":
@@ -1207,7 +1477,8 @@ final class PreviewContent: NSObject, PaneContent {
         } else if trimmed.hasPrefix("look ") {
             reply = try look(String(trimmed.dropFirst(5)))
         } else if trimmed.hasPrefix("sync ") {
-            reply = ["page": try sync(String(trimmed.dropFirst(5)))]
+            let target = try sync(String(trimmed.dropFirst(5)))
+            reply = type == .markdown ? ["line": target] : ["page": target]
         } else {
             throw PaneArgsError("preview versteht call state, look <png> [page=N], sync <datei.tex>:<zeile>")
         }
@@ -1227,6 +1498,11 @@ final class PreviewContent: NSObject, PaneContent {
             state["sidebar"] = sidebar?.rawValue ?? "off"
         }
         if type == .image { state["pixels"] = [Int(root.image.pixelSize.width), Int(root.image.pixelSize.height)] }
+        if type == .markdown {
+            state["view"] = mdView.rawValue
+            state["lines"] = mdLines
+            if let visible = mdVisible { state["visible"] = [visible.first, visible.last] }
+        }
         if let folder {
             state["folder"] = folder.path
             state["items"] = folderItems.count
@@ -1239,6 +1515,7 @@ final class PreviewContent: NSObject, PaneContent {
         var parts = spec.split(separator: " ").map(String.init)
         guard let path = parts.first, path.hasPrefix("/") else { throw PaneArgsError("look braucht einen absoluten PNG-Pfad") }
         parts.removeFirst()
+        if type == .markdown { return lookMarkdown(path) }
         var reply = state()
         var png: Data?
         switch type {
@@ -1262,6 +1539,8 @@ final class PreviewContent: NSObject, PaneContent {
             }
         case .document:
             png = root.quickLook.flatMap { PreviewRender.snapshot($0) }
+        case .markdown:
+            break
         }
         guard let png else { throw PaneArgsError("Kein Bild verfügbar") }
         try png.write(to: URL(fileURLWithPath: path), options: .atomic)
@@ -1273,7 +1552,7 @@ final class PreviewContent: NSObject, PaneContent {
     }
 
     func handle(_ command: PaneCommand) -> Bool {
-        guard command == .find, type == .pdf else { return false }
+        guard command == .find, type == .pdf || type == .markdown else { return false }
         showFind()
         return true
     }
@@ -1293,7 +1572,11 @@ final class PreviewContent: NSObject, PaneContent {
         var args = ["url": (folder ?? file).path]
         if folder != nil, root.hasContent { args["item"] = file.lastPathComponent }
         if let (page, _) = pageInfo, page > 1 { args["page"] = String(page) }
-        if type != .document, zoom != (type == .pdf ? .width : .fit) { args["zoom"] = zoom.arg }
+        if type != .document, zoom != Self.defaultZoom(type) { args["zoom"] = zoom.arg }
+        if type == .markdown {
+            if mdView == .source { args["view"] = "source" }
+            if let top = mdTop, top > 1 { args["line"] = String(top) }
+        }
         if dark && type == .pdf { args["dark"] = "1" }
         if let sidebar, type == .pdf { args["sidebar"] = sidebar.rawValue }
         if !follow { args["follow"] = "0" }
@@ -1315,6 +1598,7 @@ private extension PDFSelection {
 final class PreviewRootView: NSView {
     let pdf = PreviewPDFView()
     let image = ImagePreviewView()
+    let markdown = MarkdownPreviewView()
     let sidebar = PreviewSidebar()
     let pill = PreviewPill()
     let findBar = PreviewFindBar(placeholder: "Im PDF suchen")
@@ -1347,7 +1631,7 @@ final class PreviewRootView: NSView {
         message.alignment = .center
         message.font = .systemFont(ofSize: 13)
         message.isSelectable = false
-        for view in [pdf, image, sidebar, message, pill, markBar, findBar, gotoBar, toolbar] as [NSView] { addSubview(view) }
+        for view in [pdf, image, markdown, sidebar, message, pill, markBar, findBar, gotoBar, toolbar] as [NSView] { addSubview(view) }
         // Nur die Seite bzw. das Bild wollten den Fokus; Grund und Scroll-Fläche nicht. Der Erkenner sieht jeden
         // Klick in der Kachel, hält aber keinen auf (PDF-Auswahl, Ziehen, Doppelklick laufen ungestört).
         let click = NSClickGestureRecognizer(target: self, action: #selector(clicked))
@@ -1359,6 +1643,7 @@ final class PreviewRootView: NSView {
                                        owner: self))
         pdf.isHidden = true
         image.isHidden = true
+        markdown.isHidden = true
         message.isHidden = true
     }
 
@@ -1379,6 +1664,7 @@ final class PreviewRootView: NSView {
         quickLook?.previewItem = nil
         pdf.isHidden = true
         image.isHidden = true
+        markdown.isHidden = true
         quickLook?.isHidden = true
         markBar.update(selection: nil, count: 0)
     }
@@ -1398,6 +1684,7 @@ final class PreviewRootView: NSView {
         case .pdf: return pdf.document != nil
         case .image: return image.hasImage
         case .document: return quickLook?.previewItem != nil
+        case .markdown: return markdown.hasContent
         }
     }
 
@@ -1407,6 +1694,7 @@ final class PreviewRootView: NSView {
         pdf.isHidden = type != .pdf || !hasContent
         image.isHidden = type != .image || !hasContent
         quickLook?.isHidden = type != .document || !hasContent
+        markdown.isHidden = type != .markdown || !hasContent
         needsLayout = true
     }
 
@@ -1437,6 +1725,7 @@ final class PreviewRootView: NSView {
         layer?.backgroundColor = theme.background.withAlphaComponent(1).cgColor
         pdf.backgroundColor = pdf.contentFilters.isEmpty ? theme.background : theme.background.invertedForFilter
         image.applyTheme(theme)
+        markdown.applyTheme(theme, accent: ThemeStore.shared.accentColor)
         sidebar.applyTheme(theme)
         message.textColor = theme.dim
         pill.applyTheme(theme)
@@ -1453,6 +1742,7 @@ final class PreviewRootView: NSView {
         let content = NSRect(x: left, y: 0, width: bounds.width - left, height: bounds.height)
         pdf.frame = content
         image.frame = content
+        markdown.frame = content
         quickLook?.frame = content
         let width = min(content.width - 48, 420)
         let height = message.sizeThatFits(NSSize(width: width, height: .greatestFiniteMagnitude)).height
@@ -1482,6 +1772,7 @@ final class PreviewRootView: NSView {
     func teardown() {
         pdf.document = nil
         image.clear()
+        markdown.teardown()
         quickLook?.close()
         quickLook = nil
     }

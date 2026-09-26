@@ -23,6 +23,8 @@ Verwendung:
   latexterm snapshots [--json]
   latexterm restore [STAND] [--dry-run]
   latexterm doctor
+  latexterm board-save [--pane ZIEL] [--arg name=NAME] [--dry-run] DATEI
+  latexterm board-open [--no-focus] [--dry-run] DATEI
   latexterm mcp
 
 ZIEL ist der 1-basierte Index aus `list-panes` oder eine Pane-UUID (auch Präfix).
@@ -45,6 +47,10 @@ snapshots listet gespeicherte Stände (Bretter + Kacheln), neuester = 1. Einer e
 Neustart und unsauberen Ende, dazu höchstens alle 10 min aus dem Autosave; die letzten 30 bleiben.
 restore öffnet, was von STAND (Nummer oder Name, Default 1) fehlt, als neue Bretter in der laufenden App —
 ohne Neustart; schon Offenes bleibt, wie es ist. --dry-run zeigt nur, was käme.
+board-save sichert das Brett der Kachel (ohne --pane: deins) als Datei, meist <projekt>/_brett/brett.json; Pfade im
+Projekt stehen relativ. Ungesicherte Scratchpads mit Inhalt werden vorher daneben angeheftet (skizze.scratch.json).
+board-open öffnet so eine Datei als neues Brett (vorn; --no-focus = hinten) — schon Offenes kommt nicht doppelt.
+Scratchpad anheften einzeln: `call --pane ZIEL pin /pfad/<name>.scratch.json`, Zustand: `call --pane ZIEL state`.
 doctor: läuft der neueste Build, Absturzschutz, Stand-Archiv, letzte Zeilen aus lifecycle.log/unclean.log.
 
 --no-focus: die neue Kachel entsteht daneben, die Tastatur bleibt in der fokussierten Kachel.
@@ -146,6 +152,12 @@ case "status":
 case "restore":
     guard positional.count <= 1 else { fail("restore nimmt höchstens einen STAND\n\n\(usage)", code: 2) }
     request.snapshot = positional.first
+case "board-save", "board-open":
+    guard positional.count == 1 else { fail("\(cmd) braucht genau eine DATEI\n\n\(usage)", code: 2) }
+    // Relativ zum Aufruf-Ordner auflösen — die App kennt das Arbeitsverzeichnis der Shell nicht.
+    let raw = (positional[0] as NSString).expandingTildeInPath
+    request.text = raw.hasPrefix("/") ? raw
+        : URL(fileURLWithPath: raw, relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)).standardizedFileURL.path
 default:
     fail("Unbekanntes Kommando „\(cmd)“\n\n\(usage)", code: 2)
 }
@@ -206,7 +218,7 @@ case "new-pane":
     if let pane = response.pane { print(describe(pane)) }
 case "pane-kinds":
     for kind in response.kinds ?? [] { print(kind) }
-case "call", "doctor":
+case "call", "doctor", "board-save", "board-open":
     if let reply = response.reply { print(reply) }
 case "snapshots":
     let all = response.snapshots ?? []

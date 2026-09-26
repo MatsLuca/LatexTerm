@@ -52,6 +52,14 @@ final class BoardHostView: NSView {
     private var closeObserver: NSObjectProtocol?
     private var windowClosed = false
     private var stripRefreshQueued = false
+    /// Titelleiste: Platz der Ampel links, Luft zwischen Brett-Leiste und Chips.
+    private static let trafficLights: CGFloat = 92
+    private static let chipGap: CGFloat = 40
+    /// KI-Namen (26.09.): welches Brett gerade verweilt (seit wann), welches gerade fragt. Ein Takt je Sekunde prüft
+    /// nur das vordere Brett — verlassene Bretter werden nie benannt.
+    private var namingTimer: Timer?
+    private var dwelling: (board: ObjectIdentifier, since: Date)?
+    private var asking: (board: ObjectIdentifier, since: Date)?
 
     /// Bretter in Leisten-Reihenfolge.
     var ordered: [TerminalSplitView] {
@@ -113,6 +121,7 @@ final class BoardHostView: NSView {
             return nil
         }
         Self.live.append(Weak(self))
+        namingTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in self?.namingTick() }
     }
 
     required init?(coder: NSCoder) { fatalError() }
@@ -121,6 +130,7 @@ final class BoardHostView: NSView {
         if let commandObserver { NotificationCenter.default.removeObserver(commandObserver) }
         if let closeObserver { NotificationCenter.default.removeObserver(closeObserver) }
         if let keyMonitor { NSEvent.removeMonitor(keyMonitor) }
+        namingTimer?.invalidate()
     }
 
     override var isFlipped: Bool { true }
@@ -263,11 +273,15 @@ final class BoardHostView: NSView {
         let active = activeBoard
         strip.items = ordered.map { board in
             BoardStripView.Item(id: ObjectIdentifier(board), name: board.displayName, active: board === active,
-                                badge: board === active ? nil : board.boardBadge)
+                                badge: board === active ? nil : board.boardBadge, naming: namingPhase(of: board))
         }
-        // Höchstens knapp die halbe Titelleiste — rechts brauchen die Chips Platz. In 10-pt-Stufen, damit Ziehen am
-        // Fensterrand das Accessory nicht bei jedem Punkt neu einhängt.
-        if let window { strip.maxWidth = max(160, (window.frame.width * 0.45 / 10).rounded(.down) * 10) }
+        // Alles bis auf Ampel, die kurze Form der Chips des vorderen Bretts und Luft (26.09., vorher fest 45 %). Die
+        // Chips nutzen darüber hinaus Freies für ihre lange Form. In 10-pt-Stufen, damit Ziehen am Fensterrand und
+        // kleine Chip-Änderungen das Accessory nicht bei jedem Punkt neu einhängen.
+        if let window {
+            let free = window.frame.width - Self.trafficLights - (active?.chipReserve ?? 0) - Self.chipGap
+            strip.maxWidth = max(160, (free / 10).rounded(.down) * 10)
+        }
         // Breite geändert: Accessory neu einhängen, sonst vergibt die Titelleiste den Platz nicht neu (wie bei den Chips).
         let width = strip.fittingWidth
         guard let window, let vc = stripAccessory, abs(strip.frame.width - width) > 0.5 else { return }
@@ -276,6 +290,42 @@ final class BoardHostView: NSView {
         window.addTitlebarAccessoryViewController(vc)
         // Chips rechts rechnen mit der neuen Breite.
         active?.titlebarSpaceChanged()
+    }
+
+    // MARK: KI-Namen (26.09.)
+
+    private func namingPhase(of board: TerminalSplitView) -> BoardStripView.Naming? {
+        let id = ObjectIdentifier(board)
+        if let asking, asking.board == id { return .asking(since: asking.since) }
+        if let dwelling, dwelling.board == id { return .waiting(since: dwelling.since, duration: BoardNaming.dwell) }
+        return nil
+    }
+
+    /// Vorderes Brett dran (`BoardNaming.isDue`), Mats sieht hin (Fenster vorn, App aktiv), kein eigener Name →
+    /// Punkt wandert `dwell` Sekunden durch den Strich, dann wird gefragt. Sonst Punkt weg, Uhr beginnt neu.
+    private func namingTick() {
+        let before = (dwelling?.board, asking?.board)
+        defer { if (dwelling?.board, asking?.board) != before { refreshStrip() } }
+        guard asking == nil else { return }
+        guard BoardNameRequest.enabled, !windowClosed, NSApp.isActive, window?.isKeyWindow == true,
+              let board = activeBoard, board.customName?.isEmpty ?? true else { dwelling = nil; return }
+        let id = ObjectIdentifier(board)
+        let state = board.namingState
+        let now = Date()
+        guard board.naming.isDue(turns: state.turns, panes: state.panes, hasSession: state.hasSession,
+                                  working: state.working, now: now) else {
+            dwelling = nil; return
+        }
+        guard let dwelling, dwelling.board == id else { self.dwelling = (id, now); return }
+        guard now.timeIntervalSince(dwelling.since) >= BoardNaming.dwell else { return }
+        self.dwelling = nil
+        asking = (id, now)
+        BoardNameRequest.run(board.namingInput) { [weak self, weak board] name in
+            guard let self else { return }
+            self.asking = nil
+            board?.naming.checked(turns: state.turns, panes: state.panes, now: now, newName: name)
+            self.refreshStrip()
+        }
     }
 
     // MARK: Snapshot und Wiederherstellen
@@ -293,6 +343,7 @@ final class BoardHostView: NSView {
                 snapshot.tabGroup = group
                 snapshot.selected = board === active
                 snapshot.name = board.customName
+                snapshot.aiName = board.naming.name
                 windows.append(snapshot)
             }
         }
@@ -322,11 +373,12 @@ final class BoardHostView: NSView {
 
     /// Bretter in die laufende App (Steuerkanal `restore`): ans Ende des vorderen Fensters, ohne es zu wechseln.
     /// Ohne Fenster: nichts (die App öffnet beim nächsten Fenster ohnehin Home).
-    static func addRestoredBoards(_ plans: [SessionSnapshot.Window]) -> Bool {
+    /// `activate` (Brett-Datei öffnen, 25.09.): das erste neue Brett nach vorn holen.
+    static func addRestoredBoards(_ plans: [SessionSnapshot.Window], activate: Bool = false) -> Bool {
         live.removeAll { $0.view == nil }
         let hosts = live.compactMap(\.view).filter { $0.window != nil && !$0.windowClosed }
         guard let host = hosts.first(where: { $0.window?.isKeyWindow == true }) ?? hosts.first else { return false }
-        for plan in plans { host.addBoard(plan: plan, activate: false, atEnd: true) }
+        for (index, plan) in plans.enumerated() { host.addBoard(plan: plan, activate: activate && index == 0, atEnd: true) }
         return true
     }
 

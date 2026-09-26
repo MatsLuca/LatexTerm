@@ -15,6 +15,7 @@ final class ControlServer {
     let router = ControlRouter()
 
     private var listenFD: Int32 = -1
+    private var startRetries = 0
     private var acceptSource: DispatchSourceRead?
     private let ioQueue = DispatchQueue(label: "latexterm.control-io", qos: .utility)
 
@@ -32,7 +33,18 @@ final class ControlServer {
                                                  withIntermediateDirectories: true)
         // Alten Socket nur wegräumen, wenn niemand mehr zuhört (Crash-Leiche). Antwortet dort noch eine App,
         // bleibt ihr Socket — eine zweite Instanz darf ihn nie übernehmen (Befund 25.09., `SingleInstance`).
-        if Self.someoneListens(at: path) { return }
+        // Bei ⌥⌘R hält die alte Instanz den Socket oft noch ein paar hundert ms: nachfassen statt aufgeben — sonst blieb
+        // der Steuerkanal bis zum nächsten Neustart zu (Befund 26.09. 01:16, MCP/CLI „nicht erreichbar“).
+        if Self.someoneListens(at: path) {
+            startRetries += 1
+            if startRetries <= 30 {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) { [weak self] in
+                    guard let self, self.listenFD < 0 else { return }
+                    self.start()
+                }
+            }
+            return
+        }
         unlink(path)
 
         let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -100,6 +112,10 @@ final class ControlServer {
         guard getpeereid(client, &uid, &gid) == 0, uid == getuid() else {
             close(client); return
         }
+        // Legt der Client vor der Antwort auf (Hook-Timeout beim Start vieler Sessions), soll `write` EPIPE liefern
+        // statt SIGPIPE — das beendete die App am 25.09. 21:48 zwei Sekunden nach ⌥⌘R, ohne Absturzbericht.
+        var on: Int32 = 1
+        setsockopt(client, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
 
         ioQueue.async { [weak self] in self?.serve(client: client) }
     }

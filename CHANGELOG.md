@@ -7,7 +7,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+- **Preview pane: Markdown (26.09.).** `.md` files render like MaTex (KaTeX formulas, tables, task lists, Mermaid loaded on
+  demand) or as source with line numbers — toggle “Gerendert | Quelle” in the toolbar, ⌥⌘U, arg `view=source`, action
+  `view`. Every block knows its source lines: selecting text or ⌥-clicking a block sends `plan.md:12–14` plus a source
+  excerpt to the agent; `sync plan.md:42` jumps there; after a save the view jumps to the first changed line (⌘[ back).
+  Links to `.md`/PDF/images open in the same pane, web links in the browser. No network (own `latexterm-md:` scheme, CSP),
+  images only from the project, raw HTML limited to a tag whitelist. `preview_look` returns image, visible line range and
+  text with formulas as TeX.
+- **Scratchpad: text tool (T) (25.09.).** Click and type — the text becomes a plain card (no mark), i.e. the same ink as
+  agent cards: erasable letter by letter, cut by the pixel eraser, draggable, visible to agents in `scratch_look`.
+  Colour and size (13/18/28 pt) come from the toolbar and can be changed while typing. With T, one click on existing
+  text edits it at the click, dragging still moves it.
+- **Scratchpad: cleaner text editor.** Editing sits exactly on the ink (same font, size, colour, zoom, title in bold)
+  instead of an opaque box, grows while typing, follows pan/zoom, shows only a thin accent outline; caret goes where you
+  clicked. ⏎ = new line; Esc, ⌘⏎ or a click beside it = done (⌘Z undoes — Esc no longer discards); paste is plain text.
+
 ### Fixed
+- **⌥⌘R lost all boards (25.09. 21:48).** The relaunched app died 1.9 s after start from SIGPIPE: the control server
+  wrote a reply to a client that had already hung up (many sessions reconnecting at once), and SIGPIPE's default action
+  kills the process without a crash report. The next start saw a death in the startup phase and opened Home. Now client
+  sockets get `SO_NOSIGPIPE` and SIGPIPE has an empty handler app-wide (EPIPE instead of death); a restoring run that
+  dies in the startup phase gets one more attempt (`maxRestoreAttempts` = 2, marker `wiederherstellung N`) before Home.
 - **Single instance (25.09.).** A second LatexTerm started next to a running one (seen after a rebuild) took over the
   control socket, treated the running app's run marker as a crash and removed it on quit — CLI/MCP could no longer
   reach the running app. A second instance now brings the first to the front and exits at once; the control server
@@ -21,6 +42,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   strip elsewhere turns it back into a normal pane. Survives ⌥⌘R.
 
 ### Changed
+- **Scratchpad cards: agents place deliberately (25.09.).** `scratch_cards` no longer finds a spot on its own: every new
+  card needs a place — `x`/`y` or `below`/`above`/`rightOf`/`leftOf` another card (+ `gap`; the app computes the height,
+  so chains line up exactly). `scratch_cards`/`scratch_draw` require `rev` from the last `scratch_look`; a board changed
+  since is refused. A card covering something or lying outside the visible area is refused unless the entry says
+  `overlap: true` / `offscreen: true`; nothing of the call is applied, the reason comes back. `probe: true` computes
+  rectangles, arrow routes and conflicts without placing; a real placement returns the board image for checking. Agent
+  arrows dock at card edges and run orthogonally around cards (`fromSide`/`toSide`/`via`; through other cards only
+  with `through: true`) and are re-routed when a card moves. Removing cards (`remove`, `replace: cards`, clear) takes the
+  agent's arrows along (hand-drawn ones stay as strokes, unlinked). `color` is visible on default cards (stronger mark
+  and title in the color); new cards default to ink. `scratch_look` reports a card re-set under the same id as edited.
+  Geometry in `ScratchLayout.swift`, test `scripts/test-scratch-layout.swift`.
+- **Agent hand-off (25.09.).** `start_agent`/`ask_session` report success only once the target session has accepted the
+  prompt (receipt from the `briefkasten` mod, turn running); a refusal comes back as an error with its reason. `/name …`
+  prompts run as slash commands there. New `wait_s` returns the session's answer; `wait_session` includes the last
+  answer. The paste fallback (sessions without the mod) uses bracketed paste; `send` writes Enter separately.
+
+### Changed
 - **Scratchpad cards (24.09.).** A card's default look is now plain text on the paper, like Claude Code's answers in
   the terminal: app monospace in the terminal colour, no frame or fill, only a faint line on the left with a short
   rounded foot as divider (`frame: mark`). Frames and fills stay available for cards that should stand out; a bare
@@ -30,6 +68,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   messages are translated. Build number bumped so Notification Center picks up the new app icon.
 
 ### Added
+- **Pinned scratchpads and boards as files (25.09.).** A scratchpad can now belong to a file in your project instead of
+  the app folder: `open_scratchpad` with `file`, or pin a running one (`scratch_pin`, CLI `call pin <path>`). A pinned
+  drawing saves there, keeps a PNG of the same name next to it for any later session, and its pane closes without the
+  "has a drawing" guard — ⌘W no longer deletes it. `board-save` / `board-open` (CLI, MCP `board_save`/`board_open`)
+  write a whole board to a JSON file (paths inside the project relative, unpinned drawings pinned alongside) and bring
+  it back as a new board; sessions resume, nothing opens twice. Home shows a per-project "Board" action when the
+  launcher data offers one (`actions` in `projekte --json`).
 - **Never lose your boards (24./25.09.).** LatexTerm now notices when it disappeared without ⌘Q, ⌥⌘R or closing the
   last board (crash, kill, sleep) and brings the last state back on the next launch — a running marker plus an
   autosave every 5 s. macOS may no longer terminate the app silently; SIGTERM/SIGHUP save the state first; a system

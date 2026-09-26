@@ -67,6 +67,14 @@ final class FakeApp: ControlTransport {
             if text.hasPrefix("look ") {
                 FileManager.default.createFile(atPath: String(text.split(separator: " ")[1]), contents: Data([0x89, 0x50, 0x4E, 0x47]))
                 reply = #"{"grid":50,"pixelsPerUnit":1.75,"region":{"x":-400,"y":-300,"w":800,"h":600},"visible":{"x":-400,"y":-300,"w":800,"h":600},"mats":{"count":3,"bounds":{"x":-10,"y":-5,"w":20,"h":10}},"claude":{"count":0,"bounds":null}}"#
+            } else if text.hasPrefix("pin ") {
+                let path = String(text.split(separator: " ")[1])
+                reply = #"{"pinned":"\#(path)","png":"\#(path.replacingOccurrences(of: ".scratch.json", with: ".png"))","elements":5,"closable":true}"#
+            } else if text == "state" {
+                reply = #"{"pinned":null,"png":null,"elements":7,"closable":false}"#
+            } else if text.hasPrefix("cards") {
+                let probe = text.split(separator: "\n")[0].contains("probe")
+                reply = #"{"added":[{"id":"k1","bounds":{"x":-300,"y":-200,"w":280,"h":40}}],"updated":[],"removed":[],"arrows":[],"problems":\#(probe ? #"["k1 überdeckt k0"]"# : "[]"),"notes":[],"probe":\#(probe),"visible":{"x":-400,"y":-300,"w":800,"h":600},"rev":"ab-4"}"#
             } else if text.hasPrefix("draw") {
                 reply = #"{"added":4,"removed":3,"fitted":true,"bounds":{"x":0,"y":0,"w":10,"h":10},"warnings":["<foo> unbekannt, übergangen"]}"#
             } else {
@@ -85,6 +93,10 @@ final class FakeApp: ControlTransport {
             response.reply = request.dryRun == true ? "Probe: 1 Brett mit 2 Kacheln käme dazu" : "1 Brett angehängt"
             response.snapshots = [SnapshotSummary(name: request.snapshot ?? "neu", index: 1, date: "", reason: "absturz",
                                                   boards: [.init(name: nil, panes: ["claude ~/x (3cac9957)"])])]
+            return response
+        case "board-save", "board-open":
+            var response = ControlResponse(ok: true)
+            response.reply = "\(request.cmd) \(request.text ?? "") probe=\(request.dryRun ?? false) name=\(request.args?["name"] ?? "-") vorn=\(request.focus.map(String.init) ?? "-")"
             return response
         case "doctor":
             var response = ControlResponse(ok: true)
@@ -208,24 +220,56 @@ struct MCPServerTests {
         assert(!call(server, "close_pane", ["pane": "SHEL", "foreign": true]).error)
         assert(app.sent("close-pane").allSatisfy { $0.force != true })
 
-        // ask_session an Claude: Briefkasten; der Empfänger holt ab → eingereicht, kein Einfügen.
+        // ask_session an Claude: Briefkasten mit Quittung. Der (simulierte) Empfänger lebt (`.alive`), holt ab und
+        // quittiert — erst „läuft“ zählt als angekommen, nie schon „Datei weg“ (25.09.).
         let sendsBefore = app.sent("send").count
-        app.onList = {
-            let box = tmp.appendingPathComponent("box/clau-0000").path
-            for file in (try? FileManager.default.contentsOfDirectory(atPath: box)) ?? [] where file.hasSuffix(".md") {
-                try? FileManager.default.removeItem(atPath: (box as NSString).appendingPathComponent(file))
+        let clauBox = tmp.appendingPathComponent("box/clau-0000").path
+        var receiptState = "läuft"
+        var receiptExtra = ""
+        func receiver() {
+            try? FileManager.default.createDirectory(atPath: clauBox + "/quittung", withIntermediateDirectories: true)
+            try? String(Int(clock.timeIntervalSince1970 * 1000)).write(toFile: clauBox + "/.alive", atomically: true, encoding: .utf8)
+            for file in (try? FileManager.default.contentsOfDirectory(atPath: clauBox)) ?? [] where file.hasSuffix(".md") {
+                try? FileManager.default.removeItem(atPath: (clauBox as NSString).appendingPathComponent(file))
+                let id = (file as NSString).deletingPathExtension
+                try? "{\"id\":\"\(id)\",\"state\":\"\(receiptState)\"\(receiptExtra)}"
+                    .write(toFile: clauBox + "/quittung/\(id).json", atomically: true, encoding: .utf8)
             }
         }
+        app.onList = receiver
         let asked = call(server, "ask_session", ["pane": "CLAU", "prompt": "Bitte Tests laufen lassen"])
-        assert(asked.text.contains("eingereicht") && !asked.error, asked.text)
+        assert(asked.text.contains("angekommen") && !asked.error, asked.text)
         assert(app.sent("send").count == sendsBefore)
-        // Ohne Empfänger (Brief bleibt liegen) → nach 6 s Ruhe Einfügen in zwei Schritten.
+        // Fehlerquittung (z. B. unbekannter Slash-Command) → Werkzeugfehler mit Grund, kein Einfügen.
+        receiptState = "fehler"; receiptExtra = ",\"grund\":\"/nix kennt diese Session nicht\""
+        let refused = call(server, "ask_session", ["pane": "CLAU", "prompt": "/nix"])
+        assert(refused.error && refused.text.contains("/nix kennt"), refused.text)
+        // wait_s: Antwort kommt als Text zurück.
+        receiptState = "fertig"; receiptExtra = ",\"reason\":\"answer\",\"answer\":\"42 Tests grün\""
+        let answered = call(server, "ask_session", ["pane": "CLAU", "prompt": "Tests?", "wait_s": 60])
+        assert(!answered.error && answered.text.contains("42 Tests grün"), answered.text)
+        // wait_session bringt die letzte Antwort mit.
+        try "{\"answer\":\"Letzter Stand: alles da\",\"reason\":\"answer\",\"at\":0}"
+            .write(toFile: clauBox + "/letzte-antwort.json", atomically: true, encoding: .utf8)
+        let waitedClaude = call(server, "wait_session", ["pane": "CLAU"])
+        assert(waitedClaude.text.contains("Letzter Stand: alles da"), waitedClaude.text)
+        // Alter Empfänger: holt ab, quittiert nie → ehrlich „nicht bestätigt“.
+        app.onList = {
+            for file in (try? FileManager.default.contentsOfDirectory(atPath: clauBox)) ?? [] where file.hasSuffix(".md") {
+                try? FileManager.default.removeItem(atPath: (clauBox as NSString).appendingPathComponent(file))
+            }
+        }
+        try? FileManager.default.removeItem(atPath: clauBox + "/.alive")
+        let legacyAsk = call(server, "ask_session", ["pane": "CLAU", "prompt": "Alt"])
+        assert(!legacyAsk.error && legacyAsk.text.contains("nicht bestätigt"), legacyAsk.text)
+        // Ohne Empfänger (Brief bleibt liegen, kein `.alive`) → nach 6 s Ruhe Einfügen als Paste, Enter getrennt.
         app.onList = nil
         let pasted = call(server, "ask_session", ["pane": "CLAU", "prompt": "Zweiter Auftrag"])
         assert(pasted.text.contains("eingefügt"), pasted.text)
         let pastes = app.sent("send").suffix(2)
-        assert(pastes.first?.enter == false && pastes.first?.text == "Zweiter Auftrag" && pastes.last?.text == " ")
-        let leftover = (try? FileManager.default.contentsOfDirectory(atPath: tmp.appendingPathComponent("box/clau-0000").path)) ?? []
+        assert(pastes.first?.enter == false && pastes.first?.paste == true && pastes.first?.text == "Zweiter Auftrag")
+        assert(pastes.last?.text == " " && pastes.last?.enter == true)
+        let leftover = (try? FileManager.default.contentsOfDirectory(atPath: clauBox)) ?? []
         assert(leftover.filter { $0.hasSuffix(".md") }.isEmpty)
         // An Shell, eigene Kachel, arbeitenden Codex: abgelehnt.
         assert(call(server, "ask_session", ["pane": "BUSY", "prompt": "x"]).error)
@@ -278,16 +322,35 @@ struct MCPServerTests {
         pads.panes.append(pane("PAD2-0000", 3, kind: "scratchpad"))
         assert(call(padServer, "scratch_clear", ["who": "claude"]).error, "zwei fremde → pane angeben")
         assert(!call(padServer, "open_scratchpad").error)
-        let drawn = call(padServer, "scratch_draw", ["svg": "<svg viewBox='0 0 10 10'><foo/></svg>", "replace": "mats"])
+        assert(call(padServer, "scratch_draw", ["svg": "<line/>"]).error, "ohne rev (ohne Blick) wird nicht gezeichnet")
+        let drawn = call(padServer, "scratch_draw", ["svg": "<svg viewBox='0 0 10 10'><foo/></svg>", "replace": "mats", "rev": "ab-3"])
         assert(!drawn.error && drawn.text.contains("4 Elemente") && drawn.text.contains("3 entfernt") && drawn.text.contains("Hinweise"), drawn.text)
         let drawCall = pads.sent("call").last!
-        assert(drawCall.pane == pads.panes.last!.id && drawCall.text!.hasPrefix("draw replace=mats\n<svg"))
-        assert(call(padServer, "scratch_draw", ["svg": "<line/>", "replace": "alles"]).error)
+        assert(drawCall.pane == pads.panes.last!.id && drawCall.text!.hasPrefix("draw rev=ab-3 replace=mats\n<svg"))
+        assert(call(padServer, "scratch_draw", ["svg": "<line/>", "replace": "alles", "rev": "ab-3"]).error)
         assert(call(padServer, "scratch_draw", ["svg": "  "]).error)
+        // Karten (25.09.): ohne rev nur als Probe; gesetzt kommt das Bild mit, die Probe meldet Konflikte ohne Bild.
+        let card: [String: Any] = ["text": "A", "x": -300, "y": -200]
+        assert(call(padServer, "scratch_cards", ["cards": [card]]).error, "ohne rev wird nichts gesetzt")
+        let probed = callContent(padServer, "scratch_cards", ["cards": [card], "probe": true])
+        let probeText = probed.last?["text"] as? String ?? ""
+        assert(probed.count == 1 && probeText.contains("Probe") && probeText.contains("überdeckt k0"), probeText)
+        assert(pads.sent("call").last!.text!.hasPrefix("cards probe\n"))
+        let set = callContent(padServer, "scratch_cards", ["cards": [card], "rev": "ab-3"])
+        assert(set.count == 2 && set[0]["type"] as? String == "image", "gesetzt → Bild zum Prüfen")
+        assert((set[1]["text"] as? String ?? "").contains("rev=ab-4"))
+        assert(pads.sent("call").contains { $0.text?.hasPrefix("cards rev=ab-3\n") == true })
         assert(call(padServer, "scratch_look", ["pane": "1"]).error, "Kachel 1 ist kein Scratchpad")
         let cleared = call(padServer, "scratch_clear", ["who": "claude", "pane": "2"])
         assert(!cleared.error && cleared.text.contains("2 entfernt"), cleared.text)
         assert(pads.sent("call").last!.pane == "PAD1-0000" && pads.sent("call").last!.text == "clear claude")
+        // Anheften (25.09.): ohne file nur Zustand, mit file absolut + replace; danach schließbar.
+        let unpinned = call(padServer, "scratch_pin", ["pane": "2"])
+        assert(!unpinned.error && unpinned.text.contains("nicht angeheftet") && unpinned.text.contains("7 Elemente"), unpinned.text)
+        assert(pads.sent("call").last!.text == "state")
+        let pinned = call(padServer, "scratch_pin", ["pane": "2", "file": "/tmp/p/_brett/logo.scratch.json", "replace": true])
+        assert(!pinned.error && pinned.text.contains("angeheftet: /tmp/p/_brett/logo.scratch.json") && pinned.text.contains("logo.png"), pinned.text)
+        assert(pads.sent("call").last!.text == "pin /tmp/p/_brett/logo.scratch.json replace")
         // Alte App ohne call: klare Meldung.
         pads.details = false
         assert(call(padServer, "scratch_clear", ["who": "all", "pane": "2"]).text.contains("neu starten"))
@@ -389,6 +452,14 @@ struct MCPServerTests {
         assert(app.sent("restore").last?.snapshot == "2" && app.sent("restore").last?.dryRun == true)
         _ = call(server, "restore_snapshot", ["stand": 3])
         assert(app.sent("restore").last?.snapshot == "3" && app.sent("restore").last?.dryRun == false)
+
+        // Brett als Datei (25.09.): Pfad, Probe, Name, vorn.
+        for expected in ["scratch_pin", "board_save", "board_open"] { assert(names2.contains(expected), "fehlt: \(expected)") }
+        let saved = call(server, "board_save", ["file": "/tmp/p/_brett/brett.json", "name": "Logo", "probe": true])
+        assert(!saved.error && saved.text == "board-save /tmp/p/_brett/brett.json probe=true name=Logo vorn=-", saved.text)
+        let boardOpened = call(server, "board_open", ["file": "/tmp/p/_brett/brett.json", "zeigen": false])
+        assert(!boardOpened.error && boardOpened.text == "board-open /tmp/p/_brett/brett.json probe=false name=- vorn=false", boardOpened.text)
+        assert(call(server, "board_open", [:]).error, "file ist Pflicht")
 
         print("mcp-server: ok")
     }

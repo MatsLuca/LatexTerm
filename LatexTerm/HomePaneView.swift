@@ -76,6 +76,9 @@ struct ProjekteData: Decodable {
         var pinned: Bool?
         var claudeMd: ClaudeMd?
         var accent: Accent?
+        /// Aktionen nur dieses Projekts aus der Datenschicht (25.09.: „Brett fortsetzen“, wenn ein Brett abgelegt ist) —
+        /// stehen direkt hinter den Start-Templates; Swift kennt ihre Befehle nicht.
+        var actions: [ActionTemplate]?
         /// Kopfzeile der CLAUDE.md ohne „# " — als Untertitel in der Struktur-Ansicht.
         var claudeMdHeader: String? {
             guard let h = claudeMd?.header, !h.isEmpty else { return nil }
@@ -389,6 +392,7 @@ final class HomePaneView: NSView {
             var out: [Action] = []
             let byLevel = templates.byLevel[pp.level] ?? templates.byLevel["ordner"] ?? []
             for t in startTemplates(level: pp.level) { out.append(.run(t, path: pp.path)) }
+            for t in byPath[pp.path]?.actions ?? [] { out.append(.run(t, path: pp.path)) }
             let codex = codexSessions(in: pp.path)
             if let s = codex.first { out.append(codexResume(s, in: pp.path)) }
             if codex.isEmpty, let picker = codexPicker(in: pp.path) { out.append(picker) }
@@ -656,6 +660,9 @@ final class HomePaneView: NSView {
         var here: [LauncherPalette.Entry] = []
         for t in startTemplates(level: byPath[path]?.level ?? "ordner") {
             here.append(actionEntry("start:" + t.label, t.label, "\(agentName) · \(hereName)" + (t.hint.map { " · " + $0 } ?? ""), keywords: "neu starten session", accent: hereAccent, hint: "⏎ Starten") { [weak self] in self?.run(.run(t, path: path)) })
+        }
+        for t in byPath[path]?.actions ?? [] {
+            here.append(actionEntry("project:" + t.label, t.label, hereName + (t.hint.map { " · " + $0 } ?? ""), keywords: "brett fortsetzen weiter kacheln skizze", accent: hereAccent, hint: "⏎ Öffnen") { [weak self] in self?.run(.run(t, path: path)) })
         }
         if let last = byPath[path]?.sessions.first, selectedAgent == "claude" {
             var e = sessionEntry(last, project: byPath[path]!)
@@ -1781,6 +1788,7 @@ final class HomePaneView: NSView {
             out.append(.jump(cwd: pane.id, state: pane.state, name: pane.label + " · " + pane.id.prefix(4)))
         }
         for t in startTemplates(level: level) { out.append(.run(t, path: node.path)) }
+        for t in p?.actions ?? [] { out.append(.run(t, path: node.path)) }
         if let s = codex.first { out.append(codexResume(s, in: node.path)) }
         if codex.isEmpty, let picker = codexPicker(in: node.path) { out.append(picker) }
         if let (q, s) = candidates.first {

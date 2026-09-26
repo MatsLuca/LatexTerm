@@ -143,9 +143,11 @@ struct SessionRestoreTests {
         SessionStore.autosave(SessionSnapshot(windows: [window]), to: file)
         check(SessionStore.takeRestore(from: file) == [window], "crash after autosave → restores without mark")
         check(SessionStore.load(from: file)?.restoreOnce == false, "crash restore leaves no mark")
-        check(SessionStore.takeRestore(from: file) == nil, "crash before any save of that run → normal start (no loop)")
+        check(SessionStore.takeRestore(from: file) == [window],
+              "restoring run died in startup phase → one more attempt (25.09.: SIGPIPE after ⌥⌘R)")
+        check(SessionStore.takeRestore(from: file) == nil, "second startup-phase death → normal start (no loop)")
         let log = file.deletingLastPathComponent().appendingPathComponent("unclean.log")
-        check(((try? String(contentsOf: log, encoding: .utf8)) ?? "").components(separatedBy: "unsauberes Ende").count == 3,
+        check(((try? String(contentsOf: log, encoding: .utf8)) ?? "").components(separatedBy: "unsauberes Ende").count == 4,
               "each unclean end is logged")
         clean()
         check(!FileManager.default.fileExists(atPath: runMarker.path), "clean exit removes the marker")

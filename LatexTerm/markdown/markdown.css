@@ -1,0 +1,111 @@
+/* Markdown-Ansicht der Vorschau-Kachel. Farben kommen als Variablen aus dem Theme (PreviewMarkdown.swift → __md.theme). */
+@font-face { font-family: "LT Mono"; src: url(/__lt/JetBrainsMonoNL-Regular.ttf); font-weight: 400; font-style: normal; }
+@font-face { font-family: "LT Mono"; src: url(/__lt/JetBrainsMonoNL-Bold.ttf); font-weight: 700; font-style: normal; }
+@font-face { font-family: "LT Mono"; src: url(/__lt/JetBrainsMonoNL-Italic.ttf); font-weight: 400; font-style: italic; }
+
+:root {
+  --bg: #1e1e1e; --fg: #d4d4d4; --dim: rgba(212,212,212,.55); --faint: rgba(212,212,212,.18); --ground: rgba(212,212,212,.06);
+  --accent: #29b8db; --link: #3b8eea; --code: #ce9178; --math: inherit; --heading: #e6e6e6; --mark: rgba(41,184,219,.28);
+  --mono: "LT Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  color-scheme: dark;
+}
+:root:not(.dark) { color-scheme: light; }
+html { background: var(--bg); }
+body {
+  margin: 0; padding: 26px 30px 60vh; background: var(--bg); color: var(--fg);
+  font: 15px/1.62 -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif;
+  -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility; overflow-wrap: break-word;
+}
+#content { max-width: 50em; margin: 0 auto; position: relative; }
+::selection { background: var(--mark); }
+
+/* Blöcke */
+.blk { position: relative; border-radius: 4px; }
+.blk > :first-child { margin-top: 0; }
+.blk > :last-child { margin-bottom: 0; }
+.blk + .blk { margin-top: .85em; }
+.blk[data-t="heading"] + .blk { margin-top: .5em; }
+.blk[data-t="heading"]:not(:first-child) { margin-top: 1.6em; }
+
+h1, h2, h3, h4, h5, h6 { color: var(--heading); line-height: 1.25; font-weight: 650; margin: 0; }
+h1 { font-size: 1.85em; letter-spacing: -.01em; padding-bottom: .25em; border-bottom: 1px solid var(--faint); }
+h2 { font-size: 1.4em; padding-bottom: .2em; border-bottom: 1px solid var(--faint); }
+h3 { font-size: 1.17em; }
+h4 { font-size: 1em; }
+h5, h6 { font-size: .9em; color: var(--dim); }
+p { margin: 0; }
+p + p { margin-top: .75em; }
+strong { font-weight: 650; color: var(--heading); }
+a { color: var(--link); text-decoration: none; }
+a:hover { text-decoration: underline; }
+a.net-img { font-size: .9em; }
+hr { border: 0; border-top: 1px solid var(--faint); margin: 1.4em 0; }
+
+ul, ol { margin: 0; padding-left: 1.6em; }
+li { margin: .18em 0; }
+li > p { margin: .3em 0; }
+li::marker { color: var(--dim); }
+li:has(> input[type=checkbox]), li:has(> p > input[type=checkbox]) { list-style: none; margin-left: -1.35em; }
+input[type=checkbox] { margin: 0 .45em 0 0; vertical-align: -1px; accent-color: var(--accent); }
+
+blockquote { margin: 0; padding: .1em 0 .1em 1em; border-left: 3px solid var(--faint); color: var(--dim); }
+
+code, kbd, samp { font-family: var(--mono); font-size: .86em; }
+:not(pre) > code { background: var(--ground); color: var(--code); padding: .12em .35em; border-radius: 4px; }
+kbd { border: 1px solid var(--faint); border-bottom-width: 2px; border-radius: 4px; padding: 0 .35em; }
+pre { margin: 0; background: var(--ground); border-radius: 6px; padding: .8em 1em; overflow-x: auto; line-height: 1.5; }
+pre code { font-size: .84em; color: var(--fg); }
+
+table { border-collapse: collapse; display: block; overflow-x: auto; max-width: 100%; font-size: .94em; }
+th, td { border: 1px solid var(--faint); padding: .35em .75em; text-align: left; vertical-align: top; }
+th { font-weight: 650; color: var(--heading); background: var(--ground); }
+
+img { max-width: 100%; border-radius: 4px; }
+img.broken { min-width: 2em; min-height: 1.2em; outline: 1px dashed var(--faint); }
+details { border: 1px solid var(--faint); border-radius: 6px; padding: .4em .8em; }
+summary { cursor: pointer; color: var(--heading); }
+mark { background: var(--mark); color: inherit; border-radius: 2px; }
+
+.math-block { overflow-x: auto; overflow-y: hidden; padding: .2em 0; color: var(--math); }
+.katex { font-size: 1.12em; color: var(--math); }
+.katex-display { margin: .4em 0; }
+.math-error, .katex-error { color: #e5534b; font-family: var(--mono); font-size: .86em; }
+.render-error { color: #e5534b; font-family: var(--mono); font-size: .85em; border: 1px solid rgba(229,83,75,.4); border-radius: 6px; padding: .6em .8em; white-space: pre-wrap; }
+.mermaid { text-align: center; min-height: 1.5em; }
+.mermaid svg { max-width: 100%; height: auto; }
+
+.front pre { background: transparent; border: 1px dashed var(--faint); color: var(--dim); font-size: .95em; }
+
+/* Quelltext-Ansicht */
+body.source #content { max-width: none; }
+pre.src {
+  background: transparent; padding: 0; font-family: var(--mono); font-size: 13px; line-height: 1.55; white-space: pre-wrap; tab-size: 4;
+  counter-reset: none;
+}
+pre.src .ln { display: block; position: relative; padding-left: 4.2em; min-height: 1.55em; border-radius: 3px; }
+pre.src .ln::before {
+  content: attr(data-l); position: absolute; left: 0; width: 3.2em; text-align: right; color: var(--faint);
+  -webkit-user-select: none; user-select: none;
+}
+.s-h { color: var(--heading); font-weight: 700; }
+.s-quote { color: var(--dim); }
+.s-rule, .s-fence { color: var(--dim); }
+.s-code, .s-code .s-code { color: var(--code); }
+.s-math { color: var(--accent); }
+.s-link { color: var(--link); }
+.s-mark { color: var(--accent); }
+
+/* Rückkanal und Sprünge */
+.lt-flash { animation: lt-flash 1.8s ease-out; }
+@keyframes lt-flash { 0%, 35% { background: var(--mark); box-shadow: 0 0 0 4px var(--mark); } 100% { background: transparent; box-shadow: 0 0 0 4px transparent; } }
+.lt-hover { position: absolute; pointer-events: none; z-index: 100; border: 2px solid var(--accent); border-radius: 5px; background: transparent; }
+.lt-mark { position: absolute; pointer-events: none; z-index: 90; border-radius: 2px; background: var(--mark); }
+.lt-mark.pending { opacity: .65; }
+.lt-mark.block { background: transparent; outline: 2px solid var(--accent); }
+.lt-mark.block.pending { outline-style: dashed; }
+.lt-badge {
+  min-width: 15px; height: 15px; padding: 0 3px; box-sizing: border-box; background: var(--accent); color: #000;
+  font: bold 10px/15px var(--mono); text-align: center; border-radius: 3px; opacity: 1;
+}
+.mermaid .edgeLabel, .mermaid .edgeLabel p, .mermaid .labelBkg { background: var(--bg) !important; background-color: var(--bg) !important; }
+.mermaid .edgeLabel rect { fill: var(--bg) !important; opacity: 1 !important; }

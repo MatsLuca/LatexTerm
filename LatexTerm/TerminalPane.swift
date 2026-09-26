@@ -83,6 +83,8 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     /// alten Shell-Hooks ignoriert — sonst Doppel-Banner. Lokal seit 21.09. entfernt.
     private var bridgeSeen = false
     private(set) var agentSession = AgentSession()
+    /// Fertige Agenten-Turns seit App-Start — Brett-Namen fragen erst nach neuer Arbeit wieder (`BoardNaming`).
+    private(set) var completedTurns = 0
     private var sessionOwnerGroup: pid_t?
     private var sessionWatch: Timer?
     private var agentName: String { agentSession.identity?.name ?? "Claude" }
@@ -863,6 +865,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
             let steps = hook.steps ?? turnSteps
             turnStartedAt = nil; turnSteps = 0; turnPrompt = nil
             sessionState = .none           // räumt statusDetail im didSet mit ab
+            completedTurns += 1
             finishTurn(reason: hook.fields["r"] ?? "answer", seconds: seconds, steps: steps,
                        answer: hook.fields["a"])
         case "ready":
@@ -1493,7 +1496,13 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         } else {
             view.send(txt: text)
         }
-        if enter { view.send(txt: "\r") }
+        // Enter als eigener Schreibvorgang mit Abstand: kommen Text und \r im selben Lesepuffer an, hält eine
+        // Agenten-TUI (Claude Code) das \r für einen eingefügten Zeilenumbruch und schickt nicht ab (25.09.).
+        if enter {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak self] in
+                self?.view.send(txt: "\r")
+            }
+        }
         return true
     }
 

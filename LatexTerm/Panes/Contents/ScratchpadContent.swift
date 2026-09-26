@@ -6,6 +6,11 @@ import UniformTypeIdentifiers
 /// Änderung unter `Application Support/LatexTerm/scratchpads/<id>.json` gesichert und kommt nach ⌥⌘R
 /// wieder; ⌘W schließt die Kachel samt Zeichnung.
 ///
+/// Angeheftet (25.09., Plan claude-werkstatt `plans/brett-ablegen_2026-09-25.md`): mit `file=<pfad>` (oder nachträglich
+/// per `call pin <pfad>`) gehört die Zeichnung einer Datei im Projekt statt dem App-Ordner — sie wird dort gesichert,
+/// daneben liegt ein PNG gleichen Namens (für Sessions ohne Scratchpad), ⌘W löscht nichts, und die Kachel darf ohne
+/// Rückfrage zugehen. Kachel zu = Kachel zu, die Zeichnung bleibt im Projekt.
+///
 /// Dialog mit Agenten (22.09. abends, Plan claude-werkstatt `plans/scratchpad-dialog_2026-09-22.md`):
 /// ➤ bzw. ⇧⌘⏎ fügt die Skizze als Bildpfad in eine Claude-/Codex-Kachel ein (die des Öffners direkt, sonst
 /// Auswahl; ⌥ erzwingt die Auswahl). Agenten sehen die Fläche per `call look` und zeichnen per `call draw`
@@ -18,7 +23,10 @@ final class ScratchpadContent: PaneContent {
             + "du siehst sie mit scratch_look (Bild mit Koordinatenraster) und zeichnest mit scratch_draw (SVG) sauber hinein "
             + "— eigene Ebene in Cyan, ⌘Z nimmt deinen Beitrag als einen Schritt zurück. Karten (Text im Rahmen, verschiebbar) "
             + "legst du per scratch_cards ab, der Nutzer per ⌘V (Text → Karten, Screenshot → Bild) — gemeinsame Pinnwand fürs Brainstorming. "
-            + "Alles ist Tinte: Radierer nimmt Striche/Buchstaben, Pixel-Radierer schneidet; Pfeile zwischen Karten rasten ein. Bleibt über einen Neustart erhalten.",
+            + "Alles ist Tinte: Radierer nimmt Striche/Buchstaben, Pixel-Radierer schneidet; Pfeile zwischen Karten rasten ein. Bleibt über einen Neustart erhalten. "
+            + "Ungesichert geht die Zeichnung mit ⌘W verloren — wer sie behalten will, heftet sie an eine Datei im Projekt an "
+            + "(scratch_pin, danach frei schließbar); mit file öffnest du eine angeheftete Zeichnung wieder, auch in einer neuen Session.",
+        args: [PaneKindArg(name: "file", summary: "absoluter Pfad einer angehefteten Zeichnung (…/_brett/<name>.scratch.json) — lädt sie und sichert dorthin; fehlt die Datei, entsteht sie", required: false)],
         actions: [PaneKindAction(name: "clear", summary: "Fläche leeren (rückgängig machbar)"),
                   PaneKindAction(name: "clear claude", summary: "nur deine Elemente entfernen"),
                   PaneKindAction(name: "clear mats", summary: "nur die Striche des Nutzers entfernen"),
@@ -29,18 +37,29 @@ final class ScratchpadContent: PaneContent {
     weak var delegate: PaneContentDelegate?
     private let id: UUID
     private let root = ScratchpadView()
+    /// Angeheftet: die Zeichnung gehört dieser Datei (im Projekt), nicht dem App-Ordner. nil = flüchtig wie bisher.
+    private var pinned: URL?
+    /// PNG neben der angehefteten Datei, gebündelt nachgezogen (nicht bei jedem Strich).
+    private var pendingPreview: DispatchWorkItem?
 
-    /// `id` kommt nur aus dem Snapshot (Restore); neue Kacheln bekommen eine frische.
+    /// `id` kommt nur aus dem Snapshot (Restore); neue Kacheln bekommen eine frische. `file` = angeheftete Zeichnung.
     init(args: [String: String]) throws {
-        try PaneArgsError.rejectUnknown(args, allowed: ["id"], kind: Self.kind)
+        try PaneArgsError.rejectUnknown(args, allowed: ["id", "file"], kind: Self.kind)
         if let raw = args["id"] {
             guard let id = UUID(uuidString: raw) else { throw PaneArgsError("scratchpad: ungültige id „\(raw)“") }
             self.id = id
         } else {
             id = UUID()
         }
+        if let raw = args["file"] {
+            pinned = try Self.pinnableURL(raw)
+        }
         Self.pruneOrphans()
         if let doc = Self.load(from: file) { root.canvas.restore(doc) }
+        if let pinned, !FileManager.default.fileExists(atPath: pinned.path) {
+            // Neue angeheftete Zeichnung: Datei gleich anlegen — der Pfad soll ab jetzt stimmen (CLAUDE.md zeigt darauf).
+            guard write(to: pinned) else { throw PaneArgsError("scratchpad: \(pinned.path) ist nicht schreibbar") }
+        }
         root.canvas.onChange = { [weak self] in self?.canvasChanged() }
         root.canvas.onSaveRequest = { [weak self] in self?.runSavePanel() }
         root.canvas.onSendRequest = { [weak self] choose in self?.sendToAgent(choose: choose) }
@@ -49,17 +68,20 @@ final class ScratchpadContent: PaneContent {
 
     var view: NSView { root }
     var keyView: NSView { root.canvas }
-    var title: String { "Scratchpad" }
+    var title: String { pinned.map { "Scratchpad · " + Self.baseName($0) } ?? "Scratchpad" }
     var chip: StatusChip? {
         let canvas = root.canvas
         let (mine, claude) = (canvas.count(.mats), canvas.count(.claude))
         var parts = [canvas.tool.label, ScratchPalette.names[canvas.colorIndex], mine == 1 ? "1 Strich" : "\(mine) Striche"]
         if claude > 0 { parts.append("\(claude) von Claude") }
+        parts.append(pinned.map { "angeheftet: " + Self.tilde($0.path) } ?? "ungesichert — ⌘W löscht die Zeichnung")
         return StatusChip(tone: canvas.inkColor, tooltip: parts.joined(separator: " · "))
     }
     var closeGuard: CloseGuard {
         let count = root.canvas.strokeCount
-        return count == 0 ? .free : .busy("hat eine Zeichnung (\(count == 1 ? "1 Element" : "\(count) Elemente"))")
+        guard pinned == nil, count > 0 else { return .free }
+        return .busy("hat eine ungesicherte Zeichnung (\(count == 1 ? "1 Element" : "\(count) Elemente")) — erst anheften "
+            + "(`call pin <pfad>`, MCP scratch_pin), dann schließt sie ohne Verlust")
     }
 
     func applyTheme(_ theme: TerminalTheme) {
@@ -121,28 +143,52 @@ final class ScratchpadContent: PaneContent {
             return try look(writingTo: path, viewer: viewer)
         case "draw":
             var replace: ScratchLayer?
-            for option in words.dropFirst() {
+            for option in words.dropFirst() where !option.hasPrefix("rev=") {
                 guard option.hasPrefix("replace="), let layer = ScratchLayer(rawValue: String(option.dropFirst(8))) else {
-                    throw PaneArgsError("draw kennt nur replace=claude|mats|all, nicht „\(option)“")
+                    throw PaneArgsError("draw kennt nur rev=… und replace=claude|mats|all, nicht „\(option)“")
                 }
                 replace = layer
             }
+            try checkRev(words)
             return try draw(body, replacing: replace)
         case "cards":
             var replace: ScratchLayer?
-            for option in words.dropFirst() {
+            var probe = false
+            for option in words.dropFirst() where !option.hasPrefix("rev=") {
+                if option == "probe" { probe = true; continue }
                 guard option.hasPrefix("replace="), let layer = ScratchLayer(rawValue: String(option.dropFirst(8))) else {
-                    throw PaneArgsError("cards kennt nur replace=claude|cards|mats|all, nicht „\(option)“")
+                    throw PaneArgsError("cards kennt nur rev=…, probe und replace=claude|cards|mats|all, nicht „\(option)“")
                 }
                 replace = layer
             }
-            return try cards(body, replacing: replace)
+            if !probe { try checkRev(words) }
+            return try cards(body, replacing: replace, probe: probe)
+        case "pin":
+            // pin <pfad> [replace] — Zeichnung an eine Datei heften (geschrieben, zurückgelesen, dann umgeschaltet).
+            guard words.count >= 2 else { throw PaneArgsError("pin braucht einen absoluten Pfad (…/<name>.scratch.json)") }
+            let options = Set(words.dropFirst(2).map { $0.lowercased() })
+            guard options.isSubset(of: ["replace"]) else { throw PaneArgsError("pin kennt nur die Option replace") }
+            return try pin(to: words[1], replace: options.contains("replace"))
+        case "state":
+            return Self.json(state())
         case "clear":
             guard let layer = Self.clearLayer(head) else { throw PaneArgsError("clear kennt claude, mats oder all") }
             let removed = root.canvas.clear(layer)
             return Self.json(["removed": removed, "left": root.canvas.strokeCount])
         default:
-            throw PaneArgsError("scratchpad versteht „\(head.prefix(40))“ nicht — look <pfad>, draw, cards, clear <wer>")
+            throw PaneArgsError("scratchpad versteht „\(head.prefix(40))“ nicht — look <pfad>, draw, cards, clear <wer>, pin <pfad>, state")
+        }
+    }
+
+    /// Ohne Blick kein Ablegen (Mats, 25.09.): `rev=` muss der Stand aus dem letzten `look` sein — hat sich das Brett
+    /// seitdem geändert (auch durch den Nutzer), erst wieder hinsehen.
+    private func checkRev(_ words: [String]) throws {
+        guard let given = words.first(where: { $0.hasPrefix("rev=") }).map({ String($0.dropFirst(4)) }), !given.isEmpty else {
+            throw PaneArgsError("rev fehlt — erst scratch_look (liefert rev), dann bewusst setzen")
+        }
+        let now = root.canvas.rev
+        guard given == now else {
+            throw PaneArgsError("Das Brett hat sich seit deinem Blick geändert (rev \(given) → \(now)) — erst scratch_look, dann neu planen")
         }
     }
 
@@ -190,6 +236,7 @@ final class ScratchpadContent: PaneContent {
             "changes": changes(for: viewer) ?? NSNull(),
             "colors": ScratchPalette.names,
             "claudeColor": ScratchPalette.names[ScratchPalette.claude],
+            "rev": canvas.rev,
         ])
     }
 
@@ -225,15 +272,17 @@ final class ScratchpadContent: PaneContent {
         let box = items.map(\.bounds).reduce(items[0].bounds) { $0.union($1) }
         return Self.json(["added": items.count, "removed": removed, "fitted": result.fitted,
                           "bounds": Self.rect(box), "visible": Self.rect(canvas.visibleWorldRect),
-                          "warnings": result.warnings])
+                          "warnings": result.warnings, "rev": canvas.rev])
     }
 
     /// `cards` + JSON-Liste (oder `{"cards": [...]}`). Eintrag ohne `id` = neue Karte (`text` Pflicht), mit `id` = diese
-    /// Karte ändern/verschieben, mit `remove: true` = entfernen. Felder: text, title, x, y (obere linke Ecke), width,
-    /// color (Rahmen), textColor, font, size, bold, italic, frame, fill, align. Ohne x/y sucht das Scratchpad Platz.
-    private func cards(_ body: String, replacing: ScratchLayer?) throws -> String {
+    /// Karte ändern/verschieben, mit `remove: true` = entfernen. Ort: x/y (obere linke Ecke) oder below/above/rightOf/leftOf
+    /// + gap (x/y überschreiben dann ihre Achse); overlap/offscreen erlauben ausdrücklich Überdecken/Außerhalb. Aussehen:
+    /// title, width, color, textColor, font, size, bold, italic, frame, fill, align. arrowTo: ids oder {to, fromSide,
+    /// toSide, via, through, color}. Mit `probe` wird nur gerechnet.
+    private func cards(_ body: String, replacing: ScratchLayer?, probe: Bool) throws -> String {
         guard let data = body.data(using: .utf8), let object = try? JSONSerialization.jsonObject(with: data) else {
-            throw PaneArgsError("cards braucht JSON: [{\"text\": \"…\"}]")
+            throw PaneArgsError("cards braucht JSON: [{\"text\": \"…\", \"x\": …, \"y\": …}]")
         }
         let list = (object as? [[String: Any]]) ?? ((object as? [String: Any])?["cards"] as? [[String: Any]]) ?? []
         guard !list.isEmpty, list.count <= 80 else { throw PaneArgsError("cards: 1–80 Einträge") }
@@ -245,6 +294,32 @@ final class ScratchpadContent: PaneContent {
             }
             return index
         }
+        func side(_ v: Any?, _ key: String) throws -> ScratchLayout.Side? {
+            guard let raw = v as? String else { return nil }
+            guard let side = ScratchLayout.Side(rawValue: raw.lowercased()) else { throw PaneArgsError("\(key): top, right, bottom oder left") }
+            return side
+        }
+        func arrow(_ raw: Any) throws -> ScratchpadCanvas.ArrowSpec {
+            if let to = raw as? String { return .init(to: to) }
+            guard let o = raw as? [String: Any], let to = o["to"] as? String else {
+                throw PaneArgsError("arrowTo: id oder {\"to\": id, fromSide, toSide, via, through, color}")
+            }
+            var spec = ScratchpadCanvas.ArrowSpec(to: to)
+            spec.fromSide = try side(o["fromSide"], "fromSide")
+            spec.toSide = try side(o["toSide"], "toSide")
+            spec.through = o["through"] as? Bool ?? false
+            spec.color = try color(o["color"], "color")
+            for point in (o["via"] as? [Any]) ?? [] {
+                if let pair = point as? [NSNumber], pair.count == 2 {
+                    spec.via.append(CGPoint(x: pair[0].doubleValue, y: pair[1].doubleValue))
+                } else if let p = point as? [String: Any], let x = number(p["x"]), let y = number(p["y"]) {
+                    spec.via.append(CGPoint(x: x, y: y))
+                } else {
+                    throw PaneArgsError("via: Liste von [x, y]")
+                }
+            }
+            return spec
+        }
         var entries: [ScratchpadCanvas.CardEntry] = []
         for raw in list {
             var entry = ScratchpadCanvas.CardEntry()
@@ -254,11 +329,24 @@ final class ScratchpadContent: PaneContent {
             if entry.id == nil {
                 guard let text = entry.text, !text.isEmpty else { throw PaneArgsError("neue Karte braucht text") }
                 guard !entry.remove else { throw PaneArgsError("remove braucht eine id") }
-                _ = text
             }
-            if let one = raw["arrowTo"] as? String { entry.arrowTo = [one] } else { entry.arrowTo = raw["arrowTo"] as? [String] ?? [] }
+            if let one = raw["arrowTo"], !(one is [Any]) { entry.arrows = [try arrow(one)] }
+            else { entry.arrows = try ((raw["arrowTo"] as? [Any]) ?? []).map(arrow) }
             if let text = entry.text, text.count > 3000 { throw PaneArgsError("Kartentext zu lang (max 3000 Zeichen)") }
-            if let x = number(raw["x"]), let y = number(raw["y"]) { entry.origin = CGPoint(x: x, y: y) }
+            var placement = ScratchLayout.Placement(x: number(raw["x"]), y: number(raw["y"]), gap: number(raw["gap"]))
+            let relations = ScratchLayout.Relation.allCases.filter { raw[$0.rawValue] != nil }
+            guard relations.count <= 1 else { throw PaneArgsError("nur eins von below/above/rightOf/leftOf je Karte") }
+            if let relation = relations.first {
+                guard let ref = raw[relation.rawValue] as? String else { throw PaneArgsError("\(relation.rawValue) braucht eine Karten-id") }
+                placement.relation = relation
+                placement.ref = ref
+            } else if (placement.x == nil) != (placement.y == nil) {
+                throw PaneArgsError("x und y nur zusammen (oder eins davon mit below/above/rightOf/leftOf)")
+            }
+            if let x = placement.x, let y = placement.y, placement.ref == nil { entry.origin = CGPoint(x: x, y: y) }
+            entry.placement = placement
+            entry.overlap = raw["overlap"] as? Bool ?? false
+            entry.offscreen = raw["offscreen"] as? Bool ?? false
             entry.width = number(raw["width"])
             entry.color = try color(raw["color"], "color")
             entry.style.textColor = try color(raw["textColor"], "textColor")
@@ -280,11 +368,17 @@ final class ScratchpadContent: PaneContent {
             }
             entries.append(entry)
         }
-        let result = try root.canvas.applyCards(entries, author: ScratchStroke.claude, replacing: replacing)
-        delegate?.contentHasNews()
-        func brief(_ card: ScratchStroke) -> [String: Any] { ["id": card.cardInfo?.id ?? "", "bounds": Self.rect(card.bounds)] }
+        let result = try root.canvas.applyCards(entries, author: ScratchStroke.claude, replacing: replacing, probe: probe)
+        if !probe, !result.problems.isEmpty {
+            throw PaneArgsError("Nichts gesetzt:\n- " + result.problems.joined(separator: "\n- "))
+        }
+        if !probe { delegate?.contentHasNews() }
+        func brief(_ card: ScratchStroke) -> [String: Any] { ["id": card.cardInfo?.id ?? "", "bounds": Self.rect(card.cardRect)] }
         return Self.json(["added": result.added.map(brief), "updated": result.updated.map(brief), "removed": result.removed,
-                          "visible": Self.rect(root.canvas.visibleWorldRect)])
+                          "arrows": result.arrows.map { ["from": $0.from, "to": $0.to,
+                                                         "points": $0.points.map { [Double($0.x.rounded()), Double($0.y.rounded())] }] },
+                          "problems": result.problems, "notes": result.notes, "probe": probe,
+                          "visible": Self.rect(root.canvas.visibleWorldRect), "rev": root.canvas.rev])
     }
 
     private static func rect(_ r: NSRect) -> [String: Double] {
@@ -352,11 +446,20 @@ final class ScratchpadContent: PaneContent {
         root.canvas.onSaveRequest = nil
         root.canvas.onSendRequest = nil
         root.onSend = nil
+        if pinned != nil {
+            // Angeheftet: letzten Stand samt Bild sicher auf die Platte, nichts löschen — die Datei gehört dem Projekt.
+            _ = write(to: file)
+            writePreview()
+            return
+        }
         guard !AppLifecycle.isTerminating else { return }
         try? FileManager.default.removeItem(at: file)
     }
 
-    func snapshotArgs() -> [String: String]? { ["id": id.uuidString] }
+    func snapshotArgs() -> [String: String]? {
+        guard let pinned else { return ["id": id.uuidString] }
+        return ["id": id.uuidString, "file": pinned.path]
+    }
 
     /// Abgedunkelt wird nur das Papier (und die Leiste) — die Tinte bleibt voll lesbar (Mats, 24.09.).
     func setDimmed(_ dimmed: Bool) -> Bool {
@@ -368,9 +471,91 @@ final class ScratchpadContent: PaneContent {
 
     private func canvasChanged() {
         delegate?.contentStyleChanged()
-        guard let data = try? JSONEncoder().encode(root.canvas.document()) else { return }
-        try? FileManager.default.createDirectory(at: Self.folder, withIntermediateDirectories: true)
-        try? data.write(to: file, options: .atomic)
+        _ = write(to: file)
+        if pinned != nil { schedulePreview() }
+    }
+
+    /// Zeichnung als JSON an `url` (Ordner wird angelegt); false = nicht geschrieben.
+    @discardableResult
+    private func write(to url: URL) -> Bool {
+        guard let data = try? JSONEncoder().encode(root.canvas.document()) else { return false }
+        do {
+            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try data.write(to: url, options: .atomic)
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    // MARK: Anheften
+
+    /// Absoluter Pfad (Tilde erlaubt), endet auf .json — sonst Fehler mit Grund.
+    private static func pinnableURL(_ raw: String) throws -> URL {
+        let path = (raw.trimmingCharacters(in: .whitespaces) as NSString).expandingTildeInPath
+        guard path.hasPrefix("/") else { throw PaneArgsError("scratchpad: file braucht einen absoluten Pfad, nicht „\(raw)“") }
+        guard path.lowercased().hasSuffix(".json") else { throw PaneArgsError("scratchpad: file endet auf .json (…/<name>.scratch.json)") }
+        return URL(fileURLWithPath: path).standardizedFileURL
+    }
+
+    /// `x.scratch.json` → „x“, `x.json` → „x“.
+    private static func baseName(_ url: URL) -> String {
+        var name = url.lastPathComponent
+        for suffix in [".scratch.json", ".json"] where name.lowercased().hasSuffix(suffix) {
+            name = String(name.dropLast(suffix.count)); break
+        }
+        return name
+    }
+
+    private static func tilde(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        return path.hasPrefix(home) ? "~" + path.dropFirst(home.count) : path
+    }
+
+    /// PNG neben der angehefteten Datei: gleicher Name, `.png`.
+    private var previewURL: URL? {
+        pinned.map { $0.deletingLastPathComponent().appendingPathComponent(Self.baseName($0) + ".png") }
+    }
+
+    private func schedulePreview() {
+        pendingPreview?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.writePreview() }
+        pendingPreview = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5, execute: work)
+    }
+
+    private func writePreview() {
+        pendingPreview?.cancel()
+        pendingPreview = nil
+        guard let url = previewURL else { return }
+        if let png = root.canvas.pngData() { try? png.write(to: url, options: .atomic) }
+        else { try? FileManager.default.removeItem(at: url) }   // leer gewischt → kein altes Bild stehen lassen
+    }
+
+    /// Schreiben, zurücklesen, prüfen — erst dann umschalten und die flüchtige Kopie im App-Ordner löschen.
+    private func pin(to raw: String, replace: Bool) throws -> String {
+        let url = try Self.pinnableURL(raw)
+        let fm = FileManager.default
+        if url != pinned, fm.fileExists(atPath: url.path), !replace {
+            throw PaneArgsError("\(url.path) gibt es schon — anderer Name oder `pin <pfad> replace` (überschreibt)")
+        }
+        guard write(to: url) else { throw PaneArgsError("\(url.path) ist nicht schreibbar") }
+        guard let back = Self.load(from: url), back.strokes.count == root.canvas.document().strokes.count else {
+            throw PaneArgsError("Zurücklesen von \(url.path) ergab nicht dieselbe Zeichnung — nicht angeheftet")
+        }
+        let old = file
+        let wasPinned = pinned != nil
+        pinned = url
+        if !wasPinned, old != url { try? fm.removeItem(at: old) }
+        writePreview()
+        delegate?.contentStyleChanged()
+        return Self.json(state())
+    }
+
+    private func state() -> [String: Any] {
+        ["pinned": pinned?.path ?? NSNull(), "png": previewURL?.path ?? NSNull(),
+         "elements": root.canvas.strokeCount, "cards": root.canvas.cards.count,
+         "closable": pinned != nil || root.canvas.strokeCount == 0]
     }
 
     /// ⌘S: PNG über den Sichern-Dialog, als Sheet am Fenster.
@@ -388,7 +573,8 @@ final class ScratchpadContent: PaneContent {
         if let window = root.window { panel.beginSheetModal(for: window, completionHandler: write) } else { write(panel.runModal()) }
     }
 
-    private var file: URL { Self.folder.appendingPathComponent("\(id.uuidString).json") }
+    /// Wo die Zeichnung liegt: angeheftet im Projekt, sonst flüchtig im App-Ordner.
+    private var file: URL { pinned ?? Self.folder.appendingPathComponent("\(id.uuidString).json") }
 
     private static var folder: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
@@ -420,6 +606,8 @@ final class ScratchpadContent: PaneContent {
 
 enum ScratchTool: String, Codable {
     case pen, marker, eraser, cutter
+    /// Tippen (Mats, 25.09.): Klick setzt Text, der wie eine Karte Tinte ist (radierbar, verschiebbar, für Agenten sichtbar).
+    case text
     /// Kein Werkzeug (nach Fokusverlust, Mats 24.09.): Ziehen verschiebt Karten/Bilder oder die Fläche, malt nie.
     case none
 
@@ -428,6 +616,7 @@ enum ScratchTool: String, Codable {
         case .none: "kein Werkzeug"
         case .pen: "Stift"
         case .marker: "Marker"
+        case .text: "Text"
         case .eraser: "Radierer"
         case .cutter: "Pixel-Radierer"
         }
@@ -502,6 +691,15 @@ struct ScratchLink: Codable, Equatable {
     var to: String
     var a: CGPoint
     var b: CGPoint
+    /// Gesetzter Agenten-Pfeil (25.09.): wird nicht gedreht, sondern bei jeder Bewegung neu geführt — an diesen Kanten
+    /// (nil = günstigste), über diese Zwischenpunkte. nil = Handschrift, folgt per Drehung/Streckung.
+    var route: ScratchRoute?
+}
+
+struct ScratchRoute: Codable, Equatable {
+    var fromSide: String?
+    var toSide: String?
+    var via: [CGPoint]?
 }
 
 /// Wessen Elemente: alle, nur die des Nutzers, nur die des Agenten, nur die Karten des Agenten.
@@ -557,8 +755,8 @@ struct ScratchCard: Codable, Equatable {
         return result
     }
 
-    /// Satz der Karte: Titel (fett) über dem Text, Ausrichtung, Farbe.
-    func attributed(text: String, color: NSColor) -> NSAttributedString {
+    /// Satz der Karte: Titel (fett) über dem Text, Ausrichtung, Farbe; `titleColor` = Gruppenfarbe des Titels.
+    func attributed(text: String, color: NSColor, titleColor: NSColor? = nil) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
         switch align?.lowercased() {
         case "center": paragraph.alignment = .center
@@ -569,7 +767,7 @@ struct ScratchCard: Codable, Equatable {
         let result = NSMutableAttributedString()
         if let title, !title.isEmpty {
             result.append(NSAttributedString(string: title + (text.isEmpty ? "" : "\n"), attributes: [
-                .font: font(bold: true), .foregroundColor: color, .paragraphStyle: paragraph]))
+                .font: font(bold: true), .foregroundColor: titleColor ?? color, .paragraphStyle: paragraph]))
         }
         result.append(NSAttributedString(string: text, attributes: [
             .font: font(), .foregroundColor: color, .paragraphStyle: paragraph]))
@@ -783,6 +981,21 @@ final class ScratchStroke: Codable {
     /// Unabhängige Kopie (gleiche uid) — Grundlage aller Änderungen als Undo-Schritt „tauschen“.
     func copy() -> ScratchStroke { moved(by: .zero) }
 
+    /// Kopie mit neuem Linienzug (neu geführter Agenten-Pfeil bzw. seine Spitze), gleiche uid.
+    func rerouted(_ line: [CGPoint]) -> ScratchStroke {
+        let c = copy()
+        c.points = line
+        c.cachedPath = nil
+        return c
+    }
+
+    /// Kopie ohne Einrasten (Karte am anderen Ende ist weg; die Handschrift bleibt liegen).
+    func unlinked() -> ScratchStroke {
+        let c = copy()
+        c.link = nil
+        return c
+    }
+
     /// Kopie, abgebildet durch Drehung+Streckung+Verschiebung (eingerastete Pfeile folgen ihren Karten).
     func transformed(_ f: (CGPoint) -> CGPoint, scale: CGFloat) -> ScratchStroke {
         let c = copy()
@@ -967,6 +1180,7 @@ final class ScratchStroke: Codable {
         path.lineWidth = width
         path.lineCapStyle = .round
         path.lineJoinStyle = .round
+        guard !points.isEmpty else { return path }   // leerer Strich: nichts zeichnen, nicht abstürzen
         path.move(to: points[0])
         if points.count < 3 || !smooth {
             if points.count == 1 { path.line(to: points[0]) }   // ein Klick ohne Ziehen hinterlässt einen Punkt
@@ -1089,6 +1303,29 @@ struct ScratchDocument: Codable {
     var tool: ScratchTool
     var color: Int
     var size: Int
+
+    init(strokes: [ScratchStroke], tool: ScratchTool, color: Int, size: Int) {
+        // Nie ein Element ohne Punkte sichern — es machte beim Laden die ganze Datei unlesbar (→ .defekt.json).
+        self.strokes = strokes.filter { !$0.points.isEmpty }
+        self.tool = tool
+        self.color = color
+        self.size = size
+    }
+
+    /// Ein kaputtes Element kostet nur sich selbst, nicht die ganze Zeichnung.
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decodeIfPresent(Int.self, forKey: .version) ?? 1
+        strokes = try c.decode([Lossy].self, forKey: .strokes).compactMap(\.stroke)
+        tool = try c.decode(ScratchTool.self, forKey: .tool)
+        color = try c.decode(Int.self, forKey: .color)
+        size = try c.decode(Int.self, forKey: .size)
+    }
+
+    private struct Lossy: Decodable {
+        let stroke: ScratchStroke?
+        init(from decoder: Decoder) throws { stroke = try? ScratchStroke(from: decoder) }
+    }
 }
 
 /// „Seit deinem letzten Blick“ (Pinnwand E, 24.09.): Stand je Element, Vergleich, Lesereihenfolge und Gruppen der Karten.
@@ -1120,6 +1357,14 @@ enum ScratchChanges {
         var moved: [[String: Any]] = [], edited: [[String: Any]] = [], addedCards: [[String: Any]] = [], removedCards: [[String: Any]] = []
         var added: [String: [NSRect]] = [:], removed: [String: [NSRect]] = [:]
         func label(_ s: Snap) -> String { s.cardID ?? s.kind }
+        // Neu gesetzte Karte unter derselben id (z. B. `replace: cards`) = dieselbe Karte, geändert — nicht neu + entfernt.
+        var before = before
+        let vanished = Dictionary(before.filter { now[$0.key] == nil && $0.value.cardID != nil }.map { ($0.value.cardID!, $0.key) },
+                                  uniquingKeysWith: { a, _ in a })
+        for (uid, snap) in now where before[uid] == nil {
+            guard let id = snap.cardID, let oldUID = vanished[id], let old = before.removeValue(forKey: oldUID) else { continue }
+            before[uid] = old
+        }
         for (uid, snap) in now {
             guard let old = before[uid] else {
                 if snap.kind == "card" { addedCards.append(["id": label(snap), "by": snap.author, "text": snap.text ?? "", "bounds": rect(snap.bounds)]) }

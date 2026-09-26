@@ -3,6 +3,7 @@ import AppKit
 /// App-weite Kommandos des Steuerkanals (25.09.2026) — gehören keinem Brett, darum vor dem Router-Ziel:
 /// - `snapshots`: Stand-Archiv (`SessionStore.archived`), neuester zuerst.
 /// - `restore`: fehlende Bretter eines Stands in die laufende App, ohne Neustart (`dryRun` = nur zeigen).
+/// - `board-open`: Brett aus einer Datei (`board-save` des Bretts) als neues Brett (25.09.).
 /// - `doctor`: Gesundheitscheck — läuft der neueste Build, Absturzschutz, Archiv, letzte Lebenszeichen.
 /// Anlass: das Zurückholen verlorener Bretter am 24./25.09. ging nur über Sperrdatei und ⌘Q (Plan claude-werkstatt
 /// `plans/latexterm-wiederherstellen_2026-09-25.md`).
@@ -14,6 +15,7 @@ enum AppControl {
             response.snapshots = SessionStore.archived().map(\.summary)
             return response
         case "restore": return restore(request)
+        case "board-open": return openBoard(request)
         case "doctor":
             var response = ControlResponse(ok: true)
             response.reply = doctor()
@@ -43,6 +45,36 @@ enum AppControl {
             LifecycleWatch.log("Wiederhergestellt aus \(found.summary.name): \(missing.count) Brett\(missing.count == 1 ? "" : "er"), \(paneCount) Kachel\(paneCount == 1 ? "" : "n")")
             response.reply = "\(missing.count) Brett\(missing.count == 1 ? "" : "er") mit \(paneCount) Kachel\(paneCount == 1 ? "" : "n") hinten angehängt (Stand \(found.summary.name)). Agenten-Sessions setzen sich fort."
         }
+        return response
+    }
+
+    // MARK: Brett-Datei
+
+    /// `board-open`: Brett aus einer Datei (`board-save`) als neues Brett, vorn (`focus` false = hinten lassen).
+    /// Schon Offenes kommt nicht doppelt (gleiche Kachel, Agenten-Session oder angeheftete Zeichnung).
+    private static func openBoard(_ request: ControlRequest) -> ControlResponse {
+        let url: URL, file: BoardFile
+        do {
+            url = try BoardFile.url(request.text)
+            file = try BoardFile.read(url)
+        } catch { return .failure(String(describing: error)) }
+        let window = file.resolved(base: url.deletingLastPathComponent())
+        let missing = BoardHostView.openPanes().missing(from: [window])
+        var response = ControlResponse(ok: true)
+        let name = window.name ?? "Brett"
+        guard let plan = missing.first else {
+            response.reply = "„\(name)“ ist schon offen — nichts zu tun."
+            return response
+        }
+        let described = plan.panes.map(SessionStore.describe).joined(separator: " · ")
+        if request.dryRun ?? false {
+            response.reply = "Probe: „\(name)“ mit \(plan.panes.count) Kachel\(plan.panes.count == 1 ? "" : "n") käme dazu (\(described))"
+                + (plan.panes.count < window.panes.count ? " — \(window.panes.count - plan.panes.count) schon offen" : "")
+            return response
+        }
+        guard BoardHostView.addRestoredBoards([plan], activate: request.focus ?? true) else { return .failure("Kein LatexTerm-Fenster offen") }
+        LifecycleWatch.log("Brett geöffnet aus \(url.path): \(plan.panes.count) Kachel\(plan.panes.count == 1 ? "" : "n")")
+        response.reply = "„\(name)“ geöffnet: \(plan.panes.count) Kachel\(plan.panes.count == 1 ? "" : "n") (\(described)). Agenten-Sessions setzen sich fort."
         return response
     }
 

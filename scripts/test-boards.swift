@@ -59,6 +59,26 @@ struct BoardTests {
         check(BoardName.automatic(agentDirectories: [], directories: [home], home: home, number: 2) == "Home", "home folder")
         check(BoardName.automatic(agentDirectories: [], directories: [], home: home, number: 3) == "Brett 3", "fallback")
         check(BoardName.automatic(agentDirectories: [], directories: ["/"], home: home, number: 4) == "Brett 4", "root")
+
+        // KI-Namen (26.09.): Anlauf fragt bei jeder neuen Arbeit, Reife selten, leere Bretter nie.
+        let t0 = Date(timeIntervalSince1970: 0)
+        var naming = BoardNaming()
+        check(!naming.isDue(turns: 0, panes: ["a"], hasSession: false, now: t0), "fresh empty board: not due")
+        check(naming.isDue(turns: 0, panes: ["a"], hasSession: true, now: t0), "restored session: due once")
+        naming.checked(turns: 0, panes: ["a"], now: t0, newName: nil)
+        check(!naming.isDue(turns: 0, panes: ["a"], hasSession: true, now: t0), "kept, nothing new: not due")
+        check(naming.isDue(turns: 1, panes: ["a"], hasSession: true, now: t0), "start-up: every new turn")
+        check(naming.isDue(turns: 0, panes: ["a"], hasSession: true, working: true, now: t0), "start-up: again and again while working")
+        naming.checked(turns: 1, panes: ["a"], now: t0, newName: "Brett Namen")
+        check(naming.name == "Brett Namen", "name taken")
+        check(!naming.isDue(turns: 2, panes: ["a"], hasSession: true, now: t0.addingTimeInterval(700)), "mature: one turn is not enough")
+        check(!naming.isDue(turns: 1, panes: ["a"], hasSession: true, working: true, now: t0.addingTimeInterval(700)), "mature: working alone is not enough")
+        check(!naming.isDue(turns: 4, panes: ["a"], hasSession: true, now: t0.addingTimeInterval(60)), "mature: too soon")
+        check(naming.isDue(turns: 4, panes: ["a"], hasSession: true, now: t0.addingTimeInterval(700)), "mature: 3 turns + 10 min")
+        check(naming.isDue(turns: 1, panes: ["a", "b"], hasSession: true, now: t0.addingTimeInterval(5)), "new pane: always")
+        check(!naming.isDue(turns: 1, panes: [], hasSession: true, now: t0.addingTimeInterval(700)), "closed pane only: not due")
+        naming.checked(turns: 4, panes: ["a"], now: t0, newName: "")
+        check(naming.name == "Brett Namen", "empty answer keeps the name")
         print("board tests: \(cases) ok")
     }
 }

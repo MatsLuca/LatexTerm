@@ -63,6 +63,8 @@ struct SessionSnapshot: Codable, Equatable {
         var layout: LayoutNode?
         /// Bretter (23.09.): von Mats gesetzter Name; nil = automatisch.
         var name: String?
+        /// Bretter (26.09.): zuletzt von der KI gewählter Name (`BoardNaming`) — überlebt ⌥⌘R.
+        var aiName: String?
         /// Home-Brett (24.09., wieder entfernt 25.09.): nur noch zum Wiedererkennen alter Stände — wird übersprungen.
         var home: Bool?
 
@@ -77,7 +79,7 @@ struct SessionSnapshot: Codable, Equatable {
             self.name = name
         }
 
-        private enum CodingKeys: String, CodingKey { case panes, focused, zoomed, tabGroup, selected, layout, name, home }
+        private enum CodingKeys: String, CodingKey { case panes, focused, zoomed, tabGroup, selected, layout, name, aiName, home }
 
         init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -89,6 +91,7 @@ struct SessionSnapshot: Codable, Equatable {
             // Ein kaputtes Layout kostet nur die Anordnung, nie die Kacheln.
             layout = try? c.decodeIfPresent(LayoutNode.self, forKey: .layout)
             name = try? c.decodeIfPresent(String.self, forKey: .name)
+            aiName = try? c.decodeIfPresent(String.self, forKey: .aiName)
             home = try? c.decodeIfPresent(Bool.self, forKey: .home)
         }
 
@@ -231,12 +234,17 @@ enum SessionStore {
         try? FileManager.default.removeItem(at: marker)
     }
 
-    /// Stand des Vorlaufs: endete er unsauber (`unclean`), und soll sein Stand zurückkommen (`restore` — nicht, wenn er
-    /// schon in der Startphase starb)? Schreibt eine Zeile ins Log.
-    private static func previousRunEnd(for url: URL?, now: Date) -> (unclean: Bool, restore: Bool) {
-        guard let marker = runMarkerURL(for: url) else { return (false, false) }
+    /// Höchstens so viele Startversuche mit Wiederherstellung, die jeweils schon in der Startphase sterben (25.09.:
+    /// ein SIGPIPE nach ⌥⌘R war nicht die Wiederherstellung selbst — ein Versuch mehr, erst dann Home).
+    static let maxRestoreAttempts = 2
+
+    /// Stand des Vorlaufs: endete er unsauber (`unclean`), und soll sein Stand zurückkommen (`restore` — nach der
+    /// Startphase immer, in der Startphase nur, solange ein wiederherstellender Vorlauf Versuche übrig hat)?
+    /// `attempt` = der wievielte Wiederherstellungsversuch dieser Start wäre. Schreibt eine Zeile ins Log.
+    private static func previousRunEnd(for url: URL?, now: Date) -> (unclean: Bool, restore: Bool, attempt: Int) {
+        guard let marker = runMarkerURL(for: url) else { return (false, false, 1) }
         let fm = FileManager.default
-        guard fm.fileExists(atPath: marker.path) else { return (false, false) }
+        guard fm.fileExists(atPath: marker.path) else { return (false, false, 1) }
         let started = (try? fm.attributesOfItem(atPath: marker.path)[.modificationDate]) as? Date
         let lastSave = url.flatMap { (try? fm.attributesOfItem(atPath: $0.path)[.modificationDate]) as? Date }
         // Nur wenn der Vorlauf nach seinem Start noch gespeichert hat (Autosave beginnt erst nach der Startphase):
@@ -247,16 +255,23 @@ enum SessionStore {
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? "?"
         let stamp = ISO8601DateFormatter()
         stamp.timeZone = .current
+        // Starb ein wiederherstellender Vorlauf in der Startphase, noch einmal versuchen (Marke „wiederherstellung N“).
+        let previousAttempt = info.range(of: #"wiederherstellung (\d+)"#, options: .regularExpression)
+            .flatMap { Int(info[$0].split(separator: " ").last ?? "") }
+        let retry = !crashed && (previousAttempt ?? maxRestoreAttempts) < maxRestoreAttempts
+        let attempt = retry ? previousAttempt! + 1 : 1
         appendLog("\(stamp.string(from: now)) unsauberes Ende · Vorlauf \(info) · letzter Autosave "
             + (lastSave.map { stamp.string(from: $0) } ?? "–")
-            + (crashed ? " → stelle wieder her" : " → Startphase, Home"), next: marker)
-        return (true, crashed)
+            + (crashed ? " → stelle wieder her"
+               : retry ? " → Startphase, Versuch \(attempt) von \(maxRestoreAttempts)" : " → Startphase, Home"), next: marker)
+        return (true, crashed || retry, attempt)
     }
 
     /// Eigene Lauf-Marke setzen — nach dem Speichern beim Start, sonst zählte dieses als „nach dem Start gespeichert“.
-    private static func writeRunMarker(for url: URL?, now: Date) {
+    private static func writeRunMarker(for url: URL?, now: Date, restoreAttempt: Int? = nil) {
         guard let marker = runMarkerURL(for: url) else { return }
         let line = "pid \(ProcessInfo.processInfo.processIdentifier) seit \(ISO8601DateFormatter().string(from: now))"
+            + (restoreAttempt.map { " · wiederherstellung \($0)" } ?? "")
         try? FileManager.default.createDirectory(at: marker.deletingLastPathComponent(), withIntermediateDirectories: true)
         try? Data(line.utf8).write(to: marker, options: .atomic)
     }
@@ -292,13 +307,15 @@ enum SessionStore {
     /// kommt beim nächsten Öffnen wieder Home statt derselben Wiederherstellung in Schleife.
     static func takeRestore(from url: URL? = defaultURL, now: Date = Date()) -> [SessionSnapshot.Window]? {
         let end = previousRunEnd(for: url, now: now)
-        defer { writeRunMarker(for: url, now: now) }
+        var restoring = false
+        defer { writeRunMarker(for: url, now: now, restoreAttempt: restoring ? end.attempt : nil) }
         // Den vorgefundenen Stand eines unsauberen Endes immer ins Archiv — auch wenn er nicht automatisch zurückkommt.
         if end.unclean, let found = load(from: url) { archive(found, reason: "absturz", for: url, now: now) }
         guard var snapshot = load(from: url), snapshot.restoreOnce || end.restore else { return nil }
         snapshot.restoreOnce = false
         save(snapshot, to: url)
         let windows = snapshot.windows.filter { !$0.panes.isEmpty }
+        restoring = !windows.isEmpty
         return windows.isEmpty ? nil : windows
     }
 }
@@ -400,7 +417,7 @@ extension SessionStore {
         case .shell: return "shell" + (cwd.map { " " + $0 } ?? "")
         case .resume(let agent, let session, _, _): return agent + (cwd.map { " " + $0 } ?? "") + " (\(session.prefix(8)))"
         case .app(let kind, let args):
-            let detail = args["url"].map { " " + ($0 as NSString).lastPathComponent } ?? ""
+            let detail = (args["url"] ?? args["file"]).map { " " + ($0 as NSString).lastPathComponent } ?? ""
             return kind + detail
         }
     }
@@ -420,7 +437,8 @@ struct OpenPanes {
     var contents: Set<String> = []
 
     static func contentKey(kind: String, args: [String: String]) -> String? {
-        guard let key = args["id"] ?? args["url"] else { return nil }
+        // Angeheftetes Scratchpad (25.09.): dieselbe Datei = dieselbe Kachel, auch unter anderer id.
+        guard let key = args["file"] ?? args["id"] ?? args["url"] else { return nil }
         return kind + "|" + key.uppercased()
     }
 

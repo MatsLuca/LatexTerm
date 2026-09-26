@@ -11,6 +11,13 @@ final class BoardStripView: NSView, NSViewToolTipOwner, NSTextFieldDelegate {
         var name: String
         var active: Bool
         var badge: PaneTabBarView.Badge?
+        /// KI-Name (26.09.) am vorderen Brett: Punkt wandert durch den Strich, dann pulsiert er am Ende, solange gefragt wird.
+        var naming: Naming? = nil
+    }
+
+    enum Naming: Equatable {
+        case waiting(since: Date, duration: TimeInterval)
+        case asking(since: Date)
     }
 
     static let height: CGFloat = 30
@@ -26,8 +33,17 @@ final class BoardStripView: NSView, NSViewToolTipOwner, NSTextFieldDelegate {
     private static let leadingInset: CGFloat = 10
 
     var items: [Item] = [] {
-        didSet { if items != oldValue { rebuildToolTips(); needsDisplay = true } }
+        didSet {
+            guard items != oldValue else { return }
+            // Neuer Name (KI oder Mats): kurz einblenden statt springen.
+            for item in items {
+                if let old = oldValue.first(where: { $0.id == item.id }), old.name != item.name { renamedAt[item.id] = Date() }
+            }
+            rebuildToolTips(); needsDisplay = true
+        }
     }
+    private var renamedAt: [ObjectIdentifier: Date] = [:]
+    private static let fadeDuration: TimeInterval = 0.6
     var onSelect: ((ObjectIdentifier) -> Void)?
     var onClose: ((ObjectIdentifier) -> Void)?
     var onAdd: (() -> Void)?
@@ -149,11 +165,13 @@ final class BoardStripView: NSView, NSViewToolTipOwner, NSTextFieldDelegate {
             }
             if item.active {
                 accent.setFill()
-                NSBezierPath(roundedRect: NSRect(x: rect.minX + 3, y: rect.maxY - 2, width: rect.width - 6, height: 2),
-                             xRadius: 1, yRadius: 1).fill()
+                let line = NSRect(x: rect.minX + 3, y: rect.maxY - 2, width: rect.width - 6, height: 2)
+                NSBezierPath(roundedRect: line, xRadius: 1, yRadius: 1).fill()
+                if let naming = item.naming { drawNamingDot(naming, on: line, accent: accent, theme: theme) }
             }
             let dragged = drag?.index == i
-            let color = theme.foreground.withAlphaComponent(dragged ? 0.3 : item.active ? 0.92 : 0.5)
+            let fade = renamedAt[item.id].map { CGFloat(min(1, Date().timeIntervalSince($0) / Self.fadeDuration)) } ?? 1
+            let color = theme.foreground.withAlphaComponent((dragged ? 0.3 : item.active ? 0.92 : 0.5) * (0.15 + 0.85 * fade))
             let style = NSMutableParagraphStyle()
             style.lineBreakMode = .byTruncatingTail
             let text = NSAttributedString(string: fit[i].label, attributes: [
@@ -219,6 +237,26 @@ final class BoardStripView: NSView, NSViewToolTipOwner, NSTextFieldDelegate {
         }
     }
 
+    /// Punkt im Strich des vorderen Bretts: wandert in `duration` von links nach rechts (Mats' Idee 26.09.), danach
+    /// pulsiert er am rechten Ende, bis die Antwort da ist. Heller als der Strich, 5 pt.
+    private func drawNamingDot(_ naming: Naming, on line: NSRect, accent: NSColor, theme: TerminalTheme) {
+        let size: CGFloat = 5
+        let progress: CGFloat
+        var alpha: CGFloat = 1
+        switch naming {
+        case .waiting(let since, let duration):
+            progress = CGFloat(min(1, max(0, Date().timeIntervalSince(since) / duration)))
+        case .asking(let since):
+            progress = 1
+            let t = Date().timeIntervalSince(since).truncatingRemainder(dividingBy: 1.2) / 1.2
+            alpha = CGFloat(0.35 + 0.65 * (0.5 + 0.5 * cos(2 * .pi * t)))
+        }
+        let x = line.minX + progress * (line.width - size)
+        let dot = NSRect(x: x, y: line.midY - size / 2, width: size, height: size)
+        (accent.blended(withFraction: 0.55, of: theme.foreground) ?? theme.foreground).withAlphaComponent(alpha).setFill()
+        NSBezierPath(ovalIn: dot).fill()
+    }
+
     // MARK: Puls (wartet/arbeitet an verdeckten Brettern)
 
     private var pulseTimer: Timer?
@@ -234,7 +272,11 @@ final class BoardStripView: NSView, NSViewToolTipOwner, NSTextFieldDelegate {
         pulseTimer?.invalidate()
         guard window != nil else { return }
         pulseTimer = Timer.scheduledTimer(withTimeInterval: 1.0 / 20, repeats: true) { [weak self] _ in
-            guard let self, self.items.contains(where: { $0.badge?.pulse != nil }) else { return }
+            guard let self else { return }
+            let now = Date()
+            self.renamedAt = self.renamedAt.filter { now.timeIntervalSince($0.value) < Self.fadeDuration }
+            guard self.items.contains(where: { $0.badge?.pulse != nil || $0.naming != nil }) || !self.renamedAt.isEmpty
+            else { return }
             self.needsDisplay = true
         }
     }

@@ -34,6 +34,9 @@ enum LifecycleWatch {
 
         // Eigener (leerer) Handler statt SIG_IGN: ein ignoriertes Signal erbten die Shells der Kacheln über exec,
         // ein Handler fällt dort auf den Standard zurück. Die Dispatch-Quelle sieht das Signal trotzdem.
+        // SIGPIPE nie tödlich: Schreiben in eine geschlossene Pipe/Socket (Kind-Prozess weg, Client aufgelegt) liefert
+        // dann EPIPE. Standardaktion wäre stilles Beenden ohne Absturzbericht (25.09. 21:48, Neustart verlor die Bretter).
+        signal(SIGPIPE) { _ in }
         for (number, name) in [(SIGTERM, "SIGTERM"), (SIGHUP, "SIGHUP")] {
             signal(number) { _ in }
             let source = DispatchSource.makeSignalSource(signal: number, queue: .main)

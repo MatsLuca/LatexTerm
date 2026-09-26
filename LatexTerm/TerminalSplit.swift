@@ -121,6 +121,7 @@ final class TerminalSplitView: NSView {
         if let plan {
             restore(plan)
             customName = plan.name
+            naming.name = plan.aiName
         } else if !empty {
             addPane(home: true)
         }
@@ -249,13 +250,39 @@ final class TerminalSplitView: NSView {
         window?.makeFirstResponder(pane.focusTarget)
     }
 
-    /// Name in der Brett-Leiste.
+    /// KI-Name (26.09.): wann gefragt wird und was zuletzt kam; von Mats gesetzte Namen gewinnen.
+    var naming = BoardNaming()
+
+    /// Name in der Brett-Leiste: Mats' Name › KI-Name › Ordner.
     var displayName: String {
         if let customName, !customName.isEmpty { return customName }
+        if let name = naming.name, !name.isEmpty, BoardNameRequest.enabled { return name }
+        return automaticName
+    }
+
+    private var automaticName: String {
         let infos = displayPanes.map { info(for: $0) }
         return BoardName.automatic(agentDirectories: infos.compactMap { $0.agent != nil ? $0.cwd : nil },
                                    directories: infos.compactMap(\.cwd), home: NSHomeDirectory(),
                                    number: boardHost?.position(of: self) ?? 1)
+    }
+
+    /// Stand für `BoardNaming.isDue`: fertige Turns aller Kacheln, Kachel-IDs, trägt eine Kachel eine Session?
+    var namingState: (turns: Int, panes: Set<String>, hasSession: Bool, working: Bool) {
+        let terminals = panes.compactMap { $0 as? TerminalPane }
+        return (terminals.reduce(0) { $0 + $1.completedTurns }, Set(panes.map { $0.id.uuidString }),
+                terminals.contains { $0.agentSession.identity != nil },
+                terminals.contains { $0.sessionState == .working })
+    }
+
+    /// Anfrage an `projekte brettname`: was auf dem Brett liegt (Art, Ordner, Agent, Session, Titel).
+    var namingInput: BoardNameRequest.Input {
+        let entries = displayPanes.map { info(for: $0) }.map {
+            BoardNameRequest.PaneInput(kind: $0.kind ?? "terminal", cwd: $0.cwd, agent: $0.agent,
+                                       sessionID: $0.sessionID, title: $0.title)
+        }
+        return BoardNameRequest.Input(phase: naming.name == nil ? "anlauf" : "reife", current: naming.name,
+                                      fallback: automaticName, panes: entries)
     }
 
     /// Abzeichen für die Brett-Leiste (nur verdeckte Bretter): wichtigstes aller Kacheln — wartet › arbeitet ›
@@ -815,44 +842,17 @@ final class TerminalSplitView: NSView {
         boardHost?.boardDidChange(self)
         guard isActiveBoard else { removeTitlebarHUD(); return }
         guard let window else { return }
-        let mode = CockpitSettings.shared.statusBadgeMode
         let showZoom = zoomedPane != nil
-        let showDots = panes.count > 1
 
         // Platz in der Titelleiste: Fensterbreite minus Ampel (links) und Luft. Stufen von
         // ausführlich nach knapp — die erste, die passt, gewinnt (Mats, 15.09.: „alle in voller
         // Größe, solange sie nicht links in Richtung Ampel volllaufen").
         let zoomWidth: CGFloat = showZoom ? 120 : 0
         let available = window.frame.width - 92 - 24 - zoomWidth - (boardHost?.stripWidth ?? 0)
-        enum Level { case allLong, focusedLong, allShort, glyph }
-        let levels: [Level] = [.allLong, .focusedLong, .allShort, .glyph]
         var specs: [(pane: any Pane, spec: PaneChipView.Spec)] = []
-        let ordered = displayPanes   // Chips in Lesereihenfolge des Layouts
-        for level in levels {
-            specs = []
-            for pane in ordered {
-                let chip = pane.statusChip
-                let focused = isFocused(pane)
-                let text: String?
-                switch level {
-                case .allLong: text = chip.long
-                case .focusedLong: text = focused ? chip.long : chip.short
-                case .allShort: text = chip.short
-                case .glyph: text = chip.glyph
-                }
-                let shown = mode == .off ? nil : text
-                guard showDots || shown != nil else { continue }
-                let long = level == .allLong || (level == .focusedLong && focused)
-                let number = ordered.firstIndex { $0 === pane }.map { $0 + 1 }.flatMap { $0 <= 9 ? $0 : nil }
-                specs.append((pane, PaneChipView.Spec(
-                    color: pane.effectiveAccent, tone: chip.tone, focused: focused,
-                    number: showDots ? number : nil, text: shown,
-                    pulsing: chip.pulsing, urgent: chip.urgent, tooltip: chip.tooltip,
-                    maxWidth: long ? 360 : 160)))
-            }
-            let width = specs.reduce(CGFloat(0)) { $0 + PaneChipView.width(for: $1.spec) }
-                + 4 * CGFloat(max(0, specs.count - 1))
-            if width <= available || level == .glyph { break }
+        for level in [ChipLevel.allLong, .focusedLong, .allShort, .glyph] {
+            specs = chipSpecs(level)
+            if Self.chipsWidth(specs) <= available || level == .glyph { break }
         }
 
         guard !specs.isEmpty || showZoom else {
@@ -896,6 +896,48 @@ final class TerminalSplitView: NSView {
         window.addTitlebarAccessoryViewController(vc)
         titlebarHUD = vc
         hudSignature = structure
+    }
+
+    private enum ChipLevel { case allLong, focusedLong, allShort, glyph }
+
+    /// Chips einer Stufe in Lesereihenfolge des Layouts.
+    private func chipSpecs(_ level: ChipLevel) -> [(pane: any Pane, spec: PaneChipView.Spec)] {
+        let mode = CockpitSettings.shared.statusBadgeMode
+        let showDots = panes.count > 1
+        let ordered = displayPanes
+        var specs: [(pane: any Pane, spec: PaneChipView.Spec)] = []
+        for pane in ordered {
+            let chip = pane.statusChip
+            let focused = isFocused(pane)
+            let text: String?
+            switch level {
+            case .allLong: text = chip.long
+            case .focusedLong: text = focused ? chip.long : chip.short
+            case .allShort: text = chip.short
+            case .glyph: text = chip.glyph
+            }
+            let shown = mode == .off ? nil : text
+            guard showDots || shown != nil else { continue }
+            let long = level == .allLong || (level == .focusedLong && focused)
+            let number = ordered.firstIndex { $0 === pane }.map { $0 + 1 }.flatMap { $0 <= 9 ? $0 : nil }
+            specs.append((pane, PaneChipView.Spec(
+                color: pane.effectiveAccent, tone: chip.tone, focused: focused,
+                number: showDots ? number : nil, text: shown,
+                pulsing: chip.pulsing, urgent: chip.urgent, tooltip: chip.tooltip,
+                maxWidth: long ? 360 : 160)))
+        }
+        return specs
+    }
+
+    private static func chipsWidth(_ specs: [(pane: any Pane, spec: PaneChipView.Spec)]) -> CGFloat {
+        specs.reduce(CGFloat(0)) { $0 + PaneChipView.width(for: $1.spec) } + 4 * CGFloat(max(0, specs.count - 1))
+    }
+
+    /// Platz, den die Brett-Leiste den Chips rechts lässt (26.09.): ihre kurze Form (`allShort`, eine Zeile Status je
+    /// Kachel) plus Zoom-Pille — nicht die aktuelle, sonst atmeten die Brett-Namen mit jeder Uhr und jedem Werkzeug.
+    /// Mehr Platz nutzen die Chips weiter für die lange Form.
+    var chipReserve: CGFloat {
+        Self.chipsWidth(chipSpecs(.allShort)) + (zoomedPane != nil ? 120 : 0)
     }
 
     /// Elemente nebeneinander setzen, Wrapper auf Inhalt + Luft. false = Breite hat sich geändert
@@ -1728,6 +1770,9 @@ extension TerminalSplitView: ControlCommandHandler {
         case "layout":
             return handleLayout(request)
 
+        case "board-save":
+            return saveBoard(request)
+
         case "close-pane":
             guard let pane = resolvePane(request.pane ?? request.paneID) else {
                 return .failure("Kachel nicht gefunden: „\(request.pane ?? request.paneID ?? "kein Ziel angegeben")“ — `latexterm list-panes` zeigt Index und ID")
@@ -2202,5 +2247,68 @@ extension NSColor {
             && abs(a.greenComponent - b.greenComponent) < eps
             && abs(a.blueComponent - b.blueComponent) < eps
             && abs(a.alphaComponent - b.alphaComponent) < eps
+    }
+}
+
+
+// MARK: - Brett als Datei (25.09.2026)
+
+extension TerminalSplitView {
+    /// `board-save`: dieses Brett nach `text` (…/_brett/brett.json). Ungesicherte Scratchpads mit Inhalt werden vorher
+    /// neben die Datei geheftet (`skizze.scratch.json`, `skizze-2…`) — sonst zeigte das Brett auf eine Zeichnung, die mit
+    /// dem nächsten ⌘W verschwindet. `dryRun` = nur zeigen. `args.name` = Anzeigename (sonst Brett-Name bzw. Ordner).
+    func saveBoard(_ request: ControlRequest) -> ControlResponse {
+        let url: URL
+        do { url = try BoardFile.url(request.text) } catch { return .failure(String(describing: error)) }
+        let dir = url.deletingLastPathComponent()
+        let fm = FileManager.default
+
+        // Welche Scratchpads müssen angeheftet werden?
+        var plan: [(pane: any Pane, target: URL)] = []
+        var taken = Set<String>()
+        for pane in panes where pane.kind == "scratchpad" {
+            guard let reply = try? pane.call("state"),
+                  let state = (try? JSONSerialization.jsonObject(with: Data(reply.utf8))) as? [String: Any] else { continue }
+            if state["pinned"] is String { continue }
+            guard (state["elements"] as? Int ?? 0) > 0 else { continue }
+            var n = 1, target: URL
+            repeat {
+                target = dir.appendingPathComponent(n == 1 ? "skizze.scratch.json" : "skizze-\(n).scratch.json")
+                n += 1
+            } while fm.fileExists(atPath: target.path) || taken.contains(target.path)
+            taken.insert(target.path)
+            plan.append((pane, target))
+        }
+
+        let displayed = displayPanes.filter { $0.kind != "home" }.count
+        let tildeDir = (dir.path as NSString).abbreviatingWithTildeInPath
+        if request.dryRun ?? false {
+            var lines = ["Probe: \(displayed) Kachel\(displayed == 1 ? "" : "n") nach \((url.path as NSString).abbreviatingWithTildeInPath)"
+                         + (fm.fileExists(atPath: url.path) ? " (ersetzt die vorhandene Datei)" : "")]
+            lines += plan.map { "  Scratchpad \(info(for: $0.pane).index) würde angeheftet: \($0.target.lastPathComponent)" }
+            var response = ControlResponse(ok: true)
+            response.reply = lines.joined(separator: "\n")
+            return response
+        }
+
+        var pinnedNow: [String] = []
+        for step in plan {
+            do {
+                _ = try step.pane.call("pin " + step.target.path)
+                pinnedNow.append(step.target.lastPathComponent)
+            } catch {
+                return .failure("Scratchpad \(info(for: step.pane).index) ließ sich nicht anheften: \(error) — Brett nicht gesichert")
+            }
+        }
+
+        let name = request.args?["name"].flatMap { $0.isEmpty ? nil : $0 } ?? customName
+        let file = BoardFile.make(from: windowSnapshot(), name: name, base: dir)
+        do { try file.write(to: url) } catch { return .failure(String(describing: error)) }
+        var response = ControlResponse(ok: true)
+        let count = file.board.panes.count
+        response.reply = "Brett gesichert: \((url.path as NSString).abbreviatingWithTildeInPath) · \(count) Kachel\(count == 1 ? "" : "n") ("
+            + file.board.panes.map(SessionStore.describe).joined(separator: " · ") + ")"
+            + (pinnedNow.isEmpty ? "" : "\nAngeheftet in \(tildeDir): " + pinnedNow.joined(separator: ", "))
+        return response
     }
 }
