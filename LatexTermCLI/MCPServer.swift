@@ -176,7 +176,10 @@ final class MCPServer {
         Stand zeigt (Fortschritt, Zähler, Restzeit, Status, eine Logzeile); wird die Darstellung reicher (Diagramm, Tabelle, \
         Bericht), ist sie neben dir, eigen oder als Reiter besser — layout leiste_unten/loesen stellt eine offene Kachel um. \
         Bittet der Nutzer, \
-        mit dieser Session auf ein eigenes/neues Brett umzuziehen: layout brett (pane = du, ziel neu) — die Session läuft weiter.
+        mit dieser Session auf ein eigenes/neues Brett umzuziehen: layout brett (pane = du, ziel neu) — die Session läuft weiter. \
+        Soll eine neue Session oder Shell auf ein eigenes/neues Brett („untersuch das auf einem neuen Brett“): start_agent bzw. \
+        open_terminal mit brett neu — nicht neben dich legen. Kann ein Werkzeug nicht, was der Nutzer ausdrücklich will, erst die \
+        anderen durchsehen (layout brett zieht jede Kachel um) oder fragen, nie still ersetzen.
         """)
         return lines.joined(separator: "\n")
     }
@@ -202,6 +205,11 @@ final class MCPServer {
         "description": "neben_mich (Default): in deine Nebenspalte rechts neben dir; eigen: eigenständige Kachel mit eigenem Platz (z. B. für ein anderes Projekt); hintergrund: verdeckt als Reiter hinter deinen Kacheln, nimmt keinen Platz (Log, Server, Nachschlagen); leiste_unten/leiste_oben: flache Leiste fest unter/über dir, so breit wie du (Höhe: hoehe)",
     ]
 
+    private static let boardProperty: JSON = [
+        "type": "string",
+        "description": "Auf ein anderes Brett statt in dein Brett: \"neu\" = eigenes neues Brett (für eine eigene Untersuchung/Aufgabe, die neben dir nur stört), oder Brett-Nummer. Der Nutzer bleibt, wo er ist.",
+    ]
+
     private static let heightProperty: JSON = [
         "type": "number", "description": "Leiste: Höhe in pt (Default 84 ≈ drei Textzeilen, 36–400)",
     ]
@@ -215,12 +223,13 @@ final class MCPServer {
              ["cwd": ["type": "string", "description": "Ordner (absolut, ~ oder relativ zu deinem); Default: dein Ordner"],
               "command": ["type": "string", "description": "Befehl, der nach dem Shell-Start läuft"],
               "focus": ["type": "boolean", "description": "Kachel fokussieren (Default false)"],
-              "placement": placementProperty, "hoehe": heightProperty], []),
+              "placement": placementProperty, "hoehe": heightProperty, "brett": boardProperty], []),
         tool("start_agent", "Agent in neuer Kachel starten",
-             "Startet eine neue Claude- oder Codex-Session in einer eigenen Kachel, optional mit erstem Prompt — für echte Parallelarbeit oder eine zweite Meinung. Meldet erst „angekommen“, wenn die Session den Prompt wirklich angenommen hat; mit wait_s kommt ihre Antwort gleich zurück. Danach wait_session / ask_session. Nicht für kleine Teilaufgaben, die du selbst oder ein Subagent erledigst.",
+             "Startet eine neue Claude- oder Codex-Session in einer eigenen Kachel, optional mit erstem Prompt — für echte Parallelarbeit oder eine zweite Meinung. Mit brett neu landet sie auf einem eigenen neuen Brett statt in deinem. Meldet erst „angekommen“, wenn die Session den Prompt wirklich angenommen hat; mit wait_s kommt ihre Antwort gleich zurück. Danach wait_session / ask_session. Nicht für kleine Teilaufgaben, die du selbst oder ein Subagent erledigst.",
              ["agent": ["type": "string", "enum": ["claude", "codex"]],
               "cwd": ["type": "string", "description": "Ordner (Default: deiner)"],
               "prompt": ["type": "string", "description": promptDescription],
+              "brett": boardProperty,
               "wait_s": waitProperty], ["agent"]),
         tool("ask_session", "Prompt an eine Session",
              "Schickt einen Prompt an eine laufende Claude- oder Codex-Session in einer anderen Kachel. Claude: über den Briefkasten mit Quittung — Erfolg heißt, die Session hat den Prompt angenommen (Turn läuft); abgelehnt/verloren kommt als Fehler mit Grund. Arbeitet sie gerade, wird er eingereicht, sobald sie ruht. Mit wait_s wartest du gleich auf ihre Antwort und bekommst den Text zurück; sonst später wait_session.",
@@ -511,8 +520,9 @@ final class MCPServer {
         request.placement = try placement(a, allowReplace: false)
         request.dockHeight = number(a["hoehe"])
         let pane = try open(request)
+        let moved = try moveToBoard(pane, a)
         return "Terminal-Kachel \(pane.index) (\(pane.id.prefix(8))) in \(tilde(pane.cwd ?? request.cwd) ?? "?")"
-            + (request.exec.map { " — läuft: \($0)" } ?? "") + "." + currentLayout()
+            + (request.exec.map { " — läuft: \($0)" } ?? "") + "." + moved + currentLayout()
     }
 
     private func startAgent(_ a: JSON) throws -> String {
@@ -527,13 +537,33 @@ final class MCPServer {
         request.focus = false
         request.placement = "own"   // neue Session = eigener Platz, kein Begleiter
         let pane = try open(request)
-        let head = "\(agent) startet in Kachel \(pane.index) (\(pane.id.prefix(8))), \(tilde(request.cwd) ?? "")"
+        let head = "\(agent) startet in Kachel \(pane.index) (\(pane.id.prefix(8))), \(tilde(request.cwd) ?? "")" + (try moveToBoard(pane, a))
         guard let prompt else { return head + ". Prompt später per ask_session." }
         // Prompt nicht in die Befehlszeile: eine frische PTY puffert vor dem Shell-Start nur ~1 KB,
         // und Quoting ist eine Fehlerquelle. Claude bekommt ihn über den Briefkasten (sein Empfänger
         // reicht ihn nach dem Start ein), Codex, sobald die Session bereit ist.
         let outcome = try deliver(prompt, to: pane.id, agent: agent, startupWait: 45, answerWait: answerWait(a))
         return head + ". " + outcome
+    }
+
+    /// `brett` am Öffnen (26.09.): die frische Kachel gleich auf ein anderes Brett umziehen — derselbe Weg wie layout brett.
+    private func moveToBoard(_ pane: PaneInfo, _ a: JSON) throws -> String {
+        guard let board = (a["brett"] as? String).flatMap({ $0.isEmpty ? nil : $0 }) ?? (a["brett"] as? Int).map(String.init) else { return "" }
+        let target = board == "neu" ? "new" : board
+        var request = ControlRequest(cmd: "layout")
+        request.layoutOp = "board"
+        request.pane = pane.id
+        request.board = target
+        request.focus = false
+        request.paneID = paneID
+        request.layoutRevision = try checked(ControlRequest(cmd: "list-panes")).layout?.revision
+        let response: ControlResponse
+        do { response = try transport.send(request) }
+        catch { throw ToolFailure("Kachel \(pane.index) ist offen, der Umzug aufs Brett scheiterte: \(error) — layout brett nachholen.") }
+        guard response.ok else {
+            throw ToolFailure("Kachel \(pane.index) ist offen, der Umzug aufs Brett scheiterte: \(response.error ?? "abgelehnt") — layout brett nachholen.")
+        }
+        return target == "new" ? " — auf eigenem neuen Brett" : " — auf Brett \(board)"
     }
 
     private func askSession(_ a: JSON) throws -> String {
