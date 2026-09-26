@@ -168,6 +168,12 @@ final class BoardStripView: NSView, NSViewToolTipOwner, NSTextFieldDelegate {
                 let line = NSRect(x: rect.minX + 3, y: rect.maxY - 2, width: rect.width - 6, height: 2)
                 NSBezierPath(roundedRect: line, xRadius: 1, yRadius: 1).fill()
                 if let naming = item.naming { drawNamingDot(naming, on: line, accent: accent, theme: theme) }
+            } else if let naming = item.naming {
+                // Verlassenes Brett benennt sich weiter (26.09.): blasser Strich als Bahn für den Punkt.
+                let line = NSRect(x: rect.minX + 3, y: rect.maxY - 2, width: rect.width - 6, height: 2)
+                accent.withAlphaComponent(0.25).setFill()
+                NSBezierPath(roundedRect: line, xRadius: 1, yRadius: 1).fill()
+                drawNamingDot(naming, on: line, accent: accent, theme: theme)
             }
             let dragged = drag?.index == i
             let fade = renamedAt[item.id].map { CGFloat(min(1, Date().timeIntervalSince($0) / Self.fadeDuration)) } ?? 1
@@ -237,7 +243,7 @@ final class BoardStripView: NSView, NSViewToolTipOwner, NSTextFieldDelegate {
         }
     }
 
-    /// Punkt im Strich des vorderen Bretts: wandert in `duration` von links nach rechts (Mats' Idee 26.09.), danach
+    /// Punkt im Strich eines Bretts, das gerade benannt wird: wandert in `duration` von links nach rechts (Mats' Idee 26.09.), danach
     /// pulsiert er am rechten Ende, bis die Antwort da ist. Heller als der Strich, 5 pt.
     private func drawNamingDot(_ naming: Naming, on line: NSRect, accent: NSColor, theme: TerminalTheme) {
         let size: CGFloat = 5

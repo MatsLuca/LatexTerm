@@ -55,11 +55,11 @@ final class BoardHostView: NSView {
     /// Titelleiste: Platz der Ampel links, Luft zwischen Brett-Leiste und Chips.
     private static let trafficLights: CGFloat = 92
     private static let chipGap: CGFloat = 40
-    /// KI-Namen (26.09.): welches Brett gerade verweilt (seit wann), welches gerade fragt. Ein Takt je Sekunde prüft
-    /// nur das vordere Brett — verlassene Bretter werden nie benannt.
+    /// KI-Namen (26.09.): je Brett, seit wann seine Uhr läuft und seit wann es fragt. Ein Takt je Sekunde prüft alle
+    /// Bretter — auch verlassene (Mats 26.09.: Prompt tippen, nach 3 s weg, der Name kommt trotzdem).
     private var namingTimer: Timer?
-    private var dwelling: (board: ObjectIdentifier, since: Date)?
-    private var asking: (board: ObjectIdentifier, since: Date)?
+    private var dwelling: [ObjectIdentifier: Date] = [:]
+    private var asking: [ObjectIdentifier: Date] = [:]
 
     /// Bretter in Leisten-Reihenfolge.
     var ordered: [TerminalSplitView] {
@@ -296,34 +296,39 @@ final class BoardHostView: NSView {
 
     private func namingPhase(of board: TerminalSplitView) -> BoardStripView.Naming? {
         let id = ObjectIdentifier(board)
-        if let asking, asking.board == id { return .asking(since: asking.since) }
-        if let dwelling, dwelling.board == id { return .waiting(since: dwelling.since, duration: BoardNaming.dwell) }
+        if let since = asking[id] { return .asking(since: since) }
+        if let since = dwelling[id] { return .waiting(since: since, duration: BoardNaming.dwell) }
         return nil
     }
 
-    /// Vorderes Brett dran (`BoardNaming.isDue`), Mats sieht hin (Fenster vorn, App aktiv), kein eigener Name →
-    /// Punkt wandert `dwell` Sekunden durch den Strich, dann wird gefragt. Sonst Punkt weg, Uhr beginnt neu.
+    /// Jedes Brett ohne eigenen Namen, das dran ist (`BoardNaming.isDue`): Uhr läuft `dwell` Sekunden (Entprellung,
+    /// Punkt wandert durch den Strich), dann wird gefragt. Brettwechsel hält die Uhr nicht an und bricht keinen Aufruf
+    /// ab (Mats 26.09.) — die Uhr fällt nur, wenn das Brett nicht mehr dran ist oder einen eigenen Namen bekommt.
     private func namingTick() {
-        let before = (dwelling?.board, asking?.board)
-        defer { if (dwelling?.board, asking?.board) != before { refreshStrip() } }
-        guard asking == nil else { return }
-        guard BoardNameRequest.enabled, !windowClosed, NSApp.isActive, window?.isKeyWindow == true,
-              let board = activeBoard, board.customName?.isEmpty ?? true else { dwelling = nil; return }
-        let id = ObjectIdentifier(board)
-        let state = board.namingState
+        let before = (dwelling, asking)
+        defer { if before.0 != dwelling || before.1 != asking { refreshStrip() } }
+        guard BoardNameRequest.enabled, !windowClosed else { dwelling = [:]; return }
         let now = Date()
-        guard board.naming.isDue(turns: state.turns, panes: state.panes, hasSession: state.hasSession) else {
-            dwelling = nil; return
-        }
-        guard let dwelling, dwelling.board == id else { self.dwelling = (id, now); return }
-        guard now.timeIntervalSince(dwelling.since) >= BoardNaming.dwell else { return }
-        self.dwelling = nil
-        asking = (id, now)
-        BoardNameRequest.run(board.namingInput) { [weak self, weak board] name in
-            guard let self else { return }
-            self.asking = nil
-            board?.naming.checked(turns: state.turns, panes: state.panes, now: now, newName: name)
-            self.refreshStrip()
+        let live = Set(boards.map(ObjectIdentifier.init))
+        dwelling = dwelling.filter { live.contains($0.key) }
+        for board in boards {
+            let id = ObjectIdentifier(board)
+            guard asking[id] == nil else { continue }
+            let state = board.namingState
+            guard board.customName?.isEmpty ?? true,
+                  board.naming.isDue(turns: state.turns, panes: state.panes, hasSession: state.hasSession) else {
+                dwelling[id] = nil; continue
+            }
+            guard let since = dwelling[id] else { dwelling[id] = now; continue }
+            guard now.timeIntervalSince(since) >= BoardNaming.dwell else { continue }
+            dwelling[id] = nil
+            asking[id] = now
+            BoardNameRequest.run(board.namingInput) { [weak self, weak board] name in
+                guard let self else { return }
+                self.asking[id] = nil
+                board?.naming.checked(turns: state.turns, panes: state.panes, now: now, newName: name)
+                self.refreshStrip()
+            }
         }
     }
 

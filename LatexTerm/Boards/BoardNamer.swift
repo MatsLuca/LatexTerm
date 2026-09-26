@@ -1,11 +1,11 @@
 import Foundation
 
 /// KI-Namen für Bretter (26.09.2026, Plan `brett-namen_2026-09-26.md` in der Werkstatt). Von Mats gesetzte Namen
-/// gewinnen immer; darunter liegt ein Name, den Sonnet aus den Kacheln des Bretts wählt — nur, solange Mats das Brett
-/// ansieht, und erst nach `dwell` Sekunden Verweilen. Rein und ohne AppKit: wann ein Brett dran ist. Den Aufruf macht
-/// `BoardNameRequest`, das Verweilen und den Punkt im Strich `BoardHostView` und `BoardStripView`.
+/// gewinnen immer; darunter liegt ein Name, den Sonnet aus den Kacheln des Bretts wählt — `dwell` Sekunden nach dem
+/// Anstoß, auch wenn Mats das Brett inzwischen verlassen hat. Rein und ohne AppKit: wann ein Brett dran ist. Den Aufruf
+/// macht `BoardNameRequest`, die Uhr und den Punkt im Strich `BoardHostView` und `BoardStripView`.
 struct BoardNaming: Equatable {
-    /// Verweilen, bevor gefragt wird (Mats: „wenn ich zehn Sekunden drauf bin, arbeite ich gerade daran“).
+    /// Entprellung, bevor gefragt wird (ursprünglich Verweilen; seit 26.09. läuft die Uhr auch auf verlassenen Brettern).
     static let dwell: TimeInterval = 10
 
     /// Zuletzt gewählter KI-Name; nil = Anlauf (noch keiner).
@@ -20,7 +20,9 @@ struct BoardNaming: Equatable {
     /// hat schon Verlauf). Mats 26.09.: bei jedem neuen Prompt und jeder fertigen Antwort anstoßen, in Anlauf wie
     /// Reife; Stabilität hält das Modell („bleibt“), nicht der Takt. Neue Kachel zählt ebenso.
     func isDue(turns: Int, panes: Set<String>, hasSession: Bool) -> Bool {
-        guard turns > 0 || hasSession else { return false }
+        // Wiederhergestellte Session mit schon gewähltem Namen: erst ein neuer Turn stößt an — sonst fragt nach ⌥⌘R
+        // jedes Brett einmal, seit alle Bretter (nicht nur das vordere) geprüft werden.
+        guard turns > 0 || (hasSession && name == nil) else { return false }
         guard lastCheck != nil else { return true }
         return turns > checkedTurns || !panes.subtracting(checkedPanes).isEmpty
     }
