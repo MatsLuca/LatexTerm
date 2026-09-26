@@ -23,6 +23,8 @@ enum ScratchSVG {
         var warnings: [String]
         /// true = viewBox wurde in `target` eingepasst.
         var fitted: Bool
+        /// viewBox (bzw. 0 0 width height) des Wurzel-svg; nil = keine (Weltkoordinaten).
+        var box: CGRect? = nil
     }
 
     struct ParseError: Error, CustomStringConvertible {
@@ -57,7 +59,7 @@ enum ScratchSVG {
             throw ParseError(description: "SVG ist kein gültiges XML (Zeile \(parser.lineNumber)): \(reason)")
         }
         if let error = builder.error { throw ParseError(description: error) }
-        return Result(shapes: builder.shapes, warnings: builder.orderedWarnings, fitted: builder.fitted)
+        return Result(shapes: builder.shapes, warnings: builder.orderedWarnings, fitted: builder.fitted, box: builder.rootBox)
     }
 
     // MARK: Farben
@@ -171,6 +173,7 @@ private final class Builder: NSObject, XMLParserDelegate {
     let target: CGRect
     var shapes: [ScratchShape] = []
     var fitted = false
+    var rootBox: CGRect?
     var error: String?
     private var warnings: [String] = []
     var orderedWarnings: [String] { warnings }
@@ -366,6 +369,7 @@ private final class Builder: NSObject, XMLParserDelegate {
            !(a["width"] ?? "").contains("%"), !(a["height"] ?? "").contains("%") {
             box = CGRect(x: 0, y: 0, width: w, height: h)
         }
+        rootBox = box
         guard let box, target.width > 0, target.height > 0 else { return nil }
         let scale = min(target.width / box.width, target.height / box.height)
         let dx = target.midX - box.midX * scale, dy = target.midY - box.midY * scale

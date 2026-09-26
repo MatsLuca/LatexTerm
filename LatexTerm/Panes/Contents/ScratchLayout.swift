@@ -134,13 +134,15 @@ enum ScratchLayout {
     /// `others` = Linienzüge schon liegender Pfeile: auf ihnen entlangzulaufen kostet (sonst verschmelzen zwei Pfeile
     /// in einem Kanal zu einer Linie, Befund 25.09. abends).
     static func route(from a: CGRect, to b: CGRect, fromSide: Side? = nil, toSide: Side? = nil, via: [CGPoint] = [],
-                      obstacles: [Obstacle], fromName: String, toName: String, others: [[CGPoint]] = []) -> Route {
+                      obstacles: [Obstacle], fromName: String, toName: String, others: [[CGPoint]] = [],
+                      centered: Bool = false) -> Route {
         var best: (score: CGFloat, route: Route)?
         for sa in fromSide.map({ [$0] }) ?? Side.allCases {
             for sb in toSide.map({ [$0] }) ?? Side.allCases {
                 let p0 = anchor(a, sa), p1 = anchor(b, sb)
                 var ways = via.isEmpty ? orthogonalCandidates(p0, sa, p1, sb) : [[p0] + via + [p1]]
-                if via.isEmpty, let line = straight(a, sa, b, sb) { ways.insert(line, at: 0) }
+                // `centered`: Formen (Kreis, Raute …) nur an Kantenmitten — kein gerader Weg auf der gemeinsamen Höhe.
+                if via.isEmpty, !centered, let line = straight(a, sa, b, sb) { ways.insert(line, at: 0) }
                 for way in ways {
                 let points = simplify(way)
                 // Zu kurz = kein Pfeil (Absturz 25.09. 22:07: liegen zwei Anker < 0,5 pt beieinander, schrumpft der Weg auf

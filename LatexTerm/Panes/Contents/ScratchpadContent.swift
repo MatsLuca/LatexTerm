@@ -220,6 +220,11 @@ final class ScratchpadContent: PaneContent {
                 if let info = card.cardInfo, let data = try? JSONEncoder().encode(info),
                    var style = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] {
                     style["id"] = nil
+                    style["aspect"] = nil
+                    style["height"] = nil
+                    if let svg = info.svg { style["svg"] = "Zeichnung (\(svg.utf8.count) Zeichen)" }
+                    if let members = info.members { style["members"] = nil; entry["zone"] = members }
+                    if let t = info.iconColor { style["iconColor"] = ScratchPalette.names[max(0, min(t, ScratchPalette.names.count - 1))] }
                     if let title = style.removeValue(forKey: "title") { entry["title"] = title }
                     if let t = info.textColor { style["textColor"] = ScratchPalette.names[max(0, min(t, ScratchPalette.names.count - 1))] }
                     if !style.isEmpty { entry["style"] = style }
@@ -230,12 +235,12 @@ final class ScratchpadContent: PaneContent {
                 guard let link = s.link else { return nil }
                 let name = { (uid: String) in canvas.elements.first { $0.uid == uid }.map { $0.cardInfo?.id ?? "Bild" } ?? "?" }
                 return ["from": name(link.from), "to": name(link.to) + (link.route?.toPart.map { ".\($0)" } ?? ""),
-                        "by": s.isClaude ? "claude" : "mats"]
+                        "by": s.isClaude ? "claude" : "mats", "label": link.route?.label ?? ""]
             },
             "images": canvas.elements.filter(\.isImage).map { ["bounds": Self.rect($0.bounds), "by": $0.isClaude ? "claude" : "mats",
                                                                "cut": !$0.cuts.isEmpty] as [String: Any] },
-            "order": ScratchChanges.readingOrder(canvas.cards).compactMap { $0.cardInfo?.id },
-            "groups": ScratchChanges.groups(canvas.cards).map { $0.compactMap { $0.cardInfo?.id } }.filter { $0.count > 1 },
+            "order": ScratchChanges.readingOrder(canvas.cards.filter { !$0.isZone }).compactMap { $0.cardInfo?.id },
+            "groups": ScratchChanges.groups(canvas.cards.filter { !$0.isZone }).map { $0.compactMap { $0.cardInfo?.id } }.filter { $0.count > 1 },
             "changes": changes(for: viewer) ?? NSNull(),
             "colors": ScratchPalette.names,
             "claudeColor": ScratchPalette.names[ScratchPalette.claude],
@@ -312,6 +317,24 @@ final class ScratchpadContent: PaneContent {
             spec.toSide = try side(o["toSide"], "toSide")
             spec.through = o["through"] as? Bool ?? false
             spec.color = try color(o["color"], "color")
+            if let line = o["line"] as? String {
+                guard ["solid", "dashed"].contains(line.lowercased()) else { throw PaneArgsError("line: solid oder dashed") }
+                spec.dashed = line.lowercased() == "dashed"
+            }
+            if let dashed = o["dashed"] as? Bool { spec.dashed = dashed }
+            if let weight = o["weight"] as? String {
+                guard ScratchShapes.arrowWidth(weight) != nil else { throw PaneArgsError("weight: thin, normal oder thick") }
+                spec.weight = weight.lowercased()
+            }
+            if let head = o["head"] as? String {
+                guard ["end", "none", "both"].contains(head.lowercased()) else { throw PaneArgsError("head: end, none oder both") }
+                spec.head = head.lowercased()
+            }
+            if let label = o["label"] as? String {
+                let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+                guard trimmed.count <= 40 else { throw PaneArgsError("label: höchstens 40 Zeichen (ein, zwei Wörter)") }
+                spec.label = trimmed.isEmpty ? nil : trimmed
+            }
             for point in (o["via"] as? [Any]) ?? [] {
                 if let pair = point as? [NSNumber], pair.count == 2 {
                     spec.via.append(CGPoint(x: pair[0].doubleValue, y: pair[1].doubleValue))
@@ -329,8 +352,14 @@ final class ScratchpadContent: PaneContent {
             entry.id = raw["id"] as? String
             entry.remove = raw["remove"] as? Bool ?? false
             entry.text = (raw["text"] as? String)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            try visual(raw, into: &entry)
+            // Symbol, Zeichnung oder Zone tragen eine Karte auch ohne Text.
+            let carries = entry.style.icon != nil || entry.style.svg != nil || entry.style.members != nil
             if entry.id == nil {
-                guard let text = entry.text, !text.isEmpty else { throw PaneArgsError("neue Karte braucht text") }
+                if carries, entry.text == nil { entry.text = "" }
+                guard let text = entry.text, !text.isEmpty || carries else {
+                    throw PaneArgsError("neue Karte braucht text (oder icon, svg, zone)")
+                }
                 guard !entry.remove else { throw PaneArgsError("remove braucht eine id") }
             }
             if let one = raw["arrowTo"], !(one is [Any]) { entry.arrows = [try arrow(one)] }
@@ -350,7 +379,7 @@ final class ScratchpadContent: PaneContent {
             entry.placement = placement
             entry.overlap = raw["overlap"] as? Bool ?? false
             entry.offscreen = raw["offscreen"] as? Bool ?? false
-            entry.width = number(raw["width"])
+            entry.width = number(raw["width"]) ?? entry.width
             entry.color = try color(raw["color"], "color")
             entry.style.textColor = try color(raw["textColor"], "textColor")
             entry.style.title = raw["title"] as? String
@@ -372,6 +401,7 @@ final class ScratchpadContent: PaneContent {
             entries.append(entry)
         }
         let result = try root.canvas.applyCards(entries, author: ScratchStroke.claude, replacing: replacing, probe: probe)
+
         if !probe, !result.problems.isEmpty {
             throw PaneArgsError("Nichts gesetzt:\n- " + result.problems.joined(separator: "\n- "))
         }
@@ -382,6 +412,66 @@ final class ScratchpadContent: PaneContent {
                                                          "points": $0.points.map { [Double($0.x.rounded()), Double($0.y.rounded())] }] },
                           "problems": result.problems, "notes": result.notes, "probe": probe,
                           "visible": Self.rect(root.canvas.visibleWorldRect), "rev": root.canvas.rev])
+    }
+
+    /// Symbol, Form, Zeichnung, Zone eines Karten-Eintrags prüfen und übernehmen (26.09.).
+    private func visual(_ raw: [String: Any], into entry: inout ScratchpadCanvas.CardEntry) throws {
+        func number(_ v: Any?) -> CGFloat? { (v as? NSNumber).map { CGFloat($0.doubleValue) } }
+        if let icon = raw["icon"] as? String {
+            let name = icon.trimmingCharacters(in: .whitespaces)
+            if name.isEmpty { entry.style.icon = "" }
+            else {
+                guard Self.iconExists(name) else {
+                    throw PaneArgsError("icon „\(name)“ gibt es nicht — SF-Symbol-Name (lightbulb, person.2, clock, "
+                        + "exclamationmark.triangle, checkmark.circle, questionmark.circle …) oder ein einzelnes Emoji")
+                }
+                entry.style.icon = name
+            }
+        }
+        if let at = raw["iconAt"] as? String {
+            guard ["left", "top"].contains(at.lowercased()) else { throw PaneArgsError("iconAt: left oder top") }
+            entry.style.iconAt = at.lowercased()
+        }
+        entry.style.iconSize = number(raw["iconSize"]).map { max(10, min($0, 200)) }
+        if let name = raw["iconColor"] as? String {
+            guard let index = ScratchPalette.index(named: name) else { throw PaneArgsError("iconColor „\(name)“ unbekannt") }
+            entry.style.iconColor = index
+        }
+        if let shape = raw["shape"] as? String {
+            let name = shape.lowercased()
+            guard name == "none" || ScratchShapes.Kind(rawValue: name) != nil else {
+                throw PaneArgsError("shape „\(shape)“ unbekannt (\(ScratchShapes.names.joined(separator: ", ")), none)")
+            }
+            entry.style.shape = name
+        }
+        if let svg = raw["svg"] as? String {
+            guard svg.utf8.count <= 300_000 else { throw PaneArgsError("svg zu groß (max 300 KB)") }
+            let result: ScratchSVG.Result
+            do { result = try ScratchSVG.parse(svg, defaultColor: ScratchPalette.claude, target: CGRect(x: 0, y: 0, width: 100, height: 100)) }
+            catch { throw PaneArgsError("svg: \(error)") }
+            guard let box = result.box, box.width > 0, box.height > 0 else {
+                throw PaneArgsError("svg-Karte braucht eine viewBox (oder width/height) — du zeichnest in eigenen Koordinaten, die Karte passt sie ein")
+            }
+            guard !result.shapes.isEmpty else { throw PaneArgsError("svg ergab keine zeichenbaren Formen") }
+            entry.style.svg = svg
+            entry.style.aspect = box.height / box.width
+            // Breite ohne Angabe: die der viewBox (80–480), damit Strichstärken und Schrift so wirken wie geschrieben.
+            if entry.width == nil, number(raw["width"]) == nil {
+                let inner = min(480, max(80, box.width))
+                entry.width = ScratchShapes.outerWidth(inner: inner, kind: (raw["shape"] as? String).flatMap { ScratchShapes.Kind(rawValue: $0.lowercased()) },
+                                                        pad: ScratchStroke.cardPadding).rounded(.up)
+            }
+        }
+        if let zone = raw["zone"] {
+            guard let ids = zone as? [String], !ids.isEmpty else { throw PaneArgsError("zone: Liste von Karten-ids, z. B. [\"k1\", \"k2\"]") }
+            entry.style.members = ids
+        }
+    }
+
+    /// SF Symbol oder ein einzelnes Emoji (höchstens zwei Zeichen, nicht ASCII).
+    static func iconExists(_ name: String) -> Bool {
+        if NSImage(systemSymbolName: name, accessibilityDescription: nil) != nil { return true }
+        return name.count <= 2 && name.unicodeScalars.contains { !$0.isASCII }
     }
 
     private static func rect(_ r: NSRect) -> [String: Double] {
@@ -706,6 +796,12 @@ struct ScratchRoute: Codable, Equatable {
     var via: [CGPoint]?
     /// Ziel ist ein Absatz der Zielkarte (1-basiert, `k1.3`): der Pfeil endet an dessen Buchstaben, nicht am Kartenrand.
     var toPart: Int?
+    /// Aussehen (26.09.): dashed = gestrichelt; Stärke thin/normal/thick; Spitze end (Standard)/none/both; Beschriftung
+    /// auf der Mitte des längsten Stücks — wandert beim Neuführen mit.
+    var dashed: Bool?
+    var weight: String?
+    var head: String?
+    var label: String?
 }
 
 /// Wessen Elemente: alle, nur die des Nutzers, nur die des Agenten, nur die Karten des Agenten.
@@ -739,9 +835,36 @@ struct ScratchCard: Codable, Equatable {
     /// Breite dem Text (längste Zeile, beim Tippen bis an den sichtbaren Rand).
     var fixedWidth: Bool?
 
+    // Visuell (26.09., Plan claude-werkstatt `plans/scratchpad-visuell_2026-09-26.md`): Symbol, Form, Zeichnung, Zone —
+    // alles bleibt eine Karte (Ort relativ, Pfeile docken an, verschieben, radieren), nur das Aussehen wächst.
+    /// SF-Symbol-Name („lightbulb“) oder ein Emoji — links neben dem Text, mit `iconAt: top` groß darüber.
+    var icon: String?
+    var iconAt: String?
+    var iconSize: CGFloat?
+    /// Palettenindex des Symbols; nil = Gruppenfarbe bzw. Schriftfarbe.
+    var iconColor: Int?
+    /// Form statt Terminal-Look: box, pill, circle, diamond, hexagon, note, cloud (`ScratchShapes`).
+    var shape: String?
+    /// Zeichnung als Inhalt (SVG mit viewBox, wird in die Karte eingepasst); `aspect` = Höhe/Breite der viewBox.
+    var svg: String?
+    var aspect: CGFloat?
+    /// Zone: farbige Fläche hinter diesen Karten (ids), ihr Rahmen folgt ihnen; `height` = aktuelle Höhe der Zone.
+    var members: [String]?
+    var height: CGFloat?
+
     static let defaultSize: CGFloat = 13
     static let fonts = ["mono", "system", "serif", "rounded"]
     static let frames = ["mark", "line", "dashed", "thick", "none"]
+
+    var shapeKind: ScratchShapes.Kind? { shape.flatMap { ScratchShapes.Kind(rawValue: $0.lowercased()) } }
+    var isZone: Bool { members != nil }
+    var iconOnTop: Bool { iconAt?.lowercased() == "top" }
+    /// Kantenlänge des Symbols: links etwa anderthalb Zeilen, oben groß.
+    var iconSide: CGFloat {
+        guard icon != nil, svg == nil else { return 0 }
+        let fallback = iconOnTop ? 34 : max(16, (size ?? Self.defaultSize) * 1.55)
+        return max(10, min(iconSize ?? fallback, 200))
+    }
 
     func font(bold forceBold: Bool = false) -> NSFont {
         let size = max(8, min(size ?? Self.defaultSize, 72))
@@ -767,7 +890,8 @@ struct ScratchCard: Codable, Equatable {
     /// Satz der Karte: Titel (fett) über dem Text, Ausrichtung, Farbe; `titleColor` = Gruppenfarbe des Titels.
     func attributed(text: String, color: NSColor, titleColor: NSColor? = nil) -> NSAttributedString {
         let paragraph = NSMutableParagraphStyle()
-        switch align?.lowercased() {
+        let centered = shapeKind?.centered == true || (icon != nil && iconOnTop) || (svg != nil && align == nil)
+        switch (align ?? (centered ? "center" : nil))?.lowercased() {
         case "center": paragraph.alignment = .center
         case "right": paragraph.alignment = .right
         default: paragraph.alignment = .left
@@ -829,7 +953,7 @@ final class ScratchStroke: Codable {
     /// `cardWidth` = Breite. Mats legt sie per ⌘V ab, Agenten per `call cards`; verschiebbar per Ziehen.
     /// `cardInfo` = Name (id) und Aussehen; nil = kein Karte.
     var cardInfo: ScratchCard?
-    let cardWidth: CGFloat
+    var cardWidth: CGFloat
     var card: Bool { cardInfo != nil }
     /// Stabiler Name des Elements über Verschieben/Ändern hinweg — für „seit deinem letzten Blick“ (`look as=…`).
     var uid = String(UUID().uuidString.prefix(8))
@@ -845,6 +969,8 @@ final class ScratchStroke: Codable {
     private var cachedImage: NSImage?
     private var cachedPath: NSBezierPath?
     private var cachedTextRect: NSRect?
+    /// Zeichnung einer SVG-Karte, eingepasst in dieses Rechteck.
+    private var cachedDrawing: (rect: NSRect, color: Int, items: [ScratchStroke])?
 
     private enum CodingKeys: String, CodingKey {
         case points, color, width, marker, author, smooth, filled, dashed, text, fontSize, anchor, bold, card, cardWidth, cardInfo, uid, cuts, link, follows, imageData, imageHeight
@@ -979,6 +1105,20 @@ final class ScratchStroke: Codable {
         cachedPath = nil
         cachedTextRect = nil
         cachedGlyphs = nil
+        cachedDrawing = nil
+    }
+
+    var isZone: Bool { cardInfo?.isZone == true }
+
+    /// Zone an ihre Mitglieder anpassen (am Platz — der Rahmen ist abgeleitet, kein eigener Undo-Schritt).
+    func setZoneFrame(_ r: NSRect) {
+        guard isZone, cardRect != r else { return }
+        points[0] = r.origin
+        cardWidth = r.width
+        cardInfo?.height = r.height
+        cachedTextRect = nil
+        cachedGlyphs = nil
+        cachedPath = nil
     }
 
     fileprivate func withUID(_ uid: String, cuts: [ScratchCut]) -> ScratchStroke {
@@ -1015,7 +1155,7 @@ final class ScratchStroke: Codable {
     }
 
     /// Gerader Linienzug (Pfeile eines Agenten).
-    init(line: [CGPoint], color: Int, width: CGFloat, author: String?) {
+    init(line: [CGPoint], color: Int, width: CGFloat, author: String?, dashed: Bool = false) {
         points = line
         self.color = max(0, min(color, ScratchPalette.names.count - 1))
         self.width = width
@@ -1023,7 +1163,7 @@ final class ScratchStroke: Codable {
         self.author = author
         smooth = false
         filled = false
-        dashed = false
+        self.dashed = dashed
         text = nil
         fontSize = 16
         anchor = .start
@@ -1073,12 +1213,13 @@ final class ScratchStroke: Codable {
         let content = info.attributed(text: text, color: .white)
         let storage = NSTextStorage(attributedString: content)
         let layout = NSLayoutManager()
-        let container = NSTextContainer(size: NSSize(width: cardWidth - 2 * Self.cardPadding.width, height: .greatestFiniteMagnitude))
+        let box = cardTextRect
+        let container = NSTextContainer(size: NSSize(width: max(1, box.width), height: .greatestFiniteMagnitude))
         container.lineFragmentPadding = 0
         layout.addTextContainer(container)
         storage.addLayoutManager(layout)
         layout.ensureLayout(for: container)
-        let origin = CGPoint(x: points[0].x + Self.cardPadding.width, y: points[0].y + Self.cardPadding.height)
+        let origin = box.origin
         var result: [(range: NSRange, rect: NSRect)] = []
         let glyphs = layout.glyphRange(for: container)
         for g in glyphs.location..<NSMaxRange(glyphs) {
@@ -1139,9 +1280,23 @@ final class ScratchStroke: Codable {
         }
         return set
     }
-    var showsFill: Bool { (cardInfo?.fill ?? false) && !cuts.contains { $0.part == "fill" } }
-    var frameStyle: String { cardInfo?.frame?.lowercased() ?? "mark" }
+    /// Formen und Zonen sind von sich aus getönt, der Terminal-Look nicht.
+    var showsFill: Bool {
+        (cardInfo?.fill ?? (cardInfo?.shapeKind != nil || isZone)) && !cuts.contains { $0.part == "fill" }
+    }
+    /// mark (Terminal-Look) | line | dashed | thick | none | shape (Umriss der Form) | zone. Zeichnung und reines Symbol
+    /// stehen ohne Rahmen, solange keiner verlangt ist.
+    var frameStyle: String {
+        if let frame = cardInfo?.frame?.lowercased() { return isZone ? "zone" : frame }
+        guard let info = cardInfo else { return "mark" }
+        if info.isZone { return "zone" }
+        if info.shapeKind != nil { return "shape" }
+        if info.svg != nil || (info.icon != nil && (text ?? "").isEmpty && (info.title ?? "").isEmpty) { return "none" }
+        return "mark"
+    }
     var showsFrame: Bool { frameStyle != "none" && !cuts.contains { $0.part == "frame" } }
+    var showsIcon: Bool { cardInfo?.icon != nil && cardInfo?.svg == nil && !cuts.contains { $0.part == "icon" } }
+    var showsDrawing: Bool { cardInfo?.svg != nil && !cuts.contains { $0.part == "drawing" } }
 
     /// Trenner der Standardkarte: leiser Strich links auf Höhe des Textes, unten ein kurzer Fuß mit runder Ecke.
     var markPath: NSBezierPath {
@@ -1187,7 +1342,10 @@ final class ScratchStroke: Codable {
         return glyphRects.filter { !gone.contains($0.range.location) }
     }
     /// Nichts mehr übrig — die Karte kann weg.
-    var isFullyErased: Bool { card && !showsFill && !showsFrame && liveGlyphs.isEmpty }
+    var isFullyErased: Bool {
+        if isZone { return cuts.contains { $0.part == "frame" } }
+        return card && !showsFill && !showsFrame && liveGlyphs.isEmpty && !showsIcon && !showsDrawing
+    }
 
     /// Titel und Text ohne die radierten Buchstaben (Mats, 26.09.: radiert = gelöscht). Zeilen, die dadurch leer
     /// werden, fallen weg, Lücken im Satz schrumpfen auf ein Leerzeichen; nil = keine Buchstaben radiert.
@@ -1223,17 +1381,29 @@ final class ScratchStroke: Codable {
     func cardTouches(_ p: CGPoint, radius r: CGFloat) -> Bool {
         let rect = cardRect
         guard rect.insetBy(dx: -r - 3, dy: -r - 3).contains(p), !isCut(p) else { return false }
+        if isZone { return zoneGrabs(p, slack: r) }
         if showsFill, rect.contains(p) { return true }
         if frameTouches(p, radius: r) { return true }
         let reach = NSRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)
+        if showsIcon, let icon = iconRect, icon.intersects(reach) { return true }
+        if showsDrawing, let drawing = drawingRect, drawing.intersects(reach) { return true }
         return liveGlyphs.contains { $0.rect.intersects(reach) }
+    }
+
+    /// Eine Zone greift man an Überschrift und Rand — innen liegen ihre Karten, dort bleibt die Fläche frei zum Malen.
+    func zoneGrabs(_ p: CGPoint, slack: CGFloat = 0) -> Bool {
+        let r = cardRect
+        guard r.insetBy(dx: -6 - slack, dy: -6 - slack).contains(p) else { return false }
+        let strip = NSRect(x: r.minX, y: r.minY, width: r.width, height: ScratchShapes.zonePad + ScratchShapes.zoneTitleRoom - 4)
+        return strip.contains(p) || Self.distanceToEdge(p, r) <= 6 + slack
     }
 
     /// Greifen zum Verschieben/Bearbeiten: die ganze Karte, auch zwischen den Buchstaben einer nackten Karte —
     /// radiert trifft nur, was noch Tinte ist (`cardTouches`).
     func cardGrabs(_ p: CGPoint) -> Bool {
+        if isZone { return !isFullyErased && zoneGrabs(p) }
         guard cardRect.contains(p), !isCut(p) else { return false }
-        return showsFill || showsFrame || !liveGlyphs.isEmpty
+        return showsFill || showsFrame || !liveGlyphs.isEmpty || showsIcon || showsDrawing
     }
 
     /// Abstand zum Rand eines Rechtecks (innen wie außen).
@@ -1295,15 +1465,110 @@ final class ScratchStroke: Codable {
         (content.string as NSString).enumerateSubstrings(in: NSRange(location: 0, length: content.length), options: .byLines) { _, range, _, _ in
             longest = max(longest, content.attributedSubstring(from: range).size().width)
         }
-        return min(max(cardMinWidth, limit), max(cardMinWidth, (longest + 2 * cardPadding.width + 4).rounded(.up)))
+        var inner = content.length > 0 ? longest + 4 : 0
+        let side = info.iconSide
+        if side > 0 { inner = info.iconOnTop || content.length == 0 ? max(inner, side) : inner + side + iconGap }
+        let kind = info.shapeKind
+        let outer = ScratchShapes.outerWidth(inner: inner, kind: kind, pad: cardPadding)
+        let minimum = kind != nil || side > 0 ? 24 : cardMinWidth
+        let cap = kind.map { limit * min($0.factor, 1.6) } ?? limit
+        return min(max(minimum, cap), max(minimum, outer.rounded(.up)))
     }
 
     static func cardSize(text: String, width: CGFloat, info: ScratchCard) -> NSSize {
-        let inner = info.attributed(text: text, color: .white).boundingRect(
-            with: NSSize(width: width - 2 * cardPadding.width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading])
-        return NSSize(width: width, height: (inner.height + 2 * cardPadding.height).rounded(.up))
+        geometry(text: text, width: width, info: info).size
     }
+
+    /// Abstand Symbol → Text.
+    static let iconGap: CGFloat = 8
+
+    /// Aufbau einer Karte, relativ zur oberen linken Ecke: Größe, Textkasten, Symbol, Zeichnung. Ohne Form, Symbol und
+    /// Zeichnung genau der alte Satz (Polster rundum, Text in voller Breite) — alte Bretter sehen gleich aus.
+    struct Geometry {
+        var size: NSSize
+        var text: NSRect
+        var icon: NSRect?
+        var drawing: NSRect?
+    }
+
+    static func geometry(text: String, width w: CGFloat, info: ScratchCard) -> Geometry {
+        let pad = cardPadding
+        let content = info.attributed(text: text, color: .white)
+        func measure(_ width: CGFloat) -> CGFloat {
+            guard content.length > 0 else { return 0 }
+            return content.boundingRect(with: NSSize(width: max(1, width), height: .greatestFiniteMagnitude),
+                                        options: [.usesLineFragmentOrigin, .usesFontLeading]).height
+        }
+        if info.isZone {
+            let tw = max(1, w - 28)
+            return Geometry(size: NSSize(width: w, height: info.height ?? 80),
+                            text: NSRect(x: 14, y: 8, width: tw, height: measure(tw)))
+        }
+        let kind = info.shapeKind
+        let inner = max(12, ScratchShapes.innerWidth(outer: w, kind: kind, pad: pad))
+        let side = info.iconSide
+        var textRect: NSRect
+        var icon: NSRect?, drawing: NSRect?
+        var contentHeight: CGFloat
+        if info.svg != nil {
+            let dh = (inner * max(0.05, min(info.aspect ?? 0.6, 20))).rounded()
+            drawing = NSRect(x: 0, y: 0, width: inner, height: dh)
+            let th = measure(inner)
+            let ty = th > 0 ? dh + 6 : dh
+            textRect = NSRect(x: 0, y: ty, width: inner, height: th)
+            contentHeight = ty + th
+        } else if side > 0 && (info.iconOnTop || content.length == 0) {
+            icon = NSRect(x: ((inner - side) / 2).rounded(), y: 0, width: side, height: side)
+            let th = measure(inner)
+            let ty = th > 0 ? side + 4 : side
+            textRect = NSRect(x: 0, y: ty, width: inner, height: th)
+            contentHeight = ty + th
+        } else if side > 0 {
+            let tw = max(12, inner - side - iconGap)
+            let th = measure(tw)
+            contentHeight = max(side, th)
+            icon = NSRect(x: 0, y: ((contentHeight - side) / 2).rounded(), width: side, height: side)
+            textRect = NSRect(x: side + iconGap, y: ((contentHeight - th) / 2).rounded(), width: tw, height: th)
+        } else {
+            let th = measure(inner)
+            textRect = NSRect(x: 0, y: 0, width: inner, height: th)
+            contentHeight = th
+        }
+        let h = ScratchShapes.outerHeight(inner: contentHeight, kind: kind, pad: pad).rounded(.up)
+        let (ox, oy) = (((w - inner) / 2), ((h - contentHeight) / 2).rounded(.down))
+        func place(_ r: NSRect) -> NSRect { r.offsetBy(dx: ox, dy: oy) }
+        return Geometry(size: NSSize(width: w, height: h), text: place(textRect), icon: icon.map(place), drawing: drawing.map(place))
+    }
+
+    var cardGeometry: Geometry { Self.geometry(text: text ?? "", width: cardWidth, info: cardInfo ?? ScratchCard()) }
+    /// Textkasten, Symbol, Zeichnung in Weltkoordinaten.
+    var cardTextRect: NSRect { cardGeometry.text.offsetBy(dx: points[0].x, dy: points[0].y) }
+    var iconRect: NSRect? { cardGeometry.icon?.offsetBy(dx: points[0].x, dy: points[0].y) }
+    var drawingRect: NSRect? { cardGeometry.drawing?.offsetBy(dx: points[0].x, dy: points[0].y) }
+
+    /// Umriss der Form (Welt); nil = keine Form.
+    var shapeOutline: [CGPoint]? {
+        guard let kind = cardInfo?.shapeKind else { return nil }
+        return ScratchShapes.outline(kind, in: cardRect)
+    }
+
+    /// Elemente der Zeichnung einer SVG-Karte, eingepasst in ihr Rechteck (Farbe ohne Angabe: `defaultColor`).
+    func drawingItems(defaultColor: Int) -> [ScratchStroke] {
+        guard let svg = cardInfo?.svg, let rect = drawingRect else { return [] }
+        if let cached = cachedDrawing, cached.rect == rect, cached.color == defaultColor { return cached.items }
+        let items = ((try? ScratchSVG.parse(svg, defaultColor: defaultColor, target: rect))?.shapes ?? [])
+            .map { ScratchStroke(shape: $0, author: author ?? "") }
+        cachedDrawing = (rect, defaultColor, items)
+        return items
+    }
+
+    /// Beschriftung eines gesetzten Pfeils: Rechteck um den Text auf der Mitte des längsten Stücks.
+    var arrowLabelRect: NSRect? {
+        guard let label = link?.route?.label, !label.isEmpty, let anchor = ScratchShapes.labelAnchor(points) else { return nil }
+        let size = (label as NSString).size(withAttributes: [.font: Self.labelFont])
+        return NSRect(x: anchor.x - size.width / 2 - 5, y: anchor.y - size.height / 2 - 2, width: size.width + 10, height: size.height + 4)
+    }
+    static let labelFont = NSFont.systemFont(ofSize: 11.5, weight: .medium)
 
     /// Rahmen der Karte (Weltkoordinaten).
     var cardRect: NSRect {
@@ -1352,7 +1617,8 @@ final class ScratchStroke: Codable {
     var bounds: NSRect {
         if isImage { return imageRect }
         if text != nil { return textRect.insetBy(dx: -2, dy: -2) }
-        return path.bounds.insetBy(dx: -width, dy: -width)
+        let line = path.bounds.insetBy(dx: -width, dy: -width)
+        return arrowLabelRect.map { line.union($0) } ?? line
     }
 
     /// Berührt ein Kreis um `p` das Element? (Abstand zu jedem Teilstück, nicht nur zu den Punkten; Flächen und
@@ -1427,7 +1693,11 @@ enum ScratchChanges {
         for e in elements {
             let kind = e.card ? "card" : e.isImage ? "image" : e.text != nil ? "text" : e.isClaude ? "shape" : "stroke"
             var look = "\(e.color)"
-            if let info = e.cardInfo, let data = try? JSONEncoder().encode(info) { look += String(decoding: data, as: UTF8.self) }
+            // Zonen: Größe folgt den Karten — kein eigenes „Aussehen geändert“.
+            if var info = e.cardInfo {
+                info.height = nil
+                if let data = try? JSONEncoder().encode(info) { look += String(decoding: data, as: UTF8.self) }
+            }
             let title = e.cardInfo?.title.map { $0 + " — " } ?? ""
             look += "|cuts\(e.cuts.count)"
             result[e.uid] = Snap(author: e.isClaude ? "claude" : "mats", kind: kind, bounds: e.bounds,

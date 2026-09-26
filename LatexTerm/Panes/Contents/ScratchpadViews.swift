@@ -273,6 +273,7 @@ final class ScratchpadCanvas: NSView {
     }
 
     private func edited() {
+        refreshZones()
         revision += 1
         needsDisplay = true
         onStateChange?()
@@ -309,6 +310,10 @@ final class ScratchpadCanvas: NSView {
         /// Ausdrücklich: darf durch fremde Karten laufen.
         var through = false
         var color: Int?
+        var dashed: Bool?
+        var weight: String?
+        var head: String?
+        var label: String?
     }
 
     struct CardResult {
@@ -330,18 +335,24 @@ final class ScratchpadCanvas: NSView {
                     probe: Bool = false) throws -> CardResult {
         let strict = author != nil
         // Unbekannte id mit Text = neue Karte unter diesem Namen (so kann ein Aufruf sie gleich verbinden).
+        // Unbekannte id mit Text = neue Karte unter diesem Namen; spätere Einträge derselben id ändern sie dann.
+        var created = Set<String>()
         for entry in entries where entry.id != nil && !strokes.contains(where: { $0.cardInfo?.id == entry.id }) {
-            guard !entry.remove, entry.text?.isEmpty == false else {
+            if created.contains(entry.id!) { continue }
+            created.insert(entry.id!)
+            let carries = entry.style.icon != nil || entry.style.svg != nil || entry.style.members != nil
+            guard !entry.remove, entry.text?.isEmpty == false || carries else {
                 throw PaneArgsError("Karte „\(entry.id!)“ gibt es nicht (ids aus scratch_look; neue Karte braucht text)")
             }
         }
         let saved = strokes
         do {
             let result = try applyCardsUnchecked(entries, author: author, strict: strict, replacing: layer, probe: probe)
-            if probe || !result.problems.isEmpty { strokes = saved }
+            if probe || !result.problems.isEmpty { strokes = saved; refreshZones() }
             return result
         } catch {
             strokes = saved
+            refreshZones()
             throw error
         }
     }
@@ -352,6 +363,9 @@ final class ScratchpadCanvas: NSView {
         var result = CardResult()
         var placedBoxes: [NSRect] = []
         var nextNumber = cardNumbers().max().map { $0 + 1 } ?? 1
+        var nextZone = (strokes.compactMap { $0.cardInfo?.id }.compactMap { $0.hasPrefix("z") ? Int($0.dropFirst()) : nil }.max() ?? 0) + 1
+        /// Neue Zonen dieses Aufrufs (Rahmen erst, wenn alle Karten liegen).
+        var zones: [ScratchStroke] = []
         /// Eintrag → Karte, die er angelegt oder geändert hat (Ausgang seiner Pfeile).
         var cardFor: [Int: ScratchStroke] = [:]
         /// Karten, deren Lage/Größe sich geändert hat — die prüft der strenge Weg.
@@ -393,9 +407,25 @@ final class ScratchpadCanvas: NSView {
                 if copy.cardRect != old.cardRect { placed.append((copy, entry)) }
                 continue
             }
-            guard let text = entry.text, !text.isEmpty else { continue }
+            let carries = entry.style.icon != nil || entry.style.svg != nil || entry.style.members != nil
+            let text = entry.text ?? ""
+            guard !text.isEmpty || carries else { continue }
             var info = entry.style
             if entry.width != nil { info.fixedWidth = true }
+            if info.shape == "none" { info.shape = nil }
+            if info.icon == "" { info.icon = nil }
+            if info.members != nil {
+                // Zone: Ort und Größe folgen den Mitgliedern; Überschrift aus title oder text.
+                if info.title == nil, !text.isEmpty { info.title = text }
+                if let id = entry.id { info.id = id } else { info.id = "z\(nextZone)"; nextZone += 1 }
+                pendingZones = zones.count
+                let zone = ScratchStroke(card: "", at: .zero, width: 80, color: entry.color ?? zoneColor(), author: author, info: info)
+                pendingZones = 0
+                result.added.append(zone)
+                cardFor[position] = zone
+                zones.append(zone)
+                continue
+            }
             if let id = entry.id { info.id = id } else {
                 info.id = "k\(nextNumber)"
                 nextNumber += 1
@@ -419,6 +449,13 @@ final class ScratchpadCanvas: NSView {
         }
         let cardsNow = result.updated + result.added
         strokes.append(contentsOf: cardsNow)
+        for zone in zones + result.updated.filter(\.isZone) {
+            let missing = (zone.cardInfo?.members ?? []).filter { id in !strokes.contains { $0.cardInfo?.id == id && !$0.isZone } }
+            if !missing.isEmpty {
+                throw PaneArgsError("zone \(zone.cardInfo?.id ?? "?"): Karte \(missing.joined(separator: ", ")) gibt es nicht")
+            }
+        }
+        refreshZones()
         var added = cardsNow
         var swaps: [(old: ScratchStroke, new: ScratchStroke)] = []
         let orphans = dropOrphanArrows(after: removed)
@@ -427,7 +464,7 @@ final class ScratchpadCanvas: NSView {
         // Strenger Weg: jede gesetzte Karte liegt frei und im Sichtbaren — oder der Agent hat es ausdrücklich so gewollt.
         if strict {
             let visible = visibleWorldRect
-            for (card, entry) in placed {
+            for (card, entry) in placed where !card.isZone {
                 let name = card.cardInfo?.id ?? "?"
                 let r = card.cardRect
                 if !entry.overlap {
@@ -469,7 +506,8 @@ final class ScratchpadCanvas: NSView {
                     throw PaneArgsError("arrowTo: \(destID) hat keinen Absatz \(part) (Absätze stehen in scratch_look)")
                 }
                 let route = ScratchRoute(fromSide: spec.fromSide?.rawValue, toSide: spec.toSide?.rawValue,
-                                         via: spec.via.isEmpty ? nil : spec.via, toPart: part)
+                                         via: spec.via.isEmpty ? nil : spec.via, toPart: part,
+                                         dashed: spec.dashed, weight: spec.weight, head: spec.head, label: spec.label)
                 let arrow = routedArrow(from: source, to: dest, route: route, color: spec.color ?? entry.color ?? source.color, author: author)
                 let (from, to) = (source.cardInfo?.id ?? "?", spec.to)
                 if strict, !spec.through, !arrow.hits.isEmpty {
@@ -504,7 +542,7 @@ final class ScratchpadCanvas: NSView {
     func obstacles(excluding uids: Set<String>) -> [ScratchLayout.Obstacle] {
         let routed = Set(strokes.filter { $0.link?.route != nil }.map(\.uid))
         return strokes.compactMap { s in
-            guard !uids.contains(s.uid), !routed.contains(s.uid), !(s.follows.map(routed.contains) ?? false) else { return nil }
+            guard !uids.contains(s.uid), !routed.contains(s.uid), !(s.follows.map(routed.contains) ?? false), !s.isZone else { return nil }
             if let id = s.cardInfo?.id { return .init(name: id, rect: s.cardRect) }
             if s.isImage { return .init(name: "ein Bild", rect: s.imageRect) }
             if s.text != nil { return .init(name: s.isClaude ? "deine Beschriftung" : "eine Beschriftung", rect: s.bounds) }
@@ -516,6 +554,7 @@ final class ScratchpadCanvas: NSView {
     /// Karten und Bilder als Hindernisse für Pfeile.
     private func arrowObstacles() -> [ScratchLayout.Obstacle] {
         strokes.compactMap { s in
+            if s.isZone { return nil }
             if let id = s.cardInfo?.id { return .init(name: id, rect: s.cardRect) }
             if s.isImage { return .init(name: "Bild \(s.uid)", rect: s.imageRect) }
             return nil
@@ -560,7 +599,7 @@ final class ScratchpadCanvas: NSView {
         return (objectRect(b), false)
     }
 
-    private static func stemCard(_ s: ScratchStroke) -> Bool { s.card && s.frameStyle == "mark" && s.showsFrame }
+    private static func stemCard(_ s: ScratchStroke) -> Bool { s.card && s.frameStyle == "mark" && s.showsFrame && s.cardInfo?.icon == nil }
 
     /// Linkspfeil aus dem Stamm: beginnt über der Ecke und biegt dort nach links (dann fällt der Fuß weg).
     private static func exitsLeft(_ points: [CGPoint], _ card: ScratchStroke) -> Bool {
@@ -668,9 +707,11 @@ final class ScratchpadCanvas: NSView {
         let (fromSide, toSide) = sides(route)
         let nameA = a.cardInfo?.id ?? "Bild \(a.uid)", nameB = b.cardInfo?.id ?? "Bild \(b.uid)"
         let others = strokes.filter { $0.link != nil && $0.uid != own }.map(\.points)
+        // Runde und spitze Formen berühren ihr Rechteck nur in den Kantenmitten — dort docken Pfeile an.
+        let pointy: (ScratchStroke) -> Bool = { s in [.circle, .diamond, .hexagon, .cloud].contains(s.cardInfo?.shapeKind) }
         return ScratchLayout.route(from: objectRect(a), to: targetRect(b, route).rect, fromSide: fromSide, toSide: toSide,
                                    via: route.via ?? [], obstacles: arrowObstacles(), fromName: nameA, toName: nameB,
-                                   others: others)
+                                   others: others, centered: pointy(a) || pointy(b))
     }
 
     /// Eingerasteter Agenten-Pfeil: rechtwinklig von Kante zu Kante, um Karten herum; Spitze als eigener, folgender Strich.
@@ -679,15 +720,24 @@ final class ScratchpadCanvas: NSView {
         let way = routePoints(from: a, to: b, route: route)
         // Aus dem Stamm: so kräftig wie der Strich links (Gruppenfarbe 2,5, sonst 1,5), damit es eine Linie ist.
         let stemmed = Self.stemCard(a) && stemWay(from: a, to: b, route: route) != nil
-        let width: CGFloat = stemmed ? (a.color != 0 ? 2.5 : 1.5) : 2
-        let shaft = ScratchStroke(line: way.points, color: color, width: width, author: author)
+        let width: CGFloat = route.weight.flatMap(ScratchShapes.arrowWidth) ?? (stemmed ? (a.color != 0 ? 2.5 : 1.5) : 2)
+        let shaft = ScratchStroke(line: way.points, color: color, width: width, author: author, dashed: route.dashed ?? false)
         let (p0, p1) = (way.points[0], way.points[way.points.count - 1])   // `route` liefert immer ≥ 2 Punkte
         shaft.link = ScratchLink(from: a.uid, to: b.uid,
                                  a: CGPoint(x: p0.x - a.points[0].x, y: p0.y - a.points[0].y),
                                  b: CGPoint(x: p1.x - b.points[0].x, y: p1.y - b.points[0].y), route: route)
-        let tip = ScratchStroke(line: arrowTip(way.points, from: a, to: b, route: route), color: color, width: width, author: author)
-        tip.follows = shaft.uid
-        return ([shaft, tip], way.hits)
+        var result = [shaft]
+        if route.head != "none" {
+            let tip = ScratchStroke(line: arrowTip(way.points, from: a, to: b, route: route), color: color, width: width, author: author)
+            tip.follows = shaft.uid
+            result.append(tip)
+        }
+        if route.head == "both" {
+            let back = ScratchStroke(line: ScratchLayout.head(way.points.reversed()), color: color, width: width, author: author)
+            back.follows = shaft.uid
+            result.append(back)
+        }
+        return (result, way.hits)
     }
 
     private static func span(_ r: NSRect) -> String {
@@ -707,7 +757,37 @@ final class ScratchpadCanvas: NSView {
         if let v = patch.frame { r.frame = v }
         if let v = patch.fill { r.fill = v }
         if let v = patch.align { r.align = v }
+        if let v = patch.icon { r.icon = v.isEmpty ? nil : v }
+        if let v = patch.iconAt { r.iconAt = v }
+        if let v = patch.iconSize { r.iconSize = v }
+        if let v = patch.iconColor { r.iconColor = v }
+        if let v = patch.shape { r.shape = v == "none" ? nil : v }
+        if let v = patch.svg { r.svg = v; r.aspect = patch.aspect }
+        if let v = patch.members { r.members = v }
         return r
+    }
+
+    // MARK: Zonen (26.09.) — farbige Fläche hinter einer Gruppe, ihr Rahmen folgt den Karten
+
+    /// Jede Zone um ihre Mitglieder legen (am Platz: abgeleitet, darum nach jeder Änderung, auch Undo und Ziehen).
+    func refreshZones() {
+        guard strokes.contains(where: \.isZone) else { return }
+        var rects: [String: NSRect] = [:]
+        for s in strokes where s.card && !s.isZone { if let id = s.cardInfo?.id { rects[id] = s.cardRect } }
+        for zone in strokes where zone.isZone {
+            let titled = !(zone.cardInfo?.title ?? "").isEmpty
+            guard let frame = ScratchShapes.zoneFrame(around: (zone.cardInfo?.members ?? []).compactMap { rects[$0] }, titled: titled)
+            else { continue }
+            zone.setZoneFrame(frame.integral)
+        }
+    }
+
+    /// Zonen, die der laufende Aufruf schon angelegt, aber noch nicht eingereiht hat.
+    private var pendingZones = 0
+    /// Farben neuer Zonen der Reihe nach: Grün, Blau, Violett, Gelb, Rot.
+    private func zoneColor() -> Int {
+        let cycle = [3, 5, 6, 2, 1]
+        return cycle[(strokes.filter(\.isZone).count + pendingZones) % cycle.count]
     }
 
     private func cardNumbers() -> [Int] {
@@ -728,7 +808,7 @@ final class ScratchpadCanvas: NSView {
     /// untereinander, statt weit unter der Zeichnung zu landen.
     func freeSpot(for size: NSSize, also extra: [NSRect] = []) -> CGPoint {
         let area = visibleWorldRect.insetBy(dx: 24, dy: 24)
-        let boxes = strokes.map(\.bounds) + extra
+        let boxes = strokes.filter { !$0.isZone }.map(\.bounds) + extra
         let obstacles = boxes.map { $0.insetBy(dx: -8, dy: -8) }
         func scan(xs: [CGFloat], top: CGFloat, bottom: CGFloat) -> CGPoint? {
             for x in xs {
@@ -831,6 +911,7 @@ final class ScratchpadCanvas: NSView {
             strokes.forEach { $0.offset(by: shift) }
         }
         nameCards()
+        refreshZones()
         tool = .none   // Kachel startet ohne Fokus, also ohne Werkzeug
         colorIndex = max(0, min(doc.color, ScratchPalette.names.count - 1))
         sizeIndex = max(0, min(doc.size, Self.penWidths.count - 1))
@@ -1098,6 +1179,13 @@ final class ScratchpadCanvas: NSView {
 
     private func beginObjectDrag(_ indices: [Int], at p: CGPoint) {
         guard !indices.isEmpty else { return }
+        // Zone ziehen = ihre Karten mitnehmen.
+        var indices = indices
+        let members = Set(indices.flatMap { strokes[$0].cardInfo?.members ?? [] })
+        if !members.isEmpty {
+            for i in strokes.indices where !indices.contains(i) && strokes[i].card && !strokes[i].isZone
+                && members.contains(strokes[i].cardInfo?.id ?? "") { indices.append(i) }
+        }
         let items = indices.map { index -> (index: Int, original: ScratchStroke, live: ScratchStroke) in
             let original = strokes[index]
             let live = original.copy()
@@ -1134,6 +1222,10 @@ final class ScratchpadCanvas: NSView {
             dirty = dirty.union(strokes[index].bounds).union(fresh.bounds)
             strokes[index] = fresh
         }
+        if strokes.contains(where: \.isZone) {
+            refreshZones()
+            needsDisplay = true
+        }
         objectDrag = drag
         if !guides.isEmpty || !oldGuides.isEmpty || !selection.isEmpty { needsDisplay = true }
         invalidate(dirty.insetBy(dx: -8, dy: -8))
@@ -1147,6 +1239,7 @@ final class ScratchpadCanvas: NSView {
             // Nur geklickt: alles wie vorher.
             for item in drag.items { strokes[item.index] = item.original }
             for (index, original) in drag.linked where strokes.indices.contains(index) { strokes[index] = original }
+            refreshZones()
             needsDisplay = true
             return
         }
@@ -1201,7 +1294,7 @@ final class ScratchpadCanvas: NSView {
 
     /// Karte oder Bild, an dem ein Strich-Ende hier einrasten würde.
     private func linkObject(at p: CGPoint) -> ScratchStroke? {
-        strokes.last { ($0.card || $0.isImage) && $0.bounds.insetBy(dx: -Self.linkReach, dy: -Self.linkReach).contains(p) }
+        strokes.last { ($0.card || $0.isImage) && !$0.isZone && $0.bounds.insetBy(dx: -Self.linkReach, dy: -Self.linkReach).contains(p) }
     }
 
     /// Griff links neben dem Objekt unter dem Zeiger (Stift/Marker): sechs Punkte, am Bildschirm immer gleich groß.
@@ -1239,7 +1332,7 @@ final class ScratchpadCanvas: NSView {
     private func alignmentSnap(_ frame: NSRect, skip: Set<String>) -> (dx: CGFloat, dy: CGFloat, guides: [(CGPoint, CGPoint)]) {
         let reach = Self.guideReach / zoom
         let view = toWorld(bounds)
-        let others = strokes.filter { ($0.card || $0.isImage) && !skip.contains($0.uid) && $0.bounds.intersects(view) }.map {
+        let others = strokes.filter { ($0.card || $0.isImage) && !$0.isZone && !skip.contains($0.uid) && $0.bounds.intersects(view) }.map {
             $0.card ? $0.cardRect : $0.bounds
         }
         func best(_ mine: [CGFloat], _ theirs: (NSRect) -> [CGFloat]) -> (delta: CGFloat, at: CGFloat, rects: [NSRect])? {
@@ -1284,6 +1377,7 @@ final class ScratchpadCanvas: NSView {
             dirty = dirty.union(strokes[index].bounds).union(linked.bounds)
             strokes[index] = linked
         }
+        if strokes.contains(where: \.isZone) { refreshZones(); needsDisplay = true }
         invalidate(dirty.insetBy(dx: -4, dy: -4))
     }
 
@@ -1367,7 +1461,7 @@ final class ScratchpadCanvas: NSView {
         for s in strokes where s.card || s.isImage { byUID[s.uid] = s }
         var transforms: [String: (f: (CGPoint) -> CGPoint, scale: CGFloat)] = [:]
         var result: [(Int, ScratchStroke)] = []
-        var rerouted: [String: (way: [CGPoint], tip: [CGPoint])] = [:]
+        var rerouted: [String: (way: [CGPoint], tip: [CGPoint], old: [CGPoint])] = [:]
         for (index, original) in originals {
             guard let link = original.link, let a = byUID[link.from], let b = byUID[link.to],
                   let p0 = original.points.first, let p1 = original.points.last else { continue }
@@ -1376,7 +1470,7 @@ final class ScratchpadCanvas: NSView {
                 let way = routePoints(from: a, to: b, route: route, own: original.uid).points
                 // Kein Weg (z. B. Karten übereinander): Pfeil bleibt liegen, statt leer zu werden.
                 guard way.count >= 2 else { continue }
-                rerouted[original.uid] = (way, arrowTip(way, from: a, to: b, route: route))
+                rerouted[original.uid] = (way, arrowTip(way, from: a, to: b, route: route), original.points)
                 result.append((index, original.rerouted(way)))
                 continue
             }
@@ -1388,7 +1482,13 @@ final class ScratchpadCanvas: NSView {
         }
         for (index, original) in originals {
             if let shaft = original.follows, let way = rerouted[shaft], way.way.count >= 2 {
-                result.append((index, original.rerouted(way.tip)))
+                // Spitze am Anfang (head both): sie lag näher am alten Anfang als am alten Ende.
+                let c = original.bounds, mid = CGPoint(x: c.midX, y: c.midY)
+                if let s0 = way.old.first, let s1 = way.old.last, hypot(mid.x - s0.x, mid.y - s0.y) < hypot(mid.x - s1.x, mid.y - s1.y) {
+                    result.append((index, original.rerouted(ScratchLayout.head(way.way.reversed()))))
+                } else {
+                    result.append((index, original.rerouted(way.tip)))
+                }
                 continue
             }
             guard let shaft = original.follows, let t = transforms[shaft] else { continue }
@@ -1560,14 +1660,15 @@ final class ScratchpadCanvas: NSView {
         let size = max(8, min(editStyle.size ?? ScratchCard.defaultSize, 72)) * zoom
         view.restyle(body: editStyle.font().withSize(size), title: editStyle.font(bold: true).withSize(size), color: ink,
                      align: editStyle.align, accent: ThemeStore.shared.accentColor, zoom: zoom)
-        let pad = ScratchStroke.cardPadding
         let origin = editing?.points[0] ?? typingAt ?? .zero
         let (info, body) = split(view.string.isEmpty ? " " : view.string, title: view.hasTitle)
-        let width = editWidth(for: body, info: info, origin: origin)
-        let height = ScratchStroke.cardSize(text: body, width: width, info: info).height
-        let rect = toScreen(NSRect(origin: origin, size: NSSize(width: width, height: height)))
-        view.textContainerInset = NSSize(width: pad.width * zoom, height: pad.height * zoom)
-        view.textContainer?.containerSize = NSSize(width: max(1, rect.width - 2 * pad.width * zoom), height: .greatestFiniteMagnitude)
+        let width = editing?.isZone == true ? editing!.cardWidth : editWidth(for: body, info: info, origin: origin)
+        // Textkasten wie auf der Karte (Form, Symbol, Zeichnung verschieben ihn): Editor genau darüber.
+        let geometry = ScratchStroke.geometry(text: body, width: width, info: info)
+        let box = geometry.text.offsetBy(dx: origin.x, dy: origin.y)
+        let rect = toScreen(NSRect(x: box.minX, y: box.minY, width: box.width, height: max(box.height, info.font().pointSize * 1.3)))
+        view.textContainerInset = .zero
+        view.textContainer?.containerSize = NSSize(width: max(1, rect.width), height: .greatestFiniteMagnitude)
         view.frame = rect
     }
 
@@ -1828,7 +1929,7 @@ final class ScratchpadCanvas: NSView {
         let width = info.fixedWidth == true ? card.cardWidth
             : ScratchStroke.cardWidth(for: purged.text, info: info, limit: card.cardWidth)
         let fresh = card.cardUpdated(text: purged.text, origin: nil, width: width, color: nil, info: info)
-        fresh.cuts = card.cuts.filter { $0.part == "frame" || $0.part == "fill" }
+        fresh.cuts = card.cuts.filter { ["frame", "fill", "icon", "drawing"].contains($0.part ?? "") }
         return fresh
     }
 
@@ -1840,6 +1941,10 @@ final class ScratchpadCanvas: NSView {
         let rect = card.cardRect
         let glyphs = card.liveGlyphs.filter { $0.rect.intersects(reach) }
         var cut: [ScratchCut] = glyphs.map { .chars($0.range) }
+        // Zone: der Radierer an Rand oder Überschrift nimmt sie ganz (die Karten darin bleiben).
+        if card.isZone { cut = card.zoneGrabs(p, slack: r) ? [ScratchCut(part: "frame")] : [] }
+        if cut.isEmpty, card.showsIcon, let icon = card.iconRect, icon.intersects(reach) { cut = [ScratchCut(part: "icon")] }
+        if cut.isEmpty, card.showsDrawing, let drawing = card.drawingRect, drawing.intersects(reach) { cut = [ScratchCut(part: "drawing")] }
         if cut.isEmpty, card.frameTouches(p, radius: r) { cut = [ScratchCut(part: "frame")] }
         if cut.isEmpty, card.showsFill, rect.contains(p) { cut = [ScratchCut(part: "fill")] }
         guard !cut.isEmpty else { return }
@@ -1986,8 +2091,10 @@ final class ScratchpadCanvas: NSView {
             return Self.exitsLeft(s.points, card) ? link.from : nil
         })
         let visible = strokes.filter { $0.bounds.intersects(rect) }
+        // Zonen liegen hinter allem (Fläche unter ihren Karten), dann Marker, dann Tinte.
+        for stroke in visible where stroke.isZone { draw(stroke) }
         for stroke in visible where stroke.marker { draw(stroke) }
-        for stroke in visible where !stroke.marker { draw(stroke) }
+        for stroke in visible where !stroke.marker && !stroke.isZone { draw(stroke) }
         if let current { draw(current) }
     }
 
@@ -2014,16 +2121,43 @@ final class ScratchpadCanvas: NSView {
         let ink = stroke.marker ? color.withAlphaComponent(Self.markerAlpha) : color
         if let info = stroke.cardInfo, let text = stroke.text {
             let rect = stroke.cardRect
-            let frame = NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
-            if stroke.showsFill {
-                color.withAlphaComponent(0.08).setFill()
-                frame.fill()
-            }
             let textInk = palette[max(0, min(info.textColor ?? 0, palette.count - 1))]
             // Gruppenfarbe (Befund 25.09.: beim leisen Strich war `color` unsichtbar): Strich kräftig in der Farbe, Titel auch.
             let grouped = stroke.color != 0
+            if stroke.isZone { return drawZone(stroke, info: info, color: color) }
+            let outline = stroke.shapeOutline.map(Self.polygon)
+            let frame = outline ?? NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
+            if stroke.showsFill {
+                // Haftnotiz satter, sonst ein Hauch; ohne Gruppenfarbe ist eine Notiz gelb.
+                let tint = info.shapeKind == .note && !grouped ? palette[2] : (grouped || outline == nil ? color : textInk)
+                tint.withAlphaComponent(info.shapeKind == .note ? 0.2 : outline != nil ? 0.12 : 0.08).setFill()
+                frame.fill()
+            }
+            if stroke.showsDrawing {
+                for item in stroke.drawingItems(defaultColor: stroke.color != 0 ? stroke.color : ScratchPalette.claude) { drawInk(item) }
+            }
+            if stroke.showsIcon, let icon = info.icon, let box = stroke.iconRect {
+                let tone = palette[max(0, min(info.iconColor ?? (grouped ? stroke.color : info.textColor ?? 0), palette.count - 1))]
+                Self.drawIcon(icon, in: box, color: tone)
+            }
             switch stroke.frameStyle {
             case _ where !stroke.showsFrame: break
+            case "shape":
+                let kind = info.shapeKind
+                frame.lineWidth = 1.6
+                frame.lineJoinStyle = .round
+                (grouped ? color : textInk).withAlphaComponent(grouped ? 0.9 : 0.6).setStroke()
+                frame.stroke()
+                if kind == .note {
+                    // Umgeknickte Ecke.
+                    let f = ScratchShapes.noteFold(rect)
+                    let fold = NSBezierPath()
+                    fold.move(to: CGPoint(x: rect.maxX - f, y: rect.minY))
+                    fold.line(to: CGPoint(x: rect.maxX - f, y: rect.minY + f))
+                    fold.line(to: CGPoint(x: rect.maxX, y: rect.minY + f))
+                    fold.lineWidth = 1.2
+                    fold.stroke()
+                }
             case "mark":
                 let mark = leftStems.contains(stroke.uid) ? stroke.stemPath : stroke.markPath
                 if grouped { mark.lineWidth = 2.5 }
@@ -2035,7 +2169,6 @@ final class ScratchpadCanvas: NSView {
                 color.withAlphaComponent(0.75).setStroke()
                 frame.stroke()
             }
-            let pad = ScratchStroke.cardPadding
             let ink = textInk
             let content = NSMutableAttributedString(attributedString: info.attributed(
                 text: text, color: ink, titleColor: grouped && info.textColor == nil ? color : nil))
@@ -2043,8 +2176,10 @@ final class ScratchpadCanvas: NSView {
                 content.addAttribute(.foregroundColor, value: NSColor.clear, range: NSRange(location: range.lowerBound, length: range.count))
             }
             // In Bearbeitung steht der Text im Editor darüber — Rahmen und Fläche bleiben stehen.
-            if stroke !== editing {
-                content.draw(with: rect.insetBy(dx: pad.width, dy: pad.height), options: [.usesLineFragmentOrigin, .usesFontLeading])
+            if stroke !== editing, content.length > 0 {
+                let box = stroke.cardTextRect
+                content.draw(with: NSRect(x: box.minX, y: box.minY, width: box.width, height: box.height + 4),
+                             options: [.usesLineFragmentOrigin, .usesFontLeading])
             }
         } else if let text = stroke.text {
             (text as NSString).draw(at: stroke.textRect.origin, withAttributes: [.font: stroke.font, .foregroundColor: ink])
@@ -2054,7 +2189,68 @@ final class ScratchpadCanvas: NSView {
         } else {
             ink.setStroke()
             stroke.path.stroke()
+            if let label = stroke.link?.route?.label, let box = stroke.arrowLabelRect {
+                // Beschriftung auf dem Pfeil: Papier darunter, damit die Linie den Text nicht durchstreicht.
+                paper.setFill()
+                NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4).fill()
+                let size = (label as NSString).size(withAttributes: [.font: ScratchStroke.labelFont])
+                (label as NSString).draw(at: CGPoint(x: box.midX - size.width / 2, y: box.midY - size.height / 2),
+                                         withAttributes: [.font: ScratchStroke.labelFont, .foregroundColor: color])
+            }
         }
+    }
+
+    /// Zone: getönte Fläche mit weichem Rand, Überschrift oben links in der Farbe.
+    private func drawZone(_ zone: ScratchStroke, info: ScratchCard, color: NSColor) {
+        let rect = zone.cardRect
+        let path = NSBezierPath(roundedRect: rect, xRadius: 14, yRadius: 14)
+        if zone.showsFill {
+            color.withAlphaComponent(0.07).setFill()
+            path.fill()
+        }
+        if zone.showsFrame {
+            path.lineWidth = info.frame == "thick" ? 2.5 : 1.2
+            if info.frame == "dashed" { path.setLineDash([6, 4], count: 2, phase: 0) }
+            color.withAlphaComponent(0.45).setStroke()
+            path.stroke()
+        }
+        guard zone !== editing, let title = info.title, !title.isEmpty else { return }
+        var style = info
+        style.bold = true
+        let content = NSMutableAttributedString(attributedString: style.attributed(text: "", color: color, titleColor: color))
+        for range in zone.erasedChars.rangeView where range.upperBound <= content.length {
+            content.addAttribute(.foregroundColor, value: NSColor.clear, range: NSRange(location: range.lowerBound, length: range.count))
+        }
+        content.draw(with: zone.cardTextRect.insetBy(dx: 0, dy: -2), options: [.usesLineFragmentOrigin, .usesFontLeading])
+    }
+
+    /// Geschlossener Linienzug als Pfad.
+    private static func polygon(_ points: [CGPoint]) -> NSBezierPath {
+        let path = NSBezierPath()
+        guard let first = points.first else { return path }
+        path.move(to: first)
+        for p in points.dropFirst() { path.line(to: p) }
+        path.close()
+        return path
+    }
+
+    /// SF Symbol in der Farbe (hierarchisch getönt), eingepasst ins Kästchen; kein Symbol-Name → als Zeichen (Emoji).
+    private static func drawIcon(_ name: String, in box: NSRect, color: NSColor) {
+        if let base = NSImage(systemSymbolName: name, accessibilityDescription: nil) {
+            let config = NSImage.SymbolConfiguration(pointSize: box.height * 0.8, weight: .regular)
+                .applying(NSImage.SymbolConfiguration(hierarchicalColor: color))
+            let image = base.withSymbolConfiguration(config) ?? base
+            let size = image.size
+            let scale = min(box.width / max(size.width, 1), box.height / max(size.height, 1))
+            let fitted = NSSize(width: size.width * scale, height: size.height * scale)
+            let target = NSRect(x: box.midX - fitted.width / 2, y: box.midY - fitted.height / 2, width: fitted.width, height: fitted.height)
+            image.draw(in: target, from: .zero, operation: .sourceOver, fraction: 1, respectFlipped: true, hints: nil)
+            return
+        }
+        let font = NSFont.systemFont(ofSize: box.height * 0.82)
+        let text = name as NSString
+        let size = text.size(withAttributes: [.font: font])
+        text.draw(at: CGPoint(x: box.midX - size.width / 2, y: box.midY - size.height / 2), withAttributes: [.font: font])
     }
 
     // MARK: Zeiger — Kreis in Werkzeuggröße
