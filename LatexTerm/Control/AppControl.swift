@@ -5,6 +5,7 @@ import AppKit
 /// - `restore`: fehlende Bretter eines Stands in die laufende App, ohne Neustart (`dryRun` = nur zeigen).
 /// - `board-open`: Brett aus einer Datei (`board-save` des Bretts) als neues Brett (25.09.).
 /// - `doctor`: Gesundheitscheck — läuft der neueste Build, Absturzschutz, Archiv, letzte Lebenszeichen.
+/// - `board-name`: Bretter des Fensters auflisten bzw. eins umbenennen wie per Doppelklick (26.09., MCP `layout benennen`).
 /// Anlass: das Zurückholen verlorener Bretter am 24./25.09. ging nur über Sperrdatei und ⌘Q (Plan claude-werkstatt
 /// `plans/latexterm-wiederherstellen_2026-09-25.md`).
 enum AppControl {
@@ -16,6 +17,14 @@ enum AppControl {
             return response
         case "restore": return restore(request)
         case "board-open": return openBoard(request)
+        case "board-name":
+            switch BoardHostView.nameBoard(pane: request.pane ?? request.paneID, number: request.board, to: request.text) {
+            case .success(let reply):
+                var response = ControlResponse(ok: true)
+                response.reply = reply
+                return response
+            case .failure(let error): return .failure(error.description)
+            }
         case "doctor":
             var response = ControlResponse(ok: true)
             response.reply = doctor()

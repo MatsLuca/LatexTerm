@@ -18,6 +18,11 @@ PROJECT = "LatexTerm.xcodeproj"
 TARGET  = "LatexTermCLI"
 BINARY  = "latexterm"
 SOURCES = ["LatexTermCLI/main.swift", "LatexTermCLI/ControlClient.swift", "LatexTermCLI/MCPServer.swift",
+           # 26.09.2026: MCP-Server nach Themen aufgeteilt
+           "LatexTermCLI/MCPServer+Werkzeuge.swift", "LatexTermCLI/MCPServer+Lagebild.swift",
+           "LatexTermCLI/MCPServer+Kacheln.swift", "LatexTermCLI/MCPServer+Sessions.swift",
+           "LatexTermCLI/MCPServer+Ansehen.swift", "LatexTermCLI/MCPServer+Scratchpad.swift",
+           "LatexTermCLI/MCPServer+Hilfen.swift",
            "LatexTerm/Control/ControlProtocol.swift", "LatexTerm/Control/PaneLayoutTree.swift"]
 
 proj = Xcodeproj::Project.open(PROJECT)

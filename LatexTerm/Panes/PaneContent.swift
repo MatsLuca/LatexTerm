@@ -146,7 +146,7 @@ struct PaneArgsError: Error, CustomStringConvertible {
 /// und Session-Restore. "terminal" und "home" sind fest verdrahtet (`TerminalPane`), alles
 /// andere kommt aus `contents`.
 enum PaneKindRegistry {
-    static let contents: [any PaneContent.Type] = [ScratchpadContent.self, WebContent.self, PreviewContent.self, MyzelContent.self]
+    static let contents: [any PaneContent.Type] = [ScratchpadContent.self, WebContent.self, PreviewContent.self, DiffContent.self, MyzelContent.self]
 
     /// Alle Arten, die `new-pane --kind` kennt.
     static var kinds: [String] { ["terminal", "home"] + contents.map { $0.kind } }

@@ -407,3 +407,57 @@ struct BoardMoveError: Error, CustomStringConvertible {
     let description: String
     init(_ description: String) { self.description = description }
 }
+
+// MARK: - Bretter benennen per Steuerkanal (26.09.2026, MCP `layout benennen`)
+
+extension BoardHostView {
+    /// Steuerkanal `board-name`: ohne `name` die Bretter des Fensters auflisten, mit `name` eins umbenennen — wie der
+    /// Doppelklick in der Leiste (leer = wieder automatisch: KI-Name bzw. Ordner). Ziel ist das Brett mit Kachel `pane`
+    /// (UUID oder Präfix; der Aufrufer) oder Brett Nummer `number` in dessen Fenster.
+    static func nameBoard(pane: String?, number: String?, to name: String?) -> Result<String, PaneArgsError> {
+        live.removeAll { $0.view == nil }
+        let hosts = live.compactMap(\.view).filter { $0.window != nil && !$0.windowClosed }
+        func holds(_ board: TerminalSplitView, _ id: String) -> Bool {
+            board.controlPanes.contains { $0.id.uppercased().hasPrefix(id.uppercased()) }
+        }
+        let wanted = pane.flatMap { $0.isEmpty ? nil : $0 }
+        guard let host = wanted.flatMap({ id in hosts.first { $0.boards.contains { holds($0, id) } } })
+                ?? hosts.first(where: { $0.window?.isKeyWindow == true }) ?? hosts.first else {
+            return .failure(PaneArgsError("Kein LatexTerm-Fenster offen"))
+        }
+        let boards = host.ordered
+        let own = wanted.flatMap { id in boards.first { holds($0, id) } }
+        let target: TerminalSplitView
+        if let number, !number.isEmpty {
+            guard let n = Int(number), n >= 1, n <= boards.count else {
+                return .failure(PaneArgsError("Brett \(number) gibt es in diesem Fenster nicht (1–\(boards.count))"))
+            }
+            target = boards[n - 1]
+        } else if let own {
+            target = own
+        } else {
+            guard let active = host.activeBoard else { return .failure(PaneArgsError("Kein Brett gefunden")) }
+            target = active
+        }
+        func listing() -> String {
+            "Bretter: " + boards.enumerated().map { index, board in
+                var entry = "\(index + 1) „\(board.displayName)“"
+                var marks: [String] = []
+                if board === host.activeBoard { marks.append("vorn") }
+                if board === own { marks.append("deins") }
+                if board.customName?.isEmpty == false { marks.append("von Hand benannt") }
+                if !marks.isEmpty { entry += " (\(marks.joined(separator: ", ")))" }
+                return entry
+            }.joined(separator: " · ")
+        }
+        guard let name else { return .success(listing()) }
+        let clean = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard clean.count <= 60 else { return .failure(PaneArgsError("Name zu lang (\(clean.count) Zeichen, höchstens 60)")) }
+        let position = (boards.firstIndex { $0 === target } ?? 0) + 1
+        let before = target.displayName
+        target.customName = clean.isEmpty ? nil : clean
+        host.refreshStrip()
+        let what = clean.isEmpty ? "benennt sich wieder selbst (jetzt „\(target.displayName)“)" : "heißt jetzt „\(clean)“"
+        return .success("Brett \(position) \(what), vorher „\(before)“.\n" + listing())
+    }
+}

@@ -25,6 +25,8 @@ Verwendung:
   latexterm doctor
   latexterm board-save [--pane ZIEL] [--arg name=NAME] [--dry-run] DATEI
   latexterm board-open [--no-focus] [--dry-run] DATEI
+  latexterm board-name [--board N] [NAME]
+  latexterm read [--pane ZIEL] [--lines N] [--grep MUSTER] [--context K]
   latexterm mcp
 
 ZIEL ist der 1-basierte Index aus `list-panes` oder eine Pane-UUID (auch Präfix).
@@ -51,6 +53,9 @@ board-save sichert das Brett der Kachel (ohne --pane: deins) als Datei, meist <p
 Projekt stehen relativ. Ungesicherte Scratchpads mit Inhalt werden vorher daneben angeheftet (skizze.scratch.json).
 board-open öffnet so eine Datei als neues Brett (vorn; --no-focus = hinten) — schon Offenes kommt nicht doppelt.
 Scratchpad anheften einzeln: `call --pane ZIEL pin /pfad/<name>.scratch.json`, Zustand: `call --pane ZIEL state`.
+board-name ohne NAME listet die Bretter des Fensters; mit NAME benennt es deins (--board N: Brett N) um, "" = automatisch.
+read liest eine Terminal-Kachel: die letzten N Zeilen (Default 60) oder mit --grep die Treffer (Regex, Groß/klein egal).
+--probe ist gleichbedeutend mit --dry-run (so heißt es im MCP).
 doctor: läuft der neueste Build, Absturzschutz, Stand-Archiv, letzte Zeilen aus lifecycle.log/unclean.log.
 
 --no-focus: die neue Kachel entsteht daneben, die Tastatur bleibt in der fokussierten Kachel.
@@ -84,6 +89,8 @@ var request = ControlRequest(cmd: cmd)
 request.paneID = ProcessInfo.processInfo.environment["LATEXTERM_PANE_ID"]
 var wantsJSON = false
 var positional: [String] = []
+var readLines = 60, readContext = 0
+var readGrep: String?
 
 while !args.isEmpty {
     let arg = args.removeFirst()
@@ -120,7 +127,15 @@ while !args.isEmpty {
     case "--session":  request.sessionID = value(for: arg)
     case "--turn":     request.turnID = value(for: arg)
     case "--json":     wantsJSON = true
-    case "--dry-run":  request.dryRun = true
+    case "--dry-run", "--probe": request.dryRun = true
+    case "--board":    request.board = value(for: arg)
+    case "--lines":
+        guard let n = Int(value(for: arg)), n > 0 else { fail("--lines erwartet eine positive Zahl", code: 2) }
+        readLines = n
+    case "--context":
+        guard let n = Int(value(for: arg)), n >= 0 else { fail("--context erwartet eine Zahl ≥ 0", code: 2) }
+        readContext = n
+    case "--grep":     readGrep = value(for: arg)
     case "--help", "-h": print(usage); exit(0)
     case "--":
         // Ende der Optionen: der Rest ist Text, auch wenn er mit „--" beginnt.
@@ -158,6 +173,14 @@ case "board-save", "board-open":
     let raw = (positional[0] as NSString).expandingTildeInPath
     request.text = raw.hasPrefix("/") ? raw
         : URL(fileURLWithPath: raw, relativeTo: URL(fileURLWithPath: FileManager.default.currentDirectoryPath)).standardizedFileURL.path
+case "board-name":
+    guard positional.count <= 1 else { fail("board-name nimmt höchstens einen NAME (in Anführungszeichen)\n\n\(usage)", code: 2) }
+    request.text = positional.first
+case "read":
+    // Terminal lesen = `call read` an die Kachel (ohne --pane: die eigene).
+    guard positional.isEmpty else { fail("read nimmt keine freien Argumente — Muster per --grep\n\n\(usage)", code: 2) }
+    request.cmd = "call"
+    request.text = "read last=\(readLines) context=\(readContext)" + (readGrep.map { "\n" + $0 } ?? "")
 default:
     fail("Unbekanntes Kommando „\(cmd)“\n\n\(usage)", code: 2)
 }
@@ -218,8 +241,14 @@ case "new-pane":
     if let pane = response.pane { print(describe(pane)) }
 case "pane-kinds":
     for kind in response.kinds ?? [] { print(kind) }
-case "call", "doctor", "board-save", "board-open":
+case "call", "doctor", "board-save", "board-open", "board-name":
     if let reply = response.reply { print(reply) }
+case "read":
+    // Nur der Text, eine Zeile je Zeile — pipe-fähig (Nummern mit --json).
+    struct ReadReply: Decodable { struct Line: Decodable { let text: String }; let lines: [Line] }
+    if let data = response.reply?.data(using: .utf8), let parsed = try? JSONDecoder().decode(ReadReply.self, from: data) {
+        for line in parsed.lines { print(line.text) }
+    }
 case "snapshots":
     let all = response.snapshots ?? []
     if all.isEmpty { print("Noch keine gespeicherten Stände") }

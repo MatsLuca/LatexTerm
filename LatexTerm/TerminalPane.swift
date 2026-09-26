@@ -1508,8 +1508,28 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
         return true
     }
 
+    /// Steuerkanal `call read …` (26.09.2026, MCP `terminal_look`): Text aus Scrollback + Bildschirm lesen — die letzten
+    /// Zeilen oder Treffer einer Suche (`TerminalText`). Nur lesen; tippen bleibt `send`.
     func call(_ text: String) throws -> String {
-        throw PaneArgsError("\(kind) beantwortet keine Abfragen (call) — Text per send")
+        guard isStarted else { throw PaneArgsError("Home-Kachel hat noch keine Shell zum Lesen") }
+        let query: TerminalText.Query
+        do { query = try TerminalText.parse(text) } catch { throw PaneArgsError(String(describing: error)) }
+        let term = view.getTerminal()
+        let result = TerminalText.select(term.logicalLines(), query)
+        var reply: [String: Any] = [
+            "lines": result.lines.map { line -> [String: Any] in
+                var entry: [String: Any] = ["n": line.n, "text": line.text]
+                if line.hit == true { entry["hit"] = true }
+                return entry
+            },
+            "total": result.total, "truncated": result.truncated,
+            "alternate": term.isCurrentBufferAlternate, "cols": term.cols, "rows": term.rows,
+        ]
+        if let matches = result.matches { reply["matches"] = matches }
+        if let program = foregroundProcessName { reply["foreground"] = program }
+        if let cwd = currentDirectory { reply["cwd"] = cwd }
+        let data = try JSONSerialization.data(withJSONObject: reply)
+        return String(decoding: data, as: UTF8.self)
     }
 
     /// Home bleibt Home; ein Terminal merkt sich Verzeichnis, Agenten-Session und Farbname — was

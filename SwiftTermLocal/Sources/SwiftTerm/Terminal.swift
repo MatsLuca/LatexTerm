@@ -5863,6 +5863,26 @@ open class Terminal {
         }
     }
     
+    /// LatexTerm patch (26.09.2026, MCP `terminal_look`): the buffer (scrollback + screen) as logical lines —
+    /// soft-wrapped rows joined back into the line the program wrote, trailing blanks removed.
+    public func logicalLines (kind: BufferKind = .active) -> [String]
+    {
+        let b = bufferFromKind(kind: kind)
+        var result: [String] = []
+        for row in 0..<b.lines.count {
+            let line = b.lines [row]
+            // A row that continues on the next one keeps its trailing blanks — they are part of the text.
+            let continues = row + 1 < b.lines.count && b.lines [row + 1].isWrapped
+            let text = line.translateToString(trimRight: !continues)
+            if line.isWrapped, !result.isEmpty {
+                result [result.count - 1] += text
+            } else {
+                result.append (text)
+            }
+        }
+        return result.map { String($0.reversed().drop(while: { $0 == " " }).reversed()) }
+    }
+
     /// Returns the contents of the specified terminal buffer encoded as UTF8 in the provided Data buffer
     /// - Parameter kind: which buffer to retrive the data for
     /// - Parameter encoding: which encoding to use for the returned value, defaults to utf8

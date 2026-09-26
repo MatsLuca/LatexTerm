@@ -140,24 +140,28 @@ claude mcp add -s user latexterm -e 'LATEXTERM_START_CLAUDE=claude' -- /opt/home
 codex mcp add latexterm -- /opt/homebrew/bin/latexterm mcp   # then add env_vars = ["LATEXTERM_PANE_ID"] to its [mcp_servers.latexterm]
 ```
 
-- **Intent-level tools:** `panes`, `open_terminal`, `start_agent`, `ask_session`, `wait_session`, `run_in_pane`,
-  `pane_action`, `focus_pane`, `close_pane` — plus one `open_<kind>` per app pane kind (`open_web`, `open_scratchpad`, `open_preview`),
+- **Intent-level tools:** `panes`, `open_terminal`, `terminal_look` (read a terminal pane: last lines or grep with context),
+  `start_agent`, `ask_session`, `wait_session`, `run_in_pane`, `pane_action`, `focus_pane`, `close_pane`, `layout` (also renames
+  boards) — plus one `open_<kind>` per app pane kind (`open_web`, `open_scratchpad`, `open_preview`, `open_diff`),
   generated from each kind's self-description (`pane-kinds` → `kindInfos`). A new pane kind becomes a new tool with no
   server change.
 - **Shared scratchpad:** `scratch_look` returns the pad as an image with a labelled coordinate grid (world units,
   0,0 = pane centre, y down) plus where the user's and the agent's strokes are; `scratch_draw` takes an SVG subset
   (paths incl. arcs, basic shapes, text, transforms, `marker-end` arrowheads) and turns it into native, erasable
   elements in theme colours — a `viewBox` is fitted into the visible area, no viewBox means world coordinates;
-  `replace: "mats"` swaps the user's sketch for a clean version in one undo step. `scratch_clear` removes a layer.
+  `replace: "mats"` swaps the user's sketch for a clean version in one undo step. `pane_action clear cards|claude|mats|all` removes a layer.
   Underneath: control command `call` (request with reply, `latexterm call`), `send --paste` (bracketed paste).
 - **Seeing the panes:** `web_look` (screenshot, page text, console; `full` for the whole page), `web_act` (click, type,
   scroll in a web pane), `preview_look` (what the preview shows). 
-- **Situational instructions:** on `initialize` the server tells the model which pane it is in, what else is open and
-  what panes are good for (show results, run long processes beside the chat, parallel agents).
+- **Situational instructions:** on `initialize` the server tells the model the user's words, the rules and which pane it
+  is in, then what else is open — kept under the 2048-character cut Claude Code applies (rules first, pane list last).
+- **Diff pane (`open_diff`):** live `git diff` of a repo against `HEAD` (or `base`) including untracked files, refreshed via
+  FSEvents with `GIT_OPTIONAL_LOCKS=0` (never touches the index); chip `+42 −7`; select lines → ⇧⌘⏎ sends `file:line`
+  with the excerpt to the agent session.
 - **Guard rails by construction:** new panes open without stealing focus; no `force` close; never types into its own
   pane; `run_in_pane` refuses agent sessions and busy programs unless asked; prompts to agents go through the pane's
   mailbox (`~/Library/Application Support/LatexTerm/mailbox/<pane-uuid>/*.md`, delivered by a receiver inside the
-  session) and fall back to a two-step paste; a session may close foreign panes only with an explicit `foreign` flag.
+  session) and fall back to a two-step paste; a session may close foreign panes only with an explicit `auf_auftrag` flag.
 - **Scope:** outside a LatexTerm pane (`$LATEXTERM_PANE_ID` unset) the server offers no tools. Agent start commands come
   from `LATEXTERM_START_CLAUDE` / `LATEXTERM_START_CODEX` (defaults `claude` / `codex`).
 
