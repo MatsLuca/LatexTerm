@@ -312,8 +312,7 @@ final class BoardHostView: NSView {
         let id = ObjectIdentifier(board)
         let state = board.namingState
         let now = Date()
-        guard board.naming.isDue(turns: state.turns, panes: state.panes, hasSession: state.hasSession,
-                                  working: state.working, now: now) else {
+        guard board.naming.isDue(turns: state.turns, panes: state.panes, hasSession: state.hasSession) else {
             dwelling = nil; return
         }
         guard let dwelling, dwelling.board == id else { self.dwelling = (id, now); return }

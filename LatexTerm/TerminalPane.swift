@@ -83,8 +83,9 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
     /// alten Shell-Hooks ignoriert — sonst Doppel-Banner. Lokal seit 21.09. entfernt.
     private var bridgeSeen = false
     private(set) var agentSession = AgentSession()
-    /// Fertige Agenten-Turns seit App-Start — Brett-Namen fragen erst nach neuer Arbeit wieder (`BoardNaming`).
-    private(set) var completedTurns = 0
+    /// Turn-Ereignisse seit App-Start — neuer Prompt und fertige Antwort zählen je eins; Brett-Namen fragen bei jedem
+    /// neuen Ereignis wieder (`BoardNaming`, Mats 26.09.).
+    private(set) var turnEvents = 0
     private var sessionOwnerGroup: pid_t?
     private var sessionWatch: Timer?
     private var agentName: String { agentSession.identity?.name ?? "Claude" }
@@ -842,6 +843,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
             if let steps = hook.steps {
                 // Turn-Start (t=0, n=0) setzt die Uhr; spätere Schritte tragen nur die Zahl nach.
                 if turnStartedAt == nil || (steps == 0 && hook.seconds == 0) {
+                    if steps == 0 && hook.seconds == 0 { turnEvents += 1 }   // neuer Prompt
                     turnStartedAt = Date().addingTimeInterval(-Double(hook.seconds ?? 0))
                     turnPrompt = hook.fields["p"]
                 }
@@ -865,7 +867,7 @@ final class TerminalPane: NSObject, Pane, LocalProcessTerminalViewDelegate {
             let steps = hook.steps ?? turnSteps
             turnStartedAt = nil; turnSteps = 0; turnPrompt = nil
             sessionState = .none           // räumt statusDetail im didSet mit ab
-            completedTurns += 1
+            turnEvents += 1                // fertige Antwort
             finishTurn(reason: hook.fields["r"] ?? "answer", seconds: seconds, steps: steps,
                        answer: hook.fields["a"])
         case "ready":

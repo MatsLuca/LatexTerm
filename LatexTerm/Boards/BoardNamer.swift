@@ -7,31 +7,22 @@ import Foundation
 struct BoardNaming: Equatable {
     /// Verweilen, bevor gefragt wird (Mats: „wenn ich zehn Sekunden drauf bin, arbeite ich gerade daran“).
     static let dwell: TimeInterval = 10
-    /// Reife: so viele neue Turns seit dem letzten Blick, bevor wieder gefragt wird …
-    static let matureTurns = 3
-    /// … und mindestens so viel Abstand (neue Kachel ausgenommen).
-    static let matureInterval: TimeInterval = 600
 
     /// Zuletzt gewählter KI-Name; nil = Anlauf (noch keiner).
     var name: String?
-    /// Stand beim letzten Blick: fertige Turns aller Kacheln, Kachel-IDs.
+    /// Stand beim letzten Blick: Turn-Ereignisse aller Kacheln, Kachel-IDs.
     var checkedTurns = 0
     var checkedPanes: Set<String> = []
     var lastCheck: Date?
 
-    /// Ist das Brett dran? `turns` = fertige Agenten-Turns seit App-Start, `panes` = Kachel-IDs, `hasSession` = eine
-    /// Kachel trägt eine Agenten-Session (auch eine wiederhergestellte — die hat schon Verlauf).
-    /// `working` = ein Agent arbeitet gerade (Turn läuft).
-    /// Anlauf (kein Name): solange ein Agent arbeitet, immer wieder (Mats 26.09.: die erste Antwort dauert, der Prompt
-    /// steht aber schon im Transkript) — sonst bei neuem Turn oder neuer Kachel; beim ersten Mal reicht eine Session.
-    /// Reife: neue Kachel, oder ≥ `matureTurns` neue Turns und ≥ `matureInterval` seit dem letzten Blick.
-    func isDue(turns: Int, panes: Set<String>, hasSession: Bool, working: Bool = false, now: Date) -> Bool {
+    /// Ist das Brett dran? `turns` = Turn-Ereignisse seit App-Start (neuer Prompt und fertige Antwort je eins),
+    /// `panes` = Kachel-IDs, `hasSession` = eine Kachel trägt eine Agenten-Session (auch eine wiederhergestellte — die
+    /// hat schon Verlauf). Mats 26.09.: bei jedem neuen Prompt und jeder fertigen Antwort anstoßen, in Anlauf wie
+    /// Reife; Stabilität hält das Modell („bleibt“), nicht der Takt. Neue Kachel zählt ebenso.
+    func isDue(turns: Int, panes: Set<String>, hasSession: Bool) -> Bool {
         guard turns > 0 || hasSession else { return false }
-        guard let lastCheck else { return true }
-        let newPane = !panes.subtracting(checkedPanes).isEmpty
-        if name == nil { return working || turns > checkedTurns || newPane }
-        if newPane { return true }
-        return turns - checkedTurns >= Self.matureTurns && now.timeIntervalSince(lastCheck) >= Self.matureInterval
+        guard lastCheck != nil else { return true }
+        return turns > checkedTurns || !panes.subtracting(checkedPanes).isEmpty
     }
 
     /// Blick gemacht: Stand merken, Namen übernehmen (nil = „bleibt“).

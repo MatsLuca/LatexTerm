@@ -267,12 +267,11 @@ final class TerminalSplitView: NSView {
                                    number: boardHost?.position(of: self) ?? 1)
     }
 
-    /// Stand für `BoardNaming.isDue`: fertige Turns aller Kacheln, Kachel-IDs, trägt eine Kachel eine Session?
-    var namingState: (turns: Int, panes: Set<String>, hasSession: Bool, working: Bool) {
+    /// Stand für `BoardNaming.isDue`: Turn-Ereignisse aller Kacheln, Kachel-IDs, trägt eine Kachel eine Session?
+    var namingState: (turns: Int, panes: Set<String>, hasSession: Bool) {
         let terminals = panes.compactMap { $0 as? TerminalPane }
-        return (terminals.reduce(0) { $0 + $1.completedTurns }, Set(panes.map { $0.id.uuidString }),
-                terminals.contains { $0.agentSession.identity != nil },
-                terminals.contains { $0.sessionState == .working })
+        return (terminals.reduce(0) { $0 + $1.turnEvents }, Set(panes.map { $0.id.uuidString }),
+                terminals.contains { $0.agentSession.identity != nil })
     }
 
     /// Anfrage an `projekte brettname`: was auf dem Brett liegt (Art, Ordner, Agent, Session, Titel).
