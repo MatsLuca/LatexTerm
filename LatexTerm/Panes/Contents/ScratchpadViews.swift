@@ -76,6 +76,9 @@ final class ScratchpadCanvas: NSView {
     /// Kachel nicht fokussiert: Papier abgedunkelt, Tinte unverändert.
     var dimmed = false { didSet { if dimmed != oldValue { needsDisplay = true } } }
     private var ground: NSColor { dimmed ? PaneContainerView.dimmedGround(paper) : paper }
+    /// Papier, auf dem gerade gezeichnet wird: am Bildschirm abgedunkelt wie die Kachel, im Bild (PNG, look) hell —
+    /// Pfeil-Beschriftungen stellen sich darauf, sonst stünden sie in der abgedunkelten Kachel als Kasten da (Mats, 26.09.).
+    private var inkGround: NSColor = .black
 
     private var strokes: [ScratchStroke] = []
     private var current: ScratchStroke?
@@ -784,9 +787,9 @@ final class ScratchpadCanvas: NSView {
 
     /// Zonen, die der laufende Aufruf schon angelegt, aber noch nicht eingereiht hat.
     private var pendingZones = 0
-    /// Farben neuer Zonen der Reihe nach: Grün, Blau, Violett, Gelb, Rot.
+    /// Farben neuer Zonen der Reihe nach: Blau, Violett, Grün, Cyan, Gelb.
     private func zoneColor() -> Int {
-        let cycle = [3, 5, 6, 2, 1]
+        let cycle = [5, 6, 3, 4, 2]
         return cycle[(strokes.filter(\.isZone).count + pendingZones) % cycle.count]
     }
 
@@ -1006,6 +1009,7 @@ final class ScratchpadCanvas: NSView {
         paper.setFill()
         rect.fill()
         under?(rect)
+        inkGround = paper
         drawStrokes(in: rect)
         over?(rect)
         context.flushGraphics()
@@ -2029,6 +2033,7 @@ final class ScratchpadCanvas: NSView {
         view.translateX(by: center.x + pan.x, yBy: center.y + pan.y)
         view.scale(by: zoom)
         view.concat()
+        inkGround = ground
         drawStrokes(in: toWorld(dirtyRect))
         drawHints()
         NSGraphicsContext.restoreGraphicsState()
@@ -2128,9 +2133,10 @@ final class ScratchpadCanvas: NSView {
             let outline = stroke.shapeOutline.map(Self.polygon)
             let frame = outline ?? NSBezierPath(roundedRect: rect, xRadius: 6, yRadius: 6)
             if stroke.showsFill {
-                // Haftnotiz satter, sonst ein Hauch; ohne Gruppenfarbe ist eine Notiz gelb.
-                let tint = info.shapeKind == .note && !grouped ? palette[2] : (grouped || outline == nil ? color : textInk)
-                tint.withAlphaComponent(info.shapeKind == .note ? 0.2 : outline != nil ? 0.12 : 0.08).setFill()
+                // Formen: neutral aufgehellte Fläche, die Farbe trägt nur der Umriss (Mats, 26.09.: farbig getönte
+                // Flächen wurden auf dunklem Papier trüb — Gelb zu Oliv, Grün zu Sumpf). Karten mit fill wie bisher.
+                if outline != nil { palette[0].withAlphaComponent(0.06).setFill() }
+                else { color.withAlphaComponent(0.08).setFill() }
                 frame.fill()
             }
             if stroke.showsDrawing {
@@ -2144,9 +2150,11 @@ final class ScratchpadCanvas: NSView {
             case _ where !stroke.showsFrame: break
             case "shape":
                 let kind = info.shapeKind
-                frame.lineWidth = 1.6
+                frame.lineWidth = 1.5
                 frame.lineJoinStyle = .round
-                (grouped ? color : textInk).withAlphaComponent(grouped ? 0.9 : 0.6).setStroke()
+                // Haftnotiz ohne Gruppenfarbe: gelber Rand (sie bleibt als Notiz erkennbar), sonst Tinte leise.
+                let edge = grouped ? color : kind == .note ? palette[2] : textInk
+                edge.withAlphaComponent(grouped || kind == .note ? 0.85 : 0.45).setStroke()
                 frame.stroke()
                 if kind == .note {
                     // Umgeknickte Ecke.
@@ -2191,7 +2199,7 @@ final class ScratchpadCanvas: NSView {
             stroke.path.stroke()
             if let label = stroke.link?.route?.label, let box = stroke.arrowLabelRect {
                 // Beschriftung auf dem Pfeil: Papier darunter, damit die Linie den Text nicht durchstreicht.
-                paper.setFill()
+                inkGround.setFill()
                 NSBezierPath(roundedRect: box, xRadius: 4, yRadius: 4).fill()
                 let size = (label as NSString).size(withAttributes: [.font: ScratchStroke.labelFont])
                 (label as NSString).draw(at: CGPoint(x: box.midX - size.width / 2, y: box.midY - size.height / 2),
@@ -2205,13 +2213,13 @@ final class ScratchpadCanvas: NSView {
         let rect = zone.cardRect
         let path = NSBezierPath(roundedRect: rect, xRadius: 14, yRadius: 14)
         if zone.showsFill {
-            color.withAlphaComponent(0.07).setFill()
+            palette[0].withAlphaComponent(0.035).setFill()
             path.fill()
         }
         if zone.showsFrame {
-            path.lineWidth = info.frame == "thick" ? 2.5 : 1.2
+            path.lineWidth = info.frame == "thick" ? 2.5 : 1
             if info.frame == "dashed" { path.setLineDash([6, 4], count: 2, phase: 0) }
-            color.withAlphaComponent(0.45).setStroke()
+            color.withAlphaComponent(0.35).setStroke()
             path.stroke()
         }
         guard zone !== editing, let title = info.title, !title.isEmpty else { return }
