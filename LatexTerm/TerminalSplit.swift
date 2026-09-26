@@ -138,13 +138,16 @@ final class TerminalSplitView: NSView {
         newAppPaneObserver = NotificationCenter.default.addObserver(
             forName: .latexTermNewAppPane, object: nil, queue: .main
         ) { [weak self] note in
-            guard let self, self.isFrontBoard, let asked = note.userInfo?["kind"] as? String,
-                  let picked = asked == PaneKindRegistry.openFileKind
-                    ? PaneKindRegistry.openFile()
-                    : PaneKindRegistry.menuArgs(for: asked).map({ (kind: asked, args: $0) }) else { return }
+            guard let self, self.isFrontBoard, let asked = note.userInfo?["kind"] as? String else { return }
+            // Dialoge starten beim Ordner der fokussierten Kachel (26.09., Mats).
+            let here = (self.panes.first(where: { self.isFocused($0) }) ?? self.panes.first)?.currentDirectory
+            guard let picked = asked == PaneKindRegistry.openFileKind
+                    ? PaneKindRegistry.openFile(in: here)
+                    : PaneKindRegistry.menuArgs(for: asked, in: here).map({ (kind: asked, args: $0) }) else { return }
             let (kind, args) = picked
             do { try self.addAppPane(kind: kind, args: args) } catch {
                 Logger(subsystem: "com.mats.LatexTerm", category: "panes").error("Neue Kachel \(kind, privacy: .public): \(String(describing: error), privacy: .public)")
+                self.showPaneError(kind: kind, error)
             }
         }
 
@@ -166,6 +169,7 @@ final class TerminalSplitView: NSView {
                   let pane = self.panes.first(where: { self.isFocused($0) }) ?? self.panes.first else { return }
             switch cmd {
             case .split: self.paneRequestsSplit(pane)
+            case .terminal: self.addPane(startingIn: pane.currentDirectory)
             case .close: self.paneRequestsClose(pane)
             case .zoom: self.paneRequestsZoom(pane)
             case .find: _ = pane.handle(.find)
@@ -663,6 +667,82 @@ final class TerminalSplitView: NSView {
         mount(pane, placement: placement)
         settle(pane, focus: focus)
         return pane
+    }
+
+    /// ⌘T-Auswahl (`KachelWahlContent`) als eigenständige Kachel — sie steht nicht in der Registry (kein Menü, kein MCP).
+    @discardableResult
+    func addChooserPane(in directory: String?) -> AppPane? {
+        guard let content = try? KachelWahlContent(args: directory.map { ["dir": $0] } ?? [:]) else { return nil }
+        let pane = AppPane(content: content)
+        mount(pane, placement: .own)
+        settle(pane)
+        return pane
+    }
+
+    /// Nutzer hat eine Kachel über Menü/Auswahl bestellt, sie kann nicht entstehen (z. B. Diff auf einen Ordner ohne Git):
+    /// Grund sichtbar machen statt nur ins Log (26.09., Mats: „es ist nichts passiert“).
+    private func showPaneError(kind: String, _ error: Error) {
+        NSSound.beep()
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        let name = PaneKindRegistry.infos.first { $0.kind == kind }?.displayName.replacingOccurrences(of: " …", with: "") ?? kind
+        alert.messageText = "Kachel „\(name)“ ließ sich nicht öffnen"
+        alert.informativeText = String(describing: error)
+        if let window { alert.beginSheetModal(for: window) } else { alert.runModal() }
+    }
+
+    /// Kachel an Ort und Stelle ersetzen (⌘T-Auswahl → gewählte Art): neue Kachel mit derselben ID, damit Platz im
+    /// angepassten Baum, Begleiter, Leisten, Reiter-Reihenfolge und Zoom unverändert bleiben — nur der Inhalt wechselt.
+    private func replacePane(_ old: any Pane, with replacement: PaneReplacement) {
+        guard let idx = panes.firstIndex(where: { $0 === old }) else { return }
+        let fresh: any Pane
+        var terminal: TerminalPane?
+        switch replacement {
+        case .app(let kind, let args):
+            do { fresh = try PaneKindRegistry.makeAppPane(kind: kind, args: args, id: old.id) } catch {
+                Logger(subsystem: "com.mats.LatexTerm", category: "panes").error("Kachel ersetzen durch \(kind, privacy: .public): \(String(describing: error), privacy: .public)")
+                showPaneError(kind: kind, error)
+                return
+            }
+        case .shell, .home:
+            terminal = TerminalPane(id: old.id)
+            fresh = terminal!
+        }
+        cancelDividerDrag()
+        cancelPaneDrag()
+        let wasZoomed = zoomedPane === old
+        fresh.host = self
+        fresh.openedBy = old.openedBy
+        old.willClose()
+        old.container.removeFromSuperview()
+        panes[idx] = fresh
+        settledPreferences.remove(old.id)   // die neue Art darf ihre Wunschform einmal melden
+        if wasZoomed { setZoomedPane(fresh) }
+        fresh.container.frame = old.container.frame
+        addSubview(fresh.container)
+        if let terminal {
+            switch replacement {
+            case .home:
+                terminal.showHome()
+            case .shell(let directory, let command, let label, let integration):
+                if let command {
+                    // Wie „Neue Session“ in Home: Home-Ansicht als Vorhang, bis die Session steht.
+                    terminal.showHome()
+                    terminal.launch(in: directory ?? NSHomeDirectory(), command: command, label: label, integration: integration)
+                } else {
+                    terminal.start(in: directory)
+                }
+            case .app: break
+            }
+        }
+        layoutChanged()
+        updateFocusBorders()
+        updateTabBarContents()
+        relayout(animated: false)
+        DispatchQueue.main.async { [weak self] in
+            guard let self, self.panes.contains(where: { $0 === fresh }) else { return }
+            self.takeFocus(fresh)
+        }
     }
 
     /// Einhängen, für jede Kachelart gleich. Grid-Änderung beendet einen aktiven Zoom: die neue
@@ -1624,8 +1704,16 @@ final class TerminalSplitView: NSView {
 // MARK: - Rückkanal der Kacheln
 
 extension TerminalSplitView: PaneHost {
-    /// ⌘T: die anfordernde Kachel ist die fokussierte → ihr CWD vererben (#8).
-    func paneRequestsSplit(_ pane: any Pane) { addPane(startingIn: pane.currentDirectory) }
+    /// ⌘T (26.09.): neue Kachel mit der Auswahl aller Arten, im Verzeichnis der anfordernden (#8). ⌘T in der
+    /// Auswahl selbst = nackte Shell wie früher (⌘T ⌘T).
+    func paneRequestsSplit(_ pane: any Pane) {
+        if pane.kind == KachelWahlContent.kind {
+            paneRequestsReplace(pane, with: .shell(directory: pane.currentDirectory, command: nil, label: nil, integration: nil))
+        } else {
+            addChooserPane(in: pane.currentDirectory)
+        }
+    }
+    func paneRequestsReplace(_ pane: any Pane, with replacement: PaneReplacement) { replacePane(pane, with: replacement) }
     func paneRequestsClose(_ pane: any Pane) { closePane(pane) }
     func paneDidClose(_ pane: any Pane) { removePane(pane) }
     func paneRequestsZoom(_ pane: any Pane) { toggleZoom(pane) }

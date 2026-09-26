@@ -369,18 +369,20 @@ struct LatexTermApp: App {
                     .keyboardShortcut("n", modifiers: [.command, .option])
             }
             CommandMenu("Kachel") {
-                // Neue Kacheln: ⌘N Home (Projekt-Launcher), ⌘T Terminal (nackte Shell, CWD-Erbe),
+                // Neue Kacheln: ⌘T Auswahl aller Arten (26.09., ⌘T ⌘T = Terminal), ⌘N Home (Projekt-Launcher), Terminal (CWD-Erbe),
                 // darunter die App-Kacheln aus der Registry — eine neue Art erscheint hier ohne
                 // Menü-Code. Dateikacheln (web, preview) teilen sich „Datei öffnen …“, die Endung wählt die Art.
                 // Die Tasten fängt die Kachel-Hülle (PaneContainerView.performKeyEquivalent);
                 // das Menü ist Schaufenster + Mausweg.
                 Menu("Neue Kachel") {
+                    Button("Auswahl …") { paneCommand(.split) }
+                        .keyboardShortcut("t", modifiers: .command)
+                    Divider()
                     Button("Home") {
                         NotificationCenter.default.post(name: .latexTermNewHomePane, object: nil)
                     }
                     .keyboardShortcut("n", modifiers: .command)
-                    Button("Terminal") { paneCommand(.split) }
-                        .keyboardShortcut("t", modifiers: .command)
+                    Button("Terminal") { paneCommand(.terminal) }
                     ForEach(PaneKindRegistry.menuEntries, id: \.kind) { entry in
                         Button(entry.displayName) {
                             NotificationCenter.default.post(name: .latexTermNewAppPane, object: nil,

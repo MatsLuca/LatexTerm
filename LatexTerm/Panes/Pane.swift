@@ -94,8 +94,11 @@ enum CloseGuard: Equatable {
 /// eine vergessene Verdrahtung ist ein Compile-Fehler, kein stiller No-op (Kachel reagiert nicht
 /// auf ⌘W, niemand merkt es beim Bauen).
 protocol PaneHost: AnyObject {
-    /// ⌘T in dieser Kachel → neue Terminal-Kachel (erbt deren Verzeichnis, #8).
+    /// ⌘T in dieser Kachel → neue Kachel mit der Auswahl aller Arten (erbt deren Verzeichnis, #8); ⌘T in der
+    /// Auswahl selbst → Terminal wie früher.
     func paneRequestsSplit(_ pane: any Pane)
+    /// Kachel an Ort und Stelle ersetzen: gleiche ID, gleicher Platz im Layout (⌘T-Auswahl → gewählte Art).
+    func paneRequestsReplace(_ pane: any Pane, with replacement: PaneReplacement)
     /// ⌘W / Menü / Home: Kachel schließen (der Host ruft `willClose` und entfernt sie).
     func paneRequestsClose(_ pane: any Pane)
     /// Prozess der Kachel ist von selbst geendet (`exit`) → nur noch entfernen.

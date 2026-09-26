@@ -97,4 +97,8 @@ final class AppPane: Pane, PaneContentDelegate {
     func contentPaste(_ text: String, intoPaneID: String) -> Bool {
         host?.paneRequestsPaste(text, intoPaneID: intoPaneID) ?? false
     }
+
+    func contentRequestsReplace(with replacement: PaneReplacement) {
+        host?.paneRequestsReplace(self, with: replacement)
+    }
 }

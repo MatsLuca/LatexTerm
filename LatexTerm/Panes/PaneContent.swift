@@ -24,6 +24,8 @@ protocol PaneContent: AnyObject {
     init(args: [String: String]) throws
     /// Args für einen Start aus dem Menü — z. B. per Dateidialog; nil = abgebrochen (Default: keine).
     static func menuArgs() -> [String: String]?
+    /// Wie `menuArgs()`, mit dem Ordner der Kachel, aus der bestellt wurde (Dateidialog startet dort; Default: ignoriert).
+    static func menuArgs(in directory: String?) -> [String: String]?
 
     var view: NSView { get }
     /// Wer die Tastatur bekommt (Default: `view`).
@@ -63,6 +65,7 @@ protocol PaneContent: AnyObject {
 
 extension PaneContent {
     static func menuArgs() -> [String: String]? { [:] }
+    static func menuArgs(in directory: String?) -> [String: String]? { menuArgs() }
     var keyView: NSView { view }
     var chip: StatusChip? { nil }
     var accent: NSColor? { nil }
@@ -101,6 +104,19 @@ protocol PaneContentDelegate: AnyObject {
     func contentAgentPanes() -> [PaneInfo]
     /// Text in eine andere Kachel einfügen (bracketed paste) und sie fokussieren.
     func contentPaste(_ text: String, intoPaneID: String) -> Bool
+    /// Diese Kachel an Ort und Stelle durch eine andere ersetzen (gleiche ID, gleicher Platz) — die ⌘T-Auswahl.
+    func contentRequestsReplace(with replacement: PaneReplacement)
+}
+
+/// Was an die Stelle einer Kachel tritt (⌘T-Auswahl `KachelWahlContent`).
+enum PaneReplacement: Equatable {
+    /// Terminal in `directory`; mit `command` startet darin eine Session hinter dem Start-Vorhang wie aus Home
+    /// (`integration` "terminal" = eigene Start-UI, z. B. Codex).
+    case shell(directory: String?, command: String?, label: String?, integration: String?)
+    /// Home-Kachel (Projekt-Launcher).
+    case home
+    /// App-Kachel aus der Registry.
+    case app(kind: String, args: [String: String])
 }
 
 /// Was eine App-Kachelart Agenten über sich sagt; Art und Anzeigename ergänzt die Registry.
@@ -158,19 +174,24 @@ enum PaneKindRegistry {
     static let openFileKind = "datei"
 
     /// „Datei öffnen …“: HTML → web, alles andere (PDF, Bild, Markdown, Office, Ordner) → preview. Abbrechen = nil.
-    static func openFile() -> (kind: String, args: [String: String])? {
+    static func openFile(in directory: String? = nil) -> (kind: String, args: [String: String])? {
         let panel = NSOpenPanel()
         panel.canChooseDirectories = true
+        if let directory { panel.directoryURL = URL(fileURLWithPath: directory, isDirectory: true) }
         panel.allowsMultipleSelection = false
         panel.message = "HTML-Seite, PDF, Bild, Markdown, Dokument — oder ein Ordner mit Plots"
         guard panel.runModal() == .OK, let url = panel.url else { return nil }
-        let web = ["html", "htm", "xhtml"].contains(url.pathExtension.lowercased())
-        return (web ? "web" : "preview", ["url": url.path])
+        return (fileKind(for: url.path), ["url": url.path])
+    }
+
+    /// Welche Kachel eine Datei zeigt: HTML → web, alles andere → preview.
+    static func fileKind(for path: String) -> String {
+        ["html", "htm", "xhtml"].contains((path as NSString).pathExtension.lowercased()) ? "web" : "preview"
     }
 
     /// Args für einen Menü-Start dieser Art (Dateidialog …); nil = abgebrochen oder unbekannt.
-    static func menuArgs(for kind: String) -> [String: String]? {
-        contents.first(where: { $0.kind == kind })?.menuArgs()
+    static func menuArgs(for kind: String, in directory: String? = nil) -> [String: String]? {
+        contents.first(where: { $0.kind == kind })?.menuArgs(in: directory)
     }
 
     /// App-Kachel dieser Art anlegen; Fehler mit Grund (unbekannte Art, falsche Args).

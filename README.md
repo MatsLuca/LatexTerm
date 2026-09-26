@@ -104,7 +104,7 @@ bash scripts/test-regressions.sh
 | | |
 |---|---|
 | `⌘N` | new **Home** pane |
-| `⌘T` / `⌘W` | new shell pane (inherits the folder) / close pane |
+| `⌘T` / `⌘W` | new pane: big buttons for Home, scratchpad, chat … (`⌘T ⌘T` = shell, inherits the folder) / close pane |
 | `⇧⌘T` | new tab |
 | `⌘1…9` | jump to pane N (brings a hidden tab to the front) |
 | `⌘⏎` | zoom the focused pane |

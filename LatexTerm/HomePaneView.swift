@@ -285,7 +285,8 @@ struct LoaderError: Error { let message: String }
 /// Kachel-Aktionen aus dem Menü „Kachel“. Die Tasten selbst fängt `PaneContainerView.performKeyEquivalent`
 /// vor dem Menü ab — die Menüeinträge sind Schaufenster + Mausweg (wie beim Home-Menü).
 enum PaneCommand: Equatable {
-    case split, close, zoom, find
+    /// `split` = ⌘T: neue Kachel mit Auswahl (26.09.); `terminal` = direkt eine Shell (Menü).
+    case split, terminal, close, zoom, find
     /// Anordnung zurück an die Automatik (Kachel-Layout, 23.09.2026).
     case rearrange
 }

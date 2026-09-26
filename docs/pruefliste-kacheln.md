@@ -11,8 +11,9 @@ prüfen lässt. Entstanden mit dem Bauplan „Kachel-Protokoll“ (22.09.2026, P
 
 | # | Aktion | Erwartet | Wer |
 |---|---|---|---|
-| 1 | ⌘T in der Shell-Kachel (nicht die älteste) | neue Shell erbt **deren** Verzeichnis, nicht das der ersten Kachel (bis Schritt 5 erbte ⌘T das der ältesten Terminal-Kachel: kein Fokusfilter) | A |
-| 2 | ⌘T in der Home-Kachel | neue Shell im Home-Verzeichnis, Home bleibt | A |
+| 1 | ⌘T in der Shell-Kachel (nicht die älteste), dann ⌘T/„Terminal“ in der Auswahl | neue Shell erbt **deren** Verzeichnis, nicht das der ersten Kachel (bis Schritt 5 erbte ⌘T das der ältesten Terminal-Kachel: kein Fokusfilter) | A |
+| 2 | ⌘T in der Home-Kachel | Auswahl „Neue Kachel“ im Home-Verzeichnis, Home bleibt | A |
+| 2a | ⌘T → Klick auf Home / Scratchpad / Myzel / Claude (Documents), auch 1–4 und Pfeile + ⏎, dann Esc | große Knöpfe füllen die Kachel (breit = nebeneinander, hoch = untereinander); Auswahl wird an derselben Stelle zur gewählten Kachel; Esc schließt sie; „PANE neu freed“ im Status-Log | A |
 | 3 | ⌘W in Terminal, in Home, bei offener ⌘F-Suchleiste, bei offener ⌘K-Palette | genau die fokussierte Kachel geht zu (auch bei offener Palette: die ganze Kachel, wie seit jeher) | A |
 | 4 | ⌘3 bei zwei Kacheln / ⌘1 bei drei | auf drei auffüllen / nichts schließen | A |
 | 5 | ⌘⏎ in Terminal und in Home; ⌘⏎ in der offenen ⌘K-Palette | Zoom an/aus, Zoom-Pille in der Titelleiste; in der Palette die Zweitaktion statt Zoom | A |
@@ -47,7 +48,7 @@ Aufbau: eine Claude-Kachel links, sonst nichts. Plan: claude-werkstatt `plans/ka
 
 | # | Aktion | Erwartet | Wer |
 |---|---|---|---|
-| L1 | ⌘T dreimal (nur Terminals) | wie früher: nebeneinander bis 3–4, dann zwei Reihen — Pixel wie das alte Raster | A |
+| L1 | ⌘T ⌘T dreimal (nur Terminals) | wie früher: nebeneinander bis 3–4, dann zwei Reihen — Pixel wie das alte Raster | A |
 | L2 | Claude öffnet eine PDF-Vorschau (`open_preview`) | Vorschau als hohe Spalte rechts neben Claude, Claude behält ≥ 60 Spalten | A |
 | L3 | Claude öffnet danach Web und Scratchpad | beide in dieselbe Nebenspalte (untereinander), Claude wird nicht weiter halbiert | A |
 | L4 | Menü Kachel → Neues Scratchpad bei fokussierter Claude-Kachel | landet in Claudes Nebenspalte | A |
